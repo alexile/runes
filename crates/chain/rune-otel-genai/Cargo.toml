@@ -32,7 +32,7 @@ tracing.workspace = true
 opentelemetry = { workspace = true, features = ["trace", "metrics"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "metrics", "testing"] }
 tokio-test.workspace = true
-tracing-opentelemetry = { version = "0.32.1", default-features = false }
+tracing-opentelemetry = { version = "0.34.0", default-features = false }
 tracing-subscriber = { workspace = true, features = ["registry"] }
 
 [package.metadata.docs.rs]

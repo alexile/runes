@@ -21,8 +21,8 @@ pin-project-lite.workspace = true
 opentelemetry = { workspace = true, features = ["trace"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "rt-tokio"] }
 opentelemetry-otlp = { workspace = true, features = ["grpc-tonic", "trace"] }
-opentelemetry-http = "0.31"
-opentelemetry-semantic-conventions = "0.31"
+opentelemetry-http = "0.33.1"
+opentelemetry-semantic-conventions = "0.33.1"
 rune-log.workspace = true
 rune-metrics = { workspace = true, features = ["tower"] }
 tracing.workspace = true

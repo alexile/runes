@@ -34,11 +34,11 @@ opentelemetry_sdk = { workspace = true, optional = true, features = ["trace"] }
 thiserror.workspace = true
 tokio = { workspace = true, optional = true, features = ["rt"] }
 tracing.workspace = true
-tracing-opentelemetry = { version = "0.32.1", default-features = false, optional = true }
+tracing-opentelemetry = { version = "0.34.0", default-features = false, optional = true }
 tracing-subscriber = { workspace = true, features = ["std", "fmt", "registry", "env-filter", "ansi"] }
 
 [dev-dependencies]
-opentelemetry-proto = { version = "0.31", default-features = false, features = ["gen-tonic", "trace"] }
+opentelemetry-proto = { version = "0.33.1", default-features = false, features = ["gen-tonic", "trace"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "testing"] }
 proptest.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "sync", "time"] }
