@@ -1,12 +1,12 @@
 [package]
 name = "rune-forecast-ses"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Simple and double exponential smoothing forecaster"
+description = "Exponential smoothing forecasts: SES, Holt, damped trend and Holt-Winters with fitted parameters, prediction intervals and AICc model selection"
 license.workspace = true
-keywords = ["forecast", "smoothing", "holt", "time-series", "ses"]
+keywords = ["forecast", "holt-winters", "exponential-smoothing", "time-series", "ets"]
 categories = ["algorithms", "science", "command-line-utilities"]
 repository.workspace = true
 readme = "README.md"
@@ -29,3 +29,6 @@ clap = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

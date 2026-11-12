@@ -1,18 +1,52 @@
-//! Simple and double exponential smoothing forecasters.
+//! Exponential smoothing forecasters: simple exponential smoothing, Holt's
+//! linear and damped trend methods, and Holt-Winters with additive or
+//! multiplicative seasonality.
 //!
-//! Simple exponential smoothing (SES) tracks a smoothed "level" and forecasts
-//! that level flat into the future — good for a series with no trend. Double
-//! exponential smoothing (Holt's linear method) additionally tracks a
-//! smoothed "trend" and extrapolates level + trend*horizon — good for a
-//! series with a roughly linear trend but no seasonality.
+//! Two layers are provided:
 //!
-//! # Features
+//! - Streaming smoothers with fixed parameters: [`SimpleExpSmoothing`] (flat
+//!   forecast) and [`DoubleExpSmoothing`] (Holt's linear method). Feed values
+//!   one at a time, no fitting.
+//! - Fitted models: [`Model`] covers the additive-error exponential
+//!   smoothing family (trend none/additive/damped, seasonality
+//!   none/additive/multiplicative). [`Model::fit`] estimates the smoothing
+//!   parameters and initial states by minimising the sum of squared
+//!   one-step errors, [`Fit::forecast_intervals`] gives prediction
+//!   intervals, and [`Auto`] picks the best model by `AICc` (or AIC/BIC).
 //!
-//! - [`SimpleExpSmoothing`] — single smoothing parameter `alpha`, flat forecast.
-//! - [`DoubleExpSmoothing`] — smoothing parameters `alpha` (level) and `beta`
-//!   (trend), linear forecast.
+//! The model equations follow Hyndman & Athanasopoulos, *Forecasting:
+//! Principles and Practice* (2nd ed.), chapter 7. Estimates match the
+//! textbook's worked examples (which come from R's `forecast` package) to
+//! about three significant figures; see the tests.
+//!
+//! Estimation: for models without multiplicative seasonality the one-step
+//! errors are affine in the initial state, so the initial state is solved
+//! exactly by least squares and a coarse grid plus bounded Nelder-Mead
+//! searches only the smoothing parameters. Multiplicative models search
+//! parameters and initial states together. Estimated parameters are kept in
+//! `[0.0001, 0.9999]`, with `gamma <= 1 - alpha` and `0.8 <= phi <= 0.98`.
 //!
 //! # Quick Start
+//!
+//! ```rust
+//! use rune_forecast_ses::{Auto, Model, Seasonal};
+//!
+//! // Quarterly data with trend and a fixed seasonal pattern.
+//! let y: Vec<f64> = (0..32)
+//!     .map(|t| 20.0 + 0.8 * f64::from(t) + [6.0, -2.0, -7.0, 3.0][t as usize % 4])
+//!     .collect();
+//!
+//! let fit = Model::holt_winters(Seasonal::Additive, 4).fit(&y)?;
+//! let next_year = fit.forecast_intervals(4, 0.95)?;
+//! assert_eq!(next_year.len(), 4);
+//!
+//! // Or let the information criterion decide.
+//! let best = Auto::new().period(4).fit(&y)?;
+//! println!("{} AICc={:.1}", best.model(), best.aicc());
+//! # Ok::<(), rune_forecast_ses::Error>(())
+//! ```
+//!
+//! Streaming smoother with a fixed `alpha`:
 //!
 //! ```rust
 //! use rune_forecast_ses::SimpleExpSmoothing;
@@ -31,7 +65,14 @@
 //! ```bash
 //! rune-forecast-ses --alpha 0.3 --steps 5 10 12 11 15 20
 //! rune-forecast-ses --alpha 0.3 --beta 0.2 --steps 5 10 12 11 15 20
+//! rune-forecast-ses --model auto --period 4 --level 0.95 --steps 4 <values...>
 //! ```
+
+mod dist;
+mod ets;
+mod optim;
+
+pub use ets::{Auto, Criterion, Error, Fit, Interval, Model, Params, Seasonal, Trend};
 
 /// Simple exponential smoothing: a single smoothed level, forecast flat.
 pub struct SimpleExpSmoothing {

@@ -9,7 +9,7 @@ Time series: statistics, smoothing, resampling, change points, forecasting.
 | [`rune-correlate`](rune-correlate) | Cross-correlation and lag detection between two numeric series |
 | [`rune-derivative`](rune-derivative) | Rate-of-change (derivative) and cumulative (integral) calculation over a series |
 | [`rune-ewma`](rune-ewma) | Exponentially weighted moving average over a numeric stream |
-| [`rune-forecast-ses`](rune-forecast-ses) | Simple and double exponential smoothing forecaster |
+| [`rune-forecast-ses`](rune-forecast-ses) | Exponential smoothing forecasts: SES, Holt, damped trend and Holt-Winters with fitted parameters, prediction intervals and AICc model selection |
 | [`rune-gap-detect`](rune-gap-detect) | Detect missing/gap intervals in an expected-cadence timestamped series |
 | [`rune-interpolate`](rune-interpolate) | Linear and spline interpolation for gap-filling irregular series |
 | [`rune-kalman-1d`](rune-kalman-1d) | 1D Kalman filter for smoothing a single noisy scalar signal |
