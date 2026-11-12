@@ -127,6 +127,8 @@ fn props_to_json(props: &HashMap<String, Value>) -> Result<Json, PersistError> {
     Ok(Json::Object(map))
 }
 
+// Keys are inserted alphabetically so the output is sorted whether or not
+// serde_json's `preserve_order` feature is enabled somewhere in the build.
 fn write_line(w: &mut impl Write, j: &Json) -> Result<(), PersistError> {
     serde_json::to_writer(&mut *w, j).map_err(|e| PersistError::Encode(e.to_string()))?;
     w.write_all(b"\n")?;
@@ -237,7 +239,7 @@ impl Graph {
         for (label, key) in indexes {
             write_line(
                 &mut w,
-                &json!({"type": "index", "label": label, "key": key}),
+                &json!({"key": key, "label": label, "type": "index"}),
             )?;
         }
         let mut node_ids: Vec<NodeId> = self.nodes().map(|(id, _)| id).collect();
@@ -247,10 +249,10 @@ impl Graph {
             write_line(
                 &mut w,
                 &json!({
-                    "type": "node",
                     "id": id.0,
                     "labels": n.labels(),
                     "properties": props_to_json(n.properties())?,
+                    "type": "node",
                 }),
             )?;
         }
@@ -261,12 +263,12 @@ impl Graph {
             write_line(
                 &mut w,
                 &json!({
-                    "type": "edge",
                     "id": id.0,
-                    "source": e.source().0,
-                    "target": e.target().0,
                     "label": e.label(),
                     "properties": props_to_json(e.properties())?,
+                    "source": e.source().0,
+                    "target": e.target().0,
+                    "type": "edge",
                 }),
             )?;
         }
