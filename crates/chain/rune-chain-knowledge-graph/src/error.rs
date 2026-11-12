@@ -1,15 +1,35 @@
 use rune_chain_core::{ChainError, LlmError};
 use rune_graph::GraphError;
 
+/// Boxed error returned by an [`EntityEmbedder`](crate::EntityEmbedder).
+pub type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 /// Errors produced by knowledge graph operations.
+///
+/// The enum is `#[non_exhaustive]`: match it with a wildcard arm.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum KgError {
     /// The LLM call failed.
     Llm(LlmError),
-    /// The LLM returned output that could not be parsed as a triple list.
+    /// The LLM's structured output was not usable JSON of the expected
+    /// shape, or it was cut off by the output-token limit.
     Parse(String),
-    /// Storing an extracted triple in the underlying graph failed.
+    /// Storing a fact in the underlying graph failed.
     Graph(GraphError),
+    /// The entity embedder failed or returned malformed vectors.
+    Embed(BoxError),
+    /// An input was larger than the configured limit.
+    InputTooLarge {
+        /// What was too large (for example `"chunk"` or `"document"`).
+        what: &'static str,
+        /// Its size, in bytes or chunks.
+        size: usize,
+        /// The configured maximum.
+        limit: usize,
+    },
+    /// An argument or configuration value is invalid.
+    InvalidInput(String),
 }
 
 impl std::fmt::Display for KgError {
@@ -18,6 +38,14 @@ impl std::fmt::Display for KgError {
             Self::Llm(e) => write!(f, "LLM error: {e}"),
             Self::Parse(s) => write!(f, "parse error: {s}"),
             Self::Graph(e) => write!(f, "graph error: {e}"),
+            Self::Embed(e) => write!(f, "embedding error: {e}"),
+            Self::InputTooLarge { what, size, limit } => {
+                write!(
+                    f,
+                    "{what} is too large: {size} exceeds the limit of {limit}"
+                )
+            }
+            Self::InvalidInput(s) => write!(f, "invalid input: {s}"),
         }
     }
 }
@@ -27,7 +55,8 @@ impl std::error::Error for KgError {
         match self {
             Self::Llm(e) => Some(e),
             Self::Graph(e) => Some(e),
-            Self::Parse(_) => None,
+            Self::Embed(e) => Some(e.as_ref()),
+            Self::Parse(_) | Self::InputTooLarge { .. } | Self::InvalidInput(_) => None,
         }
     }
 }
@@ -46,6 +75,10 @@ impl From<GraphError> for KgError {
 
 impl From<KgError> for ChainError {
     fn from(e: KgError) -> Self {
-        Self::Other(e.to_string())
+        match e {
+            KgError::Llm(e) => Self::LlmError(e),
+            KgError::Parse(s) => Self::ParseError(s),
+            other => Self::Other(other.to_string()),
+        }
     }
 }

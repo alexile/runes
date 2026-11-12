@@ -10,7 +10,7 @@ LLM orchestration: core traits, OpenAI/Anthropic/Ollama providers, prompts, memo
 | [`rune-chain-conversational`](rune-chain-conversational) | ConversationalChain — LLM + memory for ergonomic multi-turn dialogue in rune-chain |
 | [`rune-chain-core`](rune-chain-core) | Core traits and types for the rune-chain LLM orchestration framework |
 | [`rune-chain-embed`](rune-chain-embed) | Embedder trait, hardened OpenAI-compatible/Cohere/Voyage/Jina embedding providers, batching and caching for the rune-chain LLM framework |
-| [`rune-chain-knowledge-graph`](rune-chain-knowledge-graph) | LLM-powered knowledge graph: extract entity-relation-entity triples from text and store them in a queryable rune-graph property graph |
+| [`rune-chain-knowledge-graph`](rune-chain-knowledge-graph) | GraphRAG for the rune-chain LLM framework: schema-validated entity and relation extraction, entity resolution, provenance, and bounded k-hop retrieval with cited context |
 | [`rune-chain-llm`](rune-chain-llm) | LlmChain — wire a prompt template, an LLM, and optional memory into a single Chain |
 | [`rune-chain-loader`](rune-chain-loader) | Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV and jailed directory walks with limits |
 | [`rune-chain-memory`](rune-chain-memory) | In-process conversation memory implementations for the rune-chain LLM orchestration framework |
