@@ -1,10 +1,10 @@
 [package]
 name = "rune-chain-conversational"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "ConversationalChain — LLM + memory for ergonomic multi-turn dialogue in rune-chain"
+description = "ConversationalChain for rune-chain: multi-turn dialogue with a pinned system prompt, bounded token-budget or summary memory, and streams recorded in memory"
 license.workspace = true
 keywords = ["llm", "langchain", "chatbot", "conversation", "ai"]
 categories = ["asynchronous"]
@@ -16,7 +16,6 @@ publish = true
 rune-chain-core.workspace = true
 rune-chain-llm.workspace = true
 rune-chain-memory.workspace = true
-rune-chain-prompt.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 

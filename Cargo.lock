@@ -3188,14 +3188,13 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-conversational"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures",
  "rune-chain-core",
  "rune-chain-llm",
  "rune-chain-memory",
- "rune-chain-prompt",
  "serde_json",
  "tokio",
  "tokio-test",
