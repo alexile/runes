@@ -284,7 +284,7 @@ rune-axum-cache = { path = "crates/axum/rune-axum-cache", version = "0.1.0" }
 rune-axum-compression = { path = "crates/axum/rune-axum-compression", version = "0.1.0" }
 rune-axum-concurrency = { path = "crates/axum/rune-axum-concurrency", version = "0.1.0" }
 rune-axum-cors = { path = "crates/axum/rune-axum-cors", version = "0.1.0" }
-rune-axum-csrf = { path = "crates/axum/rune-axum-csrf", version = "0.2.0" }
+rune-axum-csrf = { path = "crates/axum/rune-axum-csrf", version = "0.2.1" }
 rune-axum-helmet = { path = "crates/axum/rune-axum-helmet", version = "0.2.1" }
 rune-axum-health = { path = "crates/axum/rune-axum-health", version = "0.1.0" }
 rune-axum-ipfilter = { path = "crates/axum/rune-axum-ipfilter", version = "0.3.0" }

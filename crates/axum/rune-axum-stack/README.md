@@ -123,6 +123,7 @@ browsers on `https://` and `http://localhost`.
 | `.helmet(Helmet)` | Replace helmet config |
 | `.without_helmet()` | Disable security headers |
 | `.csrf(CsrfConfig)` | Replace CSRF config |
+| `.csrf_origin(CsrfOriginConfig)` | Token-free origin-only CSRF (`Sec-Fetch-Site` / `Origin`, no cookie) |
 | `.csrf_key(CsrfKey)`, `.csrf_session_cookie(name)`, `.csrf_session_id_with(fn)`, `.csrf_trusted_origin(origin)`, `.csrf_exempt_path(path)`, `.csrf_exempt_prefix(prefix)` | Adjust the current CSRF config (and turn CSRF back on if it was removed) |
 | `.without_csrf()` | Disable CSRF (use for JWT / API-key APIs) |
 | `.ratelimit(RateLimitConfig)` | Replace rate-limit config |

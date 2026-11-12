@@ -174,8 +174,8 @@ pub use rune_axum_compression::{Compression, CompressionLayer, Encoding, Level};
 pub use rune_axum_concurrency::{ConcurrencyLimit, ConcurrencyLimitLayer, Limiter, Metrics};
 pub use rune_axum_cors::{Cors, CorsLayer, Error as CorsError, Severity, WeaknessKind};
 pub use rune_axum_csrf::{
-    CsrfConfig, CsrfKey, CsrfLayer, CsrfRejection, CsrfRotate, CsrfService, CsrfToken, KeyTooShort,
-    SameSite,
+    CsrfConfig, CsrfKey, CsrfLayer, CsrfOriginConfig, CsrfRejection, CsrfRotate, CsrfService,
+    CsrfToken, KeyTooShort, SameSite,
 };
 #[cfg(feature = "signal")]
 pub use rune_axum_health::shutdown_signal;
@@ -274,9 +274,16 @@ pub struct SecurityStack {
     circuit_breaker: Option<StackCircuitBreakerLayer>,
     timeout: Option<Timeout>,
     body_limit: Option<BodyLimit>,
-    csrf: Option<CsrfConfig>,
+    csrf: Option<StackCsrf>,
     retry: Option<StackRetryLayer>,
     cache: Option<Cache>,
+}
+
+/// The CSRF mode chosen for the stack.
+#[derive(Clone, Debug)]
+enum StackCsrf {
+    Token(CsrfConfig),
+    Origin(CsrfOriginConfig),
 }
 
 impl Default for SecurityStack {
@@ -297,7 +304,7 @@ impl Default for SecurityStack {
             circuit_breaker: None,
             timeout: Some(Timeout::new()),
             body_limit: Some(BodyLimit::new()),
-            csrf: Some(CsrfConfig::new()),
+            csrf: Some(StackCsrf::Token(CsrfConfig::new())),
             retry: None,
             cache: None,
         }
@@ -574,14 +581,55 @@ impl SecurityStack {
     /// The `csrf_*` shortcuts below adjust the current configuration instead.
     #[must_use]
     pub fn csrf(mut self, config: CsrfConfig) -> Self {
-        self.csrf = Some(config);
+        self.csrf = Some(StackCsrf::Token(config));
         self
     }
 
-    /// Applies `f` to the current CSRF configuration, starting from
-    /// [`CsrfConfig::new()`] if CSRF was removed: configuring CSRF turns it on.
+    /// Switches CSRF protection to the token-free origin-only mode (see
+    /// [`CsrfLayer::origin`]): no cookie and no token, only `Sec-Fetch-Site` and
+    /// `Origin` checks.
+    ///
+    /// `.csrf_trusted_origin()`, `.csrf_exempt_path()` and `.csrf_exempt_prefix()`
+    /// adjust this configuration; `.csrf_key()` and the session shortcuts switch
+    /// back to token mode.
+    ///
+    /// ```rust
+    /// use rune_axum_stack::{CsrfOriginConfig, SecurityStack};
+    ///
+    /// let stack = SecurityStack::new()
+    ///     .csrf_origin(CsrfOriginConfig::new().allow_missing_headers(true))
+    ///     .csrf_trusted_origin("https://www.example.com");
+    /// # let _ = stack;
+    /// ```
+    #[must_use]
+    pub fn csrf_origin(mut self, config: CsrfOriginConfig) -> Self {
+        self.csrf = Some(StackCsrf::Origin(config));
+        self
+    }
+
+    /// Applies `f` to the current token-mode CSRF configuration, starting from
+    /// [`CsrfConfig::new()`] if CSRF was removed or in origin-only mode.
     fn map_csrf(mut self, f: impl FnOnce(CsrfConfig) -> CsrfConfig) -> Self {
-        self.csrf = Some(f(self.csrf.take().unwrap_or_default()));
+        let current = match self.csrf.take() {
+            Some(StackCsrf::Token(config)) => config,
+            _ => CsrfConfig::new(),
+        };
+        self.csrf = Some(StackCsrf::Token(f(current)));
+        self
+    }
+
+    /// Applies one of two equivalent adjustments to whichever CSRF mode is
+    /// active, enabling token mode if CSRF was removed.
+    fn map_csrf_any(
+        mut self,
+        token: impl FnOnce(CsrfConfig) -> CsrfConfig,
+        origin: impl FnOnce(CsrfOriginConfig) -> CsrfOriginConfig,
+    ) -> Self {
+        self.csrf = Some(match self.csrf.take() {
+            Some(StackCsrf::Origin(config)) => StackCsrf::Origin(origin(config)),
+            Some(StackCsrf::Token(config)) => StackCsrf::Token(token(config)),
+            None => StackCsrf::Token(token(CsrfConfig::new())),
+        });
         self
     }
 
@@ -618,14 +666,18 @@ impl SecurityStack {
     /// values are ignored. Enables CSRF if it was removed.
     #[must_use]
     pub fn csrf_trusted_origin(self, origin: impl AsRef<str>) -> Self {
-        self.map_csrf(|c| c.trusted_origin(origin))
+        let origin = origin.as_ref().to_owned();
+        let same = origin.clone();
+        self.map_csrf_any(|c| c.trusted_origin(origin), |c| c.trusted_origin(same))
     }
 
     /// Skips CSRF checks for this exact path (see [`CsrfConfig::exempt_path`]).
     /// Enables CSRF for every other path if it was removed.
     #[must_use]
     pub fn csrf_exempt_path(self, path: impl Into<String>) -> Self {
-        self.map_csrf(|c| c.exempt_path(path))
+        let path = path.into();
+        let same = path.clone();
+        self.map_csrf_any(|c| c.exempt_path(path), |c| c.exempt_path(same))
     }
 
     /// Skips CSRF checks for every path starting with `prefix` (see
@@ -633,7 +685,9 @@ impl SecurityStack {
     /// removed.
     #[must_use]
     pub fn csrf_exempt_prefix(self, prefix: impl Into<String>) -> Self {
-        self.map_csrf(|c| c.exempt_prefix(prefix))
+        let prefix = prefix.into();
+        let same = prefix.clone();
+        self.map_csrf_any(|c| c.exempt_prefix(prefix), |c| c.exempt_prefix(same))
     }
 
     /// Removes the [`CsrfLayer`] from the stack.
@@ -741,8 +795,10 @@ impl SecurityStack {
         if let Some(layer) = retry {
             r = r.layer(layer);
         }
-        if let Some(config) = csrf {
-            r = r.layer(CsrfLayer::new(config));
+        match csrf {
+            Some(StackCsrf::Token(config)) => r = r.layer(CsrfLayer::token(config)),
+            Some(StackCsrf::Origin(config)) => r = r.layer(CsrfLayer::origin(config)),
+            None => {}
         }
         if let Some(config) = body_limit {
             r = r.layer(BodyLimitLayer::new(config));
@@ -1705,6 +1761,34 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         assert_eq!(send(app, hook).await.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn csrf_origin_mode_needs_no_token() {
+        let app = SecurityStack::new()
+            .without_redirect_https()
+            .csrf_origin(CsrfOriginConfig::new())
+            .csrf_trusted_origin("https://www.example.com")
+            .apply_peer(base_router());
+        let post = |origin: &'static str| {
+            let mut req = post_req();
+            req.headers_mut()
+                .insert("origin", http::HeaderValue::from_static(origin));
+            req
+        };
+        assert_eq!(
+            send(app.clone(), post("https://www.example.com"))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            send(app.clone(), post("https://evil.example"))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(send(app, post_req()).await.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

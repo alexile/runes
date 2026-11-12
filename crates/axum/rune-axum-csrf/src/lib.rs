@@ -2,9 +2,33 @@
 //!
 //! A [`tower::Layer`] implementing the **signed double-submit cookie** pattern
 //! recommended by the OWASP CSRF Prevention Cheat Sheet, with `Origin` /
-//! `Referer` / Fetch Metadata verification as defense in depth.
+//! `Referer` / Fetch Metadata verification as defense in depth, or a
+//! **token-free origin-only mode** that relies on `Sec-Fetch-Site` and `Origin`
+//! alone.
 //!
-//! # Protocol
+//! # Choosing a mode
+//!
+//! - [`CsrfLayer::token`] (also [`CsrfLayer::new`] and [`CsrfLayer::default`]):
+//!   the most robust choice, and the one to use if you must support browsers
+//!   that send neither `Origin` nor Fetch Metadata, or if a same-site sibling
+//!   (another subdomain) should not be trusted even when it sends a matching
+//!   `Origin`. Costs a cookie and a token in every form or `fetch` call.
+//! - [`CsrfLayer::origin_only`] / [`CsrfLayer::origin`]: no cookie, no token, no
+//!   template changes, the same approach as Go's `http.CrossOriginProtection`.
+//!   Enough for every browser released since 2020. See [`CsrfOriginConfig`].
+//!
+//! ```rust
+//! use axum::{routing::post, Router};
+//! use rune_axum_csrf::{CsrfLayer, CsrfOriginConfig};
+//!
+//! let app: Router = Router::new()
+//!     .route("/submit", post(|| async { "ok" }))
+//!     .layer(CsrfLayer::origin(
+//!         CsrfOriginConfig::new().trusted_origin("https://app.example.com"),
+//!     ));
+//! ```
+//!
+//! # Token mode protocol
 //!
 //! 1. **Safe requests** (GET, HEAD, OPTIONS, TRACE) pass through. If the request
 //!    has no valid token cookie, a fresh token is minted and set with
@@ -68,11 +92,13 @@
 //!     .layer(layer);
 //! ```
 
+pub use cross_origin::CsrfOriginConfig;
 pub use layer::{
     CsrfConfig, CsrfLayer, CsrfRejection, CsrfRotate, CsrfService, CsrfToken, SameSite,
 };
 pub use token::{CsrfKey, KeyTooShort};
 
+mod cross_origin;
 mod form;
 mod layer;
 mod origin;

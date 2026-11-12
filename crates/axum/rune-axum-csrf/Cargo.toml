@@ -1,10 +1,10 @@
 [package]
 name = "rune-axum-csrf"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "CSRF protection middleware for Axum — signed double-submit cookie with Origin/Fetch-Metadata checks"
+description = "CSRF protection middleware for Axum — signed double-submit cookie or token-free Origin/Fetch-Metadata mode"
 license.workspace = true
 keywords = ["axum", "csrf", "middleware", "security", "tower"]
 categories = ["web-programming", "network-programming"]

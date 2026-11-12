@@ -14,6 +14,7 @@ use http::{
 use http_body_util::{BodyExt, LengthLimitError, Limited};
 use tower::{Layer, Service};
 
+use crate::cross_origin::CsrfOriginConfig;
 use crate::form;
 use crate::origin::{self, Verdict};
 use crate::token::{self, CsrfKey};
@@ -506,6 +507,9 @@ pub struct CsrfRotate;
 pub enum CsrfRejection {
     /// `Origin`, `Referer` or `Sec-Fetch-Site` shows a cross-origin source.
     CrossOrigin,
+    /// Origin-only mode: the request carried neither `Origin` nor
+    /// `Sec-Fetch-Site`, and [`CsrfOriginConfig::allow_missing_headers`] is off.
+    MissingOrigin,
     /// No CSRF cookie was sent.
     MissingCookie,
     /// The CSRF cookie has a bad signature, another session's binding, or expired.
@@ -524,6 +528,7 @@ impl fmt::Display for CsrfRejection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Self::CrossOrigin => "cross-origin request",
+            Self::MissingOrigin => "missing Origin and Sec-Fetch-Site headers",
             Self::MissingCookie => "missing CSRF cookie",
             Self::InvalidCookie => "invalid or expired CSRF cookie",
             Self::MissingToken => "missing CSRF token",
@@ -534,32 +539,104 @@ impl fmt::Display for CsrfRejection {
     }
 }
 
-/// Tower [`Layer`] that implements the signed double-submit cookie pattern.
+/// Tower [`Layer`] that protects state-changing requests against CSRF.
 ///
-/// Apply with Axum's `.layer()` call. Use [`CsrfLayer::default()`] for secure
-/// defaults or [`CsrfLayer::new()`] to supply a custom [`CsrfConfig`].
+/// It runs in one of two modes, chosen when the layer is built:
+///
+/// - **Token mode** ([`CsrfLayer::token`], [`CsrfLayer::new`] or
+///   [`CsrfLayer::default`]): the signed double-submit cookie, with
+///   `Origin` / `Sec-Fetch-Site` / `Referer` checks as defense in depth.
+/// - **Origin-only mode** ([`CsrfLayer::origin_only`] or [`CsrfLayer::origin`]):
+///   no cookie and no token, only `Sec-Fetch-Site` and `Origin`. See
+///   [`CsrfOriginConfig`] for the rules.
 ///
 /// # Examples
 ///
 /// ```rust,no_run
 /// use axum::{routing::post, Router};
-/// use rune_axum_csrf::CsrfLayer;
+/// use rune_axum_csrf::{CsrfConfig, CsrfLayer};
 ///
+/// // Token mode with defaults.
 /// let app: Router = Router::new()
 ///     .route("/submit", post(|| async { "ok" }))
-///     .layer(CsrfLayer::default());
+///     .layer(CsrfLayer::token(CsrfConfig::new()));
+///
+/// // Origin-only mode with defaults.
+/// let app: Router = Router::new()
+///     .route("/submit", post(|| async { "ok" }))
+///     .layer(CsrfLayer::origin_only());
 /// ```
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CsrfLayer {
-    config: Arc<CsrfConfig>,
+    mode: Mode,
+}
+
+#[derive(Clone, Debug)]
+enum Mode {
+    Token(Arc<CsrfConfig>),
+    Origin(Arc<CsrfOriginConfig>),
+}
+
+impl Default for CsrfLayer {
+    /// Token mode with [`CsrfConfig::default()`].
+    fn default() -> Self {
+        Self::token(CsrfConfig::default())
+    }
 }
 
 impl CsrfLayer {
-    /// Creates a `CsrfLayer` from a custom [`CsrfConfig`].
+    /// Creates a token-mode `CsrfLayer` from a custom [`CsrfConfig`].
+    /// Same as [`CsrfLayer::token`].
     #[must_use]
     pub fn new(config: CsrfConfig) -> Self {
+        Self::token(config)
+    }
+
+    /// Token mode: signed double-submit cookie plus source checks.
+    ///
+    /// ```rust
+    /// use rune_axum_csrf::{CsrfConfig, CsrfLayer};
+    ///
+    /// let layer = CsrfLayer::token(CsrfConfig::new().session_cookie("session_id"));
+    /// # let _ = layer;
+    /// ```
+    #[must_use]
+    pub fn token(config: CsrfConfig) -> Self {
         Self {
-            config: Arc::new(config),
+            mode: Mode::Token(Arc::new(config)),
+        }
+    }
+
+    /// Origin-only mode with [`CsrfOriginConfig::default()`]: no cookie, no
+    /// token, and requests without `Origin` and `Sec-Fetch-Site` are rejected.
+    ///
+    /// ```rust
+    /// use axum::{routing::post, Router};
+    /// use rune_axum_csrf::CsrfLayer;
+    ///
+    /// let app: Router = Router::new()
+    ///     .route("/submit", post(|| async { "ok" }))
+    ///     .layer(CsrfLayer::origin_only());
+    /// ```
+    #[must_use]
+    pub fn origin_only() -> Self {
+        Self::origin(CsrfOriginConfig::default())
+    }
+
+    /// Origin-only mode with a custom [`CsrfOriginConfig`].
+    ///
+    /// ```rust
+    /// use rune_axum_csrf::{CsrfLayer, CsrfOriginConfig};
+    ///
+    /// let layer = CsrfLayer::origin(
+    ///     CsrfOriginConfig::new().trusted_origin("https://app.example.com"),
+    /// );
+    /// # let _ = layer;
+    /// ```
+    #[must_use]
+    pub fn origin(config: CsrfOriginConfig) -> Self {
+        Self {
+            mode: Mode::Origin(Arc::new(config)),
         }
     }
 }
@@ -570,7 +647,7 @@ impl<S> Layer<S> for CsrfLayer {
     fn layer(&self, inner: S) -> Self::Service {
         CsrfService {
             inner,
-            config: Arc::clone(&self.config),
+            mode: self.mode.clone(),
         }
     }
 }
@@ -579,7 +656,7 @@ impl<S> Layer<S> for CsrfLayer {
 #[derive(Clone, Debug)]
 pub struct CsrfService<S> {
     inner: S,
-    config: Arc<CsrfConfig>,
+    mode: Mode,
 }
 
 const fn is_safe_method(method: &Method) -> bool {
@@ -626,8 +703,20 @@ where
     fn call(&mut self, req: Request<ReqBody>) -> Self::Future {
         // Drive the instance that was polled ready; leave a fresh clone behind.
         let clone = self.inner.clone();
-        let inner = std::mem::replace(&mut self.inner, clone);
-        Box::pin(handle(Arc::clone(&self.config), inner, req))
+        let mut inner = std::mem::replace(&mut self.inner, clone);
+        match &self.mode {
+            Mode::Token(config) => Box::pin(handle(Arc::clone(config), inner, req)),
+            Mode::Origin(config) => {
+                let (parts, body) = req.into_parts();
+                if !is_safe_method(&parts.method)
+                    && let Err(reason) = config.check(&parts)
+                {
+                    let status = config.status;
+                    return Box::pin(async move { Ok(reject(status, reason)) });
+                }
+                Box::pin(inner.call(Request::from_parts(parts, body)))
+            }
+        }
     }
 }
 

@@ -13,7 +13,7 @@ Axum and Tower middleware: auth, rate limiting, CSRF, security headers, request 
 | [`rune-axum-compression`](rune-axum-compression) | Response compression middleware for Axum — negotiated gzip, deflate, br and zstd with a content-type allowlist and minimum size |
 | [`rune-axum-concurrency`](rune-axum-concurrency) | Concurrency limit middleware for Axum — bounded in-flight requests with 503 load shedding and metrics |
 | [`rune-axum-cors`](rune-axum-cors) | CORS middleware for Axum — exact origin allowlists, preflight handling, configs vetted by rune-cors at build time |
-| [`rune-axum-csrf`](rune-axum-csrf) | CSRF protection middleware for Axum — signed double-submit cookie with Origin/Fetch-Metadata checks |
+| [`rune-axum-csrf`](rune-axum-csrf) | CSRF protection middleware for Axum — signed double-submit cookie or token-free Origin/Fetch-Metadata mode |
 | [`rune-axum-health`](rune-axum-health) | Health and readiness probes plus graceful shutdown for Axum — readiness flips on shutdown and in-flight requests drain before exit |
 | [`rune-axum-helmet`](rune-axum-helmet) | Security headers middleware for Axum — CSP, HSTS, X-Frame-Options, Referrer-Policy, and more |
 | [`rune-axum-ipfilter`](rune-axum-ipfilter) | IP allowlist / blocklist middleware for Axum — CIDR filtering with spoof-resistant client IP resolution (socket peer, trusted proxies) |
