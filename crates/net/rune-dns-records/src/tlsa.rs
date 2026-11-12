@@ -319,8 +319,8 @@ mod tests {
     #[test]
     fn matches_selected_data() {
         let spki = b"not really a SubjectPublicKeyInfo";
-        let sha256 = rune_hex::encode(&Sha256::digest(spki));
-        let sha512 = rune_hex::encode(&Sha512::digest(spki));
+        let sha256 = rune_hex::encode(Sha256::digest(spki));
+        let sha512 = rune_hex::encode(Sha512::digest(spki));
         let full = rune_hex::encode(spki);
         for (mtype, hex) in [(1, sha256), (2, sha512), (0, full)] {
             let record: TlsaRecord = format!("3 1 {mtype} {hex}").parse().unwrap();

@@ -26,7 +26,7 @@ Small utilities: encodings, hashes, ciphers, binary formats, secrets, logging.
 | [`rune-epoch`](rune-epoch) | Unix timestamp conversions — epoch to human-readable and back |
 | [`rune-fnv`](rune-fnv) | FNV-1 and FNV-1a hash functions for byte slices and strings (32 and 64-bit) |
 | [`rune-fuzzyhash`](rune-fuzzyhash) | TLSH and ssdeep (CTPH) fuzzy hashes with distance scoring for near-identical files and payloads |
-| [`rune-hex`](rune-hex) | Hex encoding and decoding for byte slices and files — lowercase, uppercase, and streaming output |
+| [`rune-hex`](rune-hex) | Fast hex encoding and decoding — no_std, zero-copy slices, constant-time decode, tolerant parsing, io streams, serde |
 | [`rune-hexdump`](rune-hexdump) | Hex dump with sidebar — inspect binary files like xxd |
 | [`rune-host-match`](rune-host-match) | Hostname pattern matching: exact, *.suffix egress allowlists and RFC 6125 certificate wildcards |
 | [`rune-html-encode`](rune-html-encode) | HTML entity encoding and decoding — escape and unescape HTML special characters |

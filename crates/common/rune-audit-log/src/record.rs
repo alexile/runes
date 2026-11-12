@@ -29,7 +29,7 @@ impl Digest {
 
 impl fmt::Display for Digest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&rune_hex::encode(&self.0))
+        f.write_str(&rune_hex::encode(self.0))
     }
 }
 

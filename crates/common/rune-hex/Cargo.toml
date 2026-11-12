@@ -1,13 +1,13 @@
 [package]
 name = "rune-hex"
-version = "0.2.2"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Hex encoding and decoding for byte slices and files — lowercase, uppercase, and streaming output"
+description = "Fast hex encoding and decoding — no_std, zero-copy slices, constant-time decode, tolerant parsing, io streams, serde"
 license.workspace = true
-keywords = ["hex", "encoding", "decoding", "cryptography", "cli"]
-categories = ["encoding", "command-line-utilities"]
+keywords = ["hex", "base16", "encoding", "no_std", "serde"]
+categories = ["encoding", "no-std", "command-line-utilities"]
 repository.workspace = true
 readme = "README.md"
 publish = true
@@ -19,15 +19,23 @@ path = "src/main.rs"
 
 [features]
 default = ["std"]
-# Without `std` the library builds on `core` and `alloc` only.
-std = []
+# Without `std` the crate builds on `core`, plus `alloc` when enabled.
+std = ["alloc", "serde?/std"]
+alloc = ["serde?/alloc"]
+serde = ["dep:serde", "alloc"]
 cli = ["dep:clap", "std"]
 
 [dependencies]
 clap = { workspace = true, optional = true }
+serde = { version = "1.0.219", optional = true, default-features = false }
 
 [dev-dependencies]
 proptest.workspace = true
+serde = { workspace = true }
+serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

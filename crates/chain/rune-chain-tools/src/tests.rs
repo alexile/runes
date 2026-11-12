@@ -206,7 +206,7 @@ fn cipher_tools_join_candidates_by_line() {
     assert!(out.lines().any(|l| l.ends_with("hello")));
 
     let cipher_hex = rune_hex::encode(
-        &b"attack at dawn"
+        b"attack at dawn"
             .iter()
             .map(|b| b ^ 0x13)
             .collect::<Vec<_>>(),

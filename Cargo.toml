@@ -347,7 +347,7 @@ rune-geoip = { path = "crates/net/rune-geoip", version = "0.1.0" }
 rune-graph = { path = "crates/graph/rune-graph", version = "0.4.0" }
 rune-hdbscan = { path = "crates/ml/rune-hdbscan", version = "0.1.1" }
 rune-graphql = { path = "crates/net/rune-graphql", version = "0.1.0" }
-rune-hex = { path = "crates/common/rune-hex", version = "0.2.2" }
+rune-hex = { path = "crates/common/rune-hex", version = "0.3.0" }
 rune-host-match = { path = "crates/common/rune-host-match", version = "0.1.1" }
 rune-hsts = { path = "crates/web/rune-hsts", version = "0.1.0" }
 rune-html-encode = { path = "crates/common/rune-html-encode", version = "0.2.1" }

@@ -3912,10 +3912,12 @@ dependencies = [
 
 [[package]]
 name = "rune-hex"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "clap",
  "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
