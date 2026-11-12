@@ -1,707 +1,733 @@
+use std::collections::HashSet;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
+use rune_chain_agent::sanitize::{redact_secrets, truncate_with_marker};
+use rune_chain_agent::{
+    AgentEvent, AgentLimits, Approval, ApprovalRequest, Approver, FunctionCallingAgent,
+    ToolErrorMode,
+};
 use rune_chain_core::{
-    Chain, ChainError, FunctionDefinition, GenerateResult, Llm, Message, PromptArgs, TokenUsage,
-    Tool,
+    Chain, ChainError, GenerateResult, Llm, Message, Pricing, PromptArgs, TokenUsage, Tool,
+};
+use tokio::time::Instant;
+
+use crate::event::{AutonomousEvent, AutonomousObserver, DropReason};
+use crate::governor::{GovernedLlm, Governor, GuardedTool};
+use crate::planner::{LlmPlanner, PlanContext, Review, TaskPlanner, render_history};
+use crate::untrusted::{UNTRUSTED_NOTICE, clean_task, fence, task_key};
+use crate::{
+    AgentState, BudgetKind, CHECKPOINT_VERSION, Limits, LoopKind, RunOutcome, StopCause,
+    StopHandle, Task, TaskRecord,
 };
 
-const DEFAULT_MAX_STEPS: usize = 25;
-const DEFAULT_MAX_REPLANS: usize = 3;
-const DEFAULT_MAX_TOOL_ITERATIONS: usize = 5;
+const DEFAULT_SYSTEM_PROMPT: &str = "You are an autonomous agent working through a task \
+list toward a larger goal. Do only the current task, using the provided tools when needed, \
+and reply with its result.";
 
-/// One completed task and the text it produced.
-#[derive(Debug, Clone)]
-pub struct StepRecord {
-    /// The task description, as emitted by the planner.
-    pub task: String,
-    /// The output produced while completing the task.
-    pub output: String,
-}
+/// Error messages kept in [`RunOutcome::Error`].
+const MAX_ERROR_BYTES: usize = 1024;
 
-/// How an [`AutonomousAgent::run`] call ended.
+type StateFn = dyn Fn(&AgentState) + Send + Sync;
+type StatePredicate = dyn Fn(&AgentState) -> bool + Send + Sync;
+
+/// The result of a run: how it ended plus the full state, which doubles as a
+/// checkpoint for [`AutonomousAgent::resume`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RunStatus {
-    /// Reflection judged the goal fully achieved.
-    Completed,
-    /// The replanning limit was reached without the goal being achieved.
-    Blocked(String),
-    /// The total step budget ([`AutonomousAgent::max_steps`]) was exhausted.
-    StepBudgetExhausted,
-}
-
-/// The outcome of a completed (or halted) autonomous run.
-#[derive(Debug, Clone)]
-pub struct AutonomousResult {
-    /// The original goal passed to [`AutonomousAgent::run`].
-    pub goal: String,
-    /// The final answer (on [`RunStatus::Completed`]) or the last known progress.
-    pub output: String,
+#[non_exhaustive]
+pub struct AutonomousRun {
     /// How the run ended.
-    pub status: RunStatus,
-    /// Every plan produced, in order — index 0 is the initial plan, each
-    /// subsequent entry is a replan triggered by reflection.
-    pub plans: Vec<Vec<String>>,
-    /// Every task executed across all plans, in execution order.
-    pub history: Vec<StepRecord>,
-    /// Token usage summed over every LLM call of the run (planning, task
-    /// execution and reflection), or `None` when the LLM never reported usage.
-    pub tokens: Option<TokenUsage>,
+    pub outcome: RunOutcome,
+    /// Queue, bounded history and spent budget at the end of the run.
+    pub state: AgentState,
 }
 
-/// The LLM's verdict after a plan has been fully executed.
-enum Reflection {
-    Done(String),
-    Continue(Vec<String>),
+impl AutonomousRun {
+    /// The final answer of a completed run, otherwise the latest task
+    /// result (empty if no task ran).
+    #[must_use]
+    pub fn output(&self) -> &str {
+        self.outcome
+            .answer()
+            .or_else(|| self.state.last_result())
+            .unwrap_or_default()
+    }
+
+    /// Whether the goal was reported done.
+    #[must_use]
+    pub const fn is_completed(&self) -> bool {
+        self.outcome.is_completed()
+    }
+
+    /// Token usage over the run, if the LLM reported any.
+    #[must_use]
+    pub const fn usage(&self) -> Option<&TokenUsage> {
+        self.state.usage.as_ref()
+    }
 }
 
-/// A goal-driven agent that plans, executes, and re-plans without human input.
+/// A goal-driven agent that plans tasks, runs them with tools and reviews
+/// its progress, inside hard limits.
 ///
-/// Give it a goal instead of a question. It decomposes the goal into tasks,
-/// works through them with the registered [`Tool`]s, then asks the LLM to judge
-/// whether the goal is met. If not, it re-plans the remaining work and keeps
-/// going — up to [`max_replans`](Self::max_replans) revisions and
-/// [`max_steps`](Self::max_steps) total tasks — rather than stopping after a
-/// single bounded reasoning loop.
+/// Each run:
+///
+/// 1. asks the [`TaskPlanner`] for an initial task list;
+/// 2. runs queued tasks one at a time. With tools registered, a task runs in
+///    a [`FunctionCallingAgent`] (schema-validated tool calls, approval,
+///    fenced output, per-task [`AgentLimits`]); without tools it is a single
+///    LLM call;
+/// 3. when the queue is empty, asks the planner to review. `Done` ends the
+///    run, `Continue` queues more tasks.
+///
+/// It stops with a [`RunOutcome`] as soon as the goal is done, a limit in
+/// [`Limits`] is hit, a loop is detected, the caller stops it, or an LLM call
+/// fails. See the crate docs for the security model.
 pub struct AutonomousAgent {
     llm: Arc<dyn Llm>,
-    tools: Vec<Box<dyn Tool>>,
-    max_steps: usize,
-    max_replans: usize,
-    max_tool_iterations: usize,
+    planner: Arc<dyn TaskPlanner>,
+    tools: Vec<(Arc<dyn Tool>, bool)>,
+    approver: Option<Arc<dyn Approver>>,
+    observer: Option<Arc<dyn AutonomousObserver>>,
+    on_checkpoint: Option<Arc<StateFn>>,
+    stop_when: Option<Arc<StatePredicate>>,
+    limits: Limits,
+    task_limits: AgentLimits,
+    tool_error_mode: ToolErrorMode,
+    pricing: Option<Pricing>,
     system_prompt: Option<String>,
+    stop: StopHandle,
 }
 
 impl AutonomousAgent {
-    /// Create a new agent backed by the given LLM.
+    /// An agent with the [`LlmPlanner`], no tools and default [`Limits`].
+    /// Each task gets [`AgentLimits::default`] with at most 5 tool rounds.
     pub fn new(llm: Arc<dyn Llm>) -> Self {
         Self {
             llm,
+            planner: Arc::new(LlmPlanner::new()),
             tools: Vec::new(),
-            max_steps: DEFAULT_MAX_STEPS,
-            max_replans: DEFAULT_MAX_REPLANS,
-            max_tool_iterations: DEFAULT_MAX_TOOL_ITERATIONS,
+            approver: None,
+            observer: None,
+            on_checkpoint: None,
+            stop_when: None,
+            limits: Limits::default(),
+            task_limits: AgentLimits::default().max_iterations(5),
+            tool_error_mode: ToolErrorMode::ReturnToModel,
+            pricing: None,
             system_prompt: None,
+            stop: StopHandle::new(),
         }
     }
 
-    /// Register a tool the agent may call while executing tasks.
+    /// Use another planner / prioritiser.
+    #[must_use]
+    pub fn planner(mut self, planner: impl TaskPlanner + 'static) -> Self {
+        self.planner = Arc::new(planner);
+        self
+    }
+
+    /// Register a tool tasks may call.
     #[must_use]
     pub fn tool(mut self, tool: impl Tool + 'static) -> Self {
-        self.tools.push(Box::new(tool));
+        self.tools.push((Arc::new(tool), false));
         self
     }
 
-    /// Cap the total number of tasks executed across every plan (default: 25).
+    /// Register a tool that only runs after the [`approver`](Self::approver)
+    /// allows the call. Without an approver every call to it is denied.
     #[must_use]
-    pub const fn max_steps(mut self, max_steps: usize) -> Self {
-        self.max_steps = max_steps;
+    pub fn tool_requiring_approval(mut self, tool: impl Tool + 'static) -> Self {
+        self.tools.push((Arc::new(tool), true));
         self
     }
 
-    /// Cap how many times reflection may revise the plan (default: 3).
+    /// Register already-boxed tools.
     #[must_use]
-    pub const fn max_replans(mut self, max_replans: usize) -> Self {
-        self.max_replans = max_replans;
+    pub fn tools(mut self, tools: impl IntoIterator<Item = Box<dyn Tool>>) -> Self {
+        self.tools
+            .extend(tools.into_iter().map(|t| (Arc::from(t), false)));
         self
     }
 
-    /// Cap tool-call rounds spent completing a single task (default: 5).
+    /// Set the approver for tools registered with
+    /// [`tool_requiring_approval`](Self::tool_requiring_approval).
     #[must_use]
-    pub const fn max_tool_iterations(mut self, max_tool_iterations: usize) -> Self {
-        self.max_tool_iterations = max_tool_iterations;
+    pub fn approver(mut self, approver: impl Approver + 'static) -> Self {
+        self.approver = Some(Arc::new(approver));
         self
     }
 
-    /// Override the system prompt used while executing individual tasks.
+    /// Receive an [`AutonomousEvent`] for every step of the run.
     #[must_use]
-    pub fn system_prompt(mut self, system_prompt: impl Into<String>) -> Self {
-        self.system_prompt = Some(system_prompt.into());
+    pub fn on_event(mut self, observer: impl AutonomousObserver + 'static) -> Self {
+        self.observer = Some(Arc::new(observer));
         self
     }
 
-    /// Drive the agent toward `goal`, planning, executing, and re-planning
-    /// without further input until it is done, blocked, or out of budget.
-    pub async fn run(&self, goal: &str) -> Result<AutonomousResult, ChainError> {
-        let mut history: Vec<StepRecord> = Vec::new();
-        let mut plans: Vec<Vec<String>> = Vec::new();
-        let mut steps_used = 0usize;
-        let mut replans = 0usize;
-        let mut tokens = None;
+    /// Called with the current state after every task and at the end of the
+    /// run, e.g. to persist a checkpoint.
+    #[must_use]
+    pub fn on_checkpoint(mut self, f: impl Fn(&AgentState) + Send + Sync + 'static) -> Self {
+        self.on_checkpoint = Some(Arc::new(f));
+        self
+    }
 
-        let mut current_plan = self.plan(goal, &history, &mut tokens).await?;
-        plans.push(current_plan.clone());
+    /// Stop the run (with [`StopCause::Condition`]) once `predicate` returns
+    /// `true`. Checked before every task and planning step.
+    #[must_use]
+    pub fn stop_when(
+        mut self,
+        predicate: impl Fn(&AgentState) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.stop_when = Some(Arc::new(predicate));
+        self
+    }
 
-        loop {
-            for task in current_plan.clone() {
-                if steps_used >= self.max_steps {
-                    return Ok(AutonomousResult {
-                        goal: goal.to_string(),
-                        output: last_progress(&history),
-                        status: RunStatus::StepBudgetExhausted,
-                        plans,
-                        history,
-                        tokens,
-                    });
-                }
+    /// Replace the run limits.
+    #[must_use]
+    pub const fn limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
+    }
 
-                let output = self
-                    .execute_task(goal, &task, &history, &mut tokens)
-                    .await?;
-                steps_used += 1;
-                history.push(StepRecord { task, output });
+    /// Shorthand for [`Limits::max_tasks`].
+    #[must_use]
+    pub const fn max_tasks(mut self, n: usize) -> Self {
+        self.limits.max_tasks = n;
+        self
+    }
+
+    /// Shorthand for [`Limits::max_cycles`].
+    #[must_use]
+    pub const fn max_cycles(mut self, n: usize) -> Self {
+        self.limits.max_cycles = n;
+        self
+    }
+
+    /// Shorthand for [`Limits::max_wall_time`].
+    #[must_use]
+    pub const fn max_wall_time(mut self, budget: Option<Duration>) -> Self {
+        self.limits.max_wall_time = budget;
+        self
+    }
+
+    /// Shorthand for [`Limits::max_total_tokens`].
+    #[must_use]
+    pub const fn max_total_tokens(mut self, budget: Option<u64>) -> Self {
+        self.limits.max_total_tokens = budget;
+        self
+    }
+
+    /// Limits for the tool loop inside each task. Its wall time is further
+    /// capped by what is left of the run's.
+    #[must_use]
+    pub const fn task_limits(mut self, limits: AgentLimits) -> Self {
+        self.task_limits = limits;
+        self
+    }
+
+    /// What a failing tool call does (default: reported to the model).
+    #[must_use]
+    pub const fn tool_error_mode(mut self, mode: ToolErrorMode) -> Self {
+        self.tool_error_mode = mode;
+        self
+    }
+
+    /// Prices for the model, enabling [`Limits::max_cost`] and
+    /// [`AgentState::cost`].
+    #[must_use]
+    pub const fn pricing(mut self, pricing: Pricing) -> Self {
+        self.pricing = Some(pricing);
+        self
+    }
+
+    /// Replace the system prompt used to run tasks. The untrusted-data
+    /// notice is always appended.
+    #[must_use]
+    pub fn system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = Some(prompt.into());
+        self
+    }
+
+    /// The limits in force.
+    #[must_use]
+    pub const fn current_limits(&self) -> &Limits {
+        &self.limits
+    }
+
+    /// A handle that stops this agent's runs from anywhere.
+    #[must_use]
+    pub fn stop_handle(&self) -> StopHandle {
+        self.stop.clone()
+    }
+
+    /// Start a run toward `goal`.
+    ///
+    /// # Errors
+    ///
+    /// Only for an invalid configuration: tool names that are invalid or
+    /// registered twice. Everything that can happen during the run, LLM
+    /// failures included, is reported in [`AutonomousRun::outcome`].
+    pub async fn run(&self, goal: &str) -> Result<AutonomousRun, ChainError> {
+        self.drive(AgentState::new(goal), false).await
+    }
+
+    /// Continue from a checkpoint (an [`AgentState`] from an earlier run or
+    /// the checkpoint callback). Spent budget carries over; size bounds are
+    /// re-applied to the state.
+    ///
+    /// # Errors
+    ///
+    /// As for [`run`](Self::run), plus a state written by an incompatible
+    /// version of this crate.
+    pub async fn resume(&self, state: AgentState) -> Result<AutonomousRun, ChainError> {
+        if state.version != CHECKPOINT_VERSION {
+            return Err(ChainError::Other(format!(
+                "checkpoint version {} is not supported (expected {CHECKPOINT_VERSION})",
+                state.version
+            )));
+        }
+        self.drive(state, true).await
+    }
+
+    fn check_tools(&self) -> Result<(), ChainError> {
+        let mut seen = HashSet::new();
+        for (tool, _) in &self.tools {
+            let def = tool.function_definition();
+            if !def.has_valid_name() {
+                return Err(ChainError::Other(format!(
+                    "tool name `{}` is invalid: use 1-64 ASCII letters, digits, `_` or `-`",
+                    rune_chain_agent::sanitize::sanitize_name(&def.name)
+                )));
             }
-
-            match self.reflect(goal, &history, &mut tokens).await? {
-                Reflection::Done(answer) => {
-                    return Ok(AutonomousResult {
-                        goal: goal.to_string(),
-                        output: answer,
-                        status: RunStatus::Completed,
-                        plans,
-                        history,
-                        tokens,
-                    });
-                }
-                Reflection::Continue(next_tasks) => {
-                    replans += 1;
-                    if next_tasks.is_empty() || replans > self.max_replans {
-                        return Ok(AutonomousResult {
-                            goal: goal.to_string(),
-                            output: last_progress(&history),
-                            status: RunStatus::Blocked(
-                                "reached the replanning limit without completing the goal"
-                                    .to_string(),
-                            ),
-                            plans,
-                            history,
-                            tokens,
-                        });
-                    }
-                    current_plan = next_tasks;
-                    plans.push(current_plan.clone());
-                }
+            if !seen.insert(def.name.clone()) {
+                return Err(ChainError::Other(format!(
+                    "tool `{}` is registered twice",
+                    def.name
+                )));
             }
         }
+        Ok(())
     }
 
-    /// Ask the LLM to break `goal` into an ordered list of concrete tasks.
-    async fn plan(
+    async fn drive(
         &self,
-        goal: &str,
-        history: &[StepRecord],
-        tokens: &mut Option<TokenUsage>,
-    ) -> Result<Vec<String>, ChainError> {
-        let prompt = format!(
-            "You are an autonomous planning agent. Break the following goal into a \
-             short, ordered list of concrete, independently-executable tasks needed \
-             to fully achieve it.\n\n\
-             Goal: {goal}\n\n\
-             Work completed so far:\n{}\n\n\
-             Respond with ONLY a numbered list, one task per line, and nothing else. \
-             Keep the list as short as possible while still being sufficient.",
-            history_block(history)
-        );
+        mut state: AgentState,
+        resumed: bool,
+    ) -> Result<AutonomousRun, ChainError> {
+        self.check_tools()?;
+        state.enforce_bounds(&self.limits);
 
-        let messages = vec![
-            Message::system("You are a meticulous planning assistant."),
-            Message::human(prompt),
-        ];
-        let result = self.llm.generate(&messages).await?;
-        TokenUsage::accumulate(tokens, result.tokens.as_ref());
-        let tasks = parse_numbered_list(&result.generation);
-
-        if tasks.is_empty() {
-            Ok(vec![goal.to_string()])
-        } else {
-            Ok(tasks)
-        }
-    }
-
-    /// Complete a single task, using tools if any are registered.
-    async fn execute_task(
-        &self,
-        goal: &str,
-        task: &str,
-        history: &[StepRecord],
-        tokens: &mut Option<TokenUsage>,
-    ) -> Result<String, ChainError> {
-        let mut messages = self.task_messages(goal, task, history);
-
-        if self.tools.is_empty() {
-            let result = self.llm.generate(&messages).await?;
-            TokenUsage::accumulate(tokens, result.tokens.as_ref());
-            return Ok(result.generation);
-        }
-
-        let tool_defs: Vec<FunctionDefinition> =
-            self.tools.iter().map(|t| t.function_definition()).collect();
-        let mut rounds = 0usize;
-
-        loop {
-            let result = self
-                .llm
-                .generate_with_tools(&messages, &tool_defs, None)
-                .await?;
-            TokenUsage::accumulate(tokens, result.tokens.as_ref());
-
-            if !result.wants_tool_calls() {
-                return Ok(result.generation);
-            }
-
-            rounds += 1;
-            if rounds > self.max_tool_iterations {
-                return Ok(result.generation);
-            }
-
-            messages.push(Message::ai_with_tool_calls(
-                &result.generation,
-                result.tool_calls.clone(),
-            ));
-
-            for call in &result.tool_calls {
-                let output = match self.tools.iter().find(|t| t.name() == call.name) {
-                    None => format!("Error: unknown tool '{}'", call.name),
-                    Some(tool) => tool
-                        .run(&call.arguments)
-                        .await
-                        .unwrap_or_else(|e| format!("Tool error: {e}")),
-                };
-                messages.push(Message::tool_result(&call.id, output));
-            }
-        }
-    }
-
-    fn task_messages(&self, goal: &str, task: &str, history: &[StepRecord]) -> Vec<Message> {
-        let system = self.system_prompt.clone().unwrap_or_else(|| {
-            "You are an autonomous agent working through a task list toward a larger goal. \
-             Use the provided tools when needed to complete the current task."
-                .to_string()
+        let started = Instant::now();
+        let base_elapsed = state.elapsed;
+        let deadline = self
+            .limits
+            .max_wall_time
+            .map(|max| started + max.saturating_sub(base_elapsed));
+        let governor = Arc::new(Governor::new(
+            self.limits,
+            self.pricing,
+            deadline,
+            self.stop.clone(),
+            self.observer.clone(),
+            &state,
+        ));
+        let llm = GovernedLlm {
+            inner: Arc::clone(&self.llm),
+            governor: Arc::clone(&governor),
+        };
+        let run = Run {
+            agent: self,
+            governor: &governor,
+            llm: Arc::new(llm),
+            started,
+            base_elapsed,
+        };
+        governor.emit(&AutonomousEvent::RunStarted {
+            goal: state.goal.clone(),
+            resumed,
         });
 
-        let human = format!(
-            "Overall goal: {goal}\n\n\
-             Work completed so far:\n{}\n\n\
-             Your current task: {task}\n\n\
-             Complete this task now.",
-            history_block(history)
-        );
+        let outcome = match state.answer.clone() {
+            Some(answer) => RunOutcome::Completed { answer },
+            None => run.steps(&mut state).await,
+        };
+        run.sync(&mut state);
+        governor.emit(&AutonomousEvent::Finished {
+            outcome: outcome.clone(),
+        });
+        if let Some(f) = &self.on_checkpoint {
+            f(&state);
+        }
+        Ok(AutonomousRun { outcome, state })
+    }
+}
 
-        vec![Message::system(system), Message::human(human)]
+/// One run in progress.
+struct Run<'a> {
+    agent: &'a AutonomousAgent,
+    governor: &'a Arc<Governor>,
+    llm: Arc<GovernedLlm>,
+    started: Instant,
+    base_elapsed: Duration,
+}
+
+/// Tasks accepted from one planner reply.
+struct Enqueued {
+    added: Vec<Task>,
+    repeated: Option<String>,
+}
+
+impl Run<'_> {
+    fn sync(&self, state: &mut AgentState) {
+        self.governor.sync(state);
+        state.elapsed = self.base_elapsed + self.started.elapsed();
     }
 
-    /// Ask the LLM whether the goal is fully achieved given the work so far.
-    async fn reflect(
-        &self,
-        goal: &str,
-        history: &[StepRecord],
-        tokens: &mut Option<TokenUsage>,
-    ) -> Result<Reflection, ChainError> {
-        let prompt = format!(
-            "Goal: {goal}\n\n\
-             Work completed so far:\n{}\n\n\
-             Decide whether the goal has been fully achieved.\n\n\
-             If it has, respond in EXACTLY this format:\n\
-             STATUS: DONE\n\
-             ANSWER: <final answer synthesized from the work above>\n\n\
-             If more work is needed, respond in EXACTLY this format:\n\
-             STATUS: CONTINUE\n\
-             NEXT_TASKS:\n\
-             1. <task>\n\
-             2. <task>",
-            history_block(history)
-        );
+    fn ctx<'s>(&self, state: &'s AgentState) -> PlanContext<'s> {
+        let mut ctx = PlanContext::new(&state.goal, &state.history, &state.queue);
+        ctx.cycle = state.cycle;
+        ctx.max_context_bytes = self.agent.limits.max_context_bytes;
+        ctx
+    }
 
-        let messages = vec![
-            Message::system("You are a critical evaluator judging whether a goal is complete."),
-            Message::human(prompt),
+    /// Map an error to the outcome: a halt the governor latched (limit, loop,
+    /// stop) wins over the error it caused.
+    fn failure(&self, err: &ChainError) -> RunOutcome {
+        self.governor.halted().unwrap_or_else(|| {
+            let (message, _) =
+                truncate_with_marker(&redact_secrets(&err.to_string()), MAX_ERROR_BYTES);
+            RunOutcome::Error { message }
+        })
+    }
+
+    fn halt_check(&self, state: &mut AgentState) -> Option<RunOutcome> {
+        if let Some(outcome) = self.governor.check() {
+            return Some(outcome);
+        }
+        if let Some(pred) = &self.agent.stop_when {
+            self.sync(state);
+            if pred(state) {
+                let outcome = RunOutcome::Stopped(StopCause::Condition);
+                self.governor.halt(outcome.clone());
+                return Some(outcome);
+            }
+        }
+        None
+    }
+
+    async fn steps(&self, state: &mut AgentState) -> RunOutcome {
+        let limits = &self.agent.limits;
+        let planner = &self.agent.planner;
+        loop {
+            if let Some(outcome) = self.halt_check(state) {
+                return outcome;
+            }
+
+            if state.queue.is_empty() {
+                let proposed = if state.cycle == 0 {
+                    match planner.plan(self.llm.as_ref(), &self.ctx(state)).await {
+                        Ok(tasks) => tasks,
+                        Err(e) => return self.failure(&e),
+                    }
+                } else {
+                    match planner.review(self.llm.as_ref(), &self.ctx(state)).await {
+                        Ok(Review::Done { answer }) => {
+                            self.governor
+                                .emit(&AutonomousEvent::Reviewed { done: true });
+                            state.answer = Some(answer.clone());
+                            return RunOutcome::Completed { answer };
+                        }
+                        Ok(Review::Continue { tasks }) => {
+                            self.governor
+                                .emit(&AutonomousEvent::Reviewed { done: false });
+                            if state.cycle >= limits.max_cycles {
+                                return RunOutcome::BudgetExceeded(BudgetKind::Cycles);
+                            }
+                            tasks
+                        }
+                        Err(e) => return self.failure(&e),
+                    }
+                };
+                state.cycle += 1;
+                let enqueued = match self.enqueue(state, proposed) {
+                    Ok(e) => e,
+                    Err(outcome) => return outcome,
+                };
+                if enqueued.added.is_empty() {
+                    return RunOutcome::LoopDetected(
+                        enqueued
+                            .repeated
+                            .map_or(LoopKind::NoProgress, |task| LoopKind::RepeatedTask { task }),
+                    );
+                }
+                self.prioritize(state);
+                self.governor.emit(&AutonomousEvent::Planned {
+                    cycle: state.cycle,
+                    tasks: enqueued.added,
+                });
+                continue;
+            }
+
+            if state.tasks_executed >= limits.max_tasks {
+                return RunOutcome::BudgetExceeded(BudgetKind::Tasks);
+            }
+            let Some(task) = state.queue.pop_front() else {
+                continue;
+            };
+            let count = state
+                .task_counts
+                .entry(task_key(&task.description))
+                .or_insert(0);
+            *count = count.saturating_add(1);
+            state.tasks_executed += 1;
+            self.governor
+                .emit(&AutonomousEvent::TaskStarted { task: task.clone() });
+
+            let executed = self.execute(state, &task).await;
+            let (result, tool_calls) = match executed {
+                Ok(r) => r,
+                Err(e) => {
+                    // Put the task back so a resumed run retries it.
+                    state.queue.push_front(task);
+                    return self.failure(&e);
+                }
+            };
+            let (result, truncated) = truncate_with_marker(&result, limits.max_result_bytes);
+            self.governor.emit(&AutonomousEvent::TaskFinished {
+                task_id: task.id,
+                result: result.clone(),
+                truncated,
+            });
+            let record = TaskRecord {
+                task,
+                result,
+                truncated,
+                tool_calls,
+            };
+            state.push_record(record.clone(), limits.max_history);
+            self.checkpoint(state);
+
+            if let Some(outcome) = self.governor.halted() {
+                return outcome;
+            }
+            let follow_up = match planner
+                .after_task(self.llm.as_ref(), &self.ctx(state), &record)
+                .await
+            {
+                Ok(tasks) => tasks,
+                Err(e) => return self.failure(&e),
+            };
+            if !follow_up.is_empty() {
+                match self.enqueue(state, follow_up) {
+                    Ok(e) if !e.added.is_empty() => {
+                        self.prioritize(state);
+                        self.governor.emit(&AutonomousEvent::Planned {
+                            cycle: state.cycle,
+                            tasks: e.added,
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(outcome) => return outcome,
+                }
+            }
+        }
+    }
+
+    fn prioritize(&self, state: &mut AgentState) {
+        let mut queue = std::mem::take(&mut state.queue);
+        self.agent.planner.prioritize(&self.ctx(state), &mut queue);
+        // A planner may reorder, but not grow the queue past its bound.
+        queue.truncate(self.agent.limits.max_queue_len);
+        state.queue = queue;
+    }
+
+    fn checkpoint(&self, state: &mut AgentState) {
+        if let Some(f) = &self.agent.on_checkpoint {
+            self.sync(state);
+            f(state);
+        }
+    }
+
+    /// Clean, de-duplicate and cap proposed tasks, then queue them.
+    fn enqueue(
+        &self,
+        state: &mut AgentState,
+        proposed: Vec<String>,
+    ) -> Result<Enqueued, RunOutcome> {
+        let limits = &self.agent.limits;
+        let mut out = Enqueued {
+            added: Vec::new(),
+            repeated: None,
+        };
+        let mut drops = [0usize; 5];
+        let reasons = [
+            DropReason::Empty,
+            DropReason::Duplicate,
+            DropReason::Repeated,
+            DropReason::PerStepLimit,
+            DropReason::QueueFull,
         ];
-        let result = self.llm.generate(&messages).await?;
-        TokenUsage::accumulate(tokens, result.tokens.as_ref());
-        Ok(parse_reflection(&result.generation))
+        let mut queued: HashSet<String> = state
+            .queue
+            .iter()
+            .map(|t| task_key(&t.description))
+            .collect();
+        for raw in proposed {
+            if out.added.len() >= limits.max_new_tasks_per_step {
+                drops[3] += 1;
+                continue;
+            }
+            let Some(description) = clean_task(&raw, limits.max_task_bytes) else {
+                drops[0] += 1;
+                continue;
+            };
+            let key = task_key(&description);
+            if key.is_empty() {
+                drops[0] += 1;
+                continue;
+            }
+            if queued.contains(&key) {
+                drops[1] += 1;
+                continue;
+            }
+            if state.task_counts.get(&key).copied().unwrap_or(0) >= limits.max_task_repeats {
+                drops[2] += 1;
+                out.repeated.get_or_insert(description);
+                continue;
+            }
+            if state.queue.len() >= limits.max_queue_len {
+                drops[4] += 1;
+                continue;
+            }
+            if state.tasks_generated >= limits.max_generated_tasks {
+                return Err(RunOutcome::BudgetExceeded(BudgetKind::GeneratedTasks));
+            }
+            state.tasks_generated += 1;
+            let task = Task::new(state.next_task_id, description);
+            state.next_task_id += 1;
+            queued.insert(key);
+            state.queue.push_back(task.clone());
+            out.added.push(task);
+        }
+        for (count, reason) in drops.into_iter().zip(reasons) {
+            if count > 0 {
+                self.governor
+                    .emit(&AutonomousEvent::TasksDropped { count, reason });
+            }
+        }
+        Ok(out)
+    }
+
+    fn task_prompt(&self, state: &AgentState, task: &Task) -> String {
+        format!(
+            "Overall goal (from the user): {}\n\n\
+             Results of earlier tasks:\n{}\n\n\
+             Current task:\n{}\n\n\
+             Complete the current task now and reply with its result.",
+            state.goal,
+            render_history(&state.history, self.agent.limits.max_context_bytes),
+            fence("task", &format!("id=\"{}\"", task.id), &task.description),
+        )
+    }
+
+    fn system_prompt(&self) -> String {
+        let base = self
+            .agent
+            .system_prompt
+            .as_deref()
+            .unwrap_or(DEFAULT_SYSTEM_PROMPT);
+        format!("{base}\n\n{UNTRUSTED_NOTICE}")
+    }
+
+    /// Run one task; returns its output and the number of tool calls.
+    async fn execute(
+        &self,
+        state: &AgentState,
+        task: &Task,
+    ) -> Result<(String, usize), ChainError> {
+        let input = self.task_prompt(state, task);
+        let agent = self.agent;
+        if agent.tools.is_empty() {
+            let messages = [Message::system(self.system_prompt()), Message::human(input)];
+            let result = self.llm.generate(&messages).await?;
+            return Ok((result.generation, 0));
+        }
+
+        let remaining = self
+            .governor
+            .deadline()
+            .map(|d| d.saturating_duration_since(Instant::now()));
+        let wall = match (agent.task_limits.max_wall_time, remaining) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let llm: Arc<dyn Llm> = self.llm.clone();
+        let mut fca = FunctionCallingAgent::new(llm)
+            .limits(agent.task_limits.max_wall_time(wall))
+            .tool_error_mode(agent.tool_error_mode)
+            .fence_tool_outputs(true)
+            .system_prompt(self.system_prompt());
+        for (tool, needs_approval) in &agent.tools {
+            let guarded = GuardedTool {
+                inner: Arc::clone(tool),
+                governor: Arc::clone(self.governor),
+            };
+            fca = if *needs_approval {
+                fca.tool_requiring_approval(guarded)
+            } else {
+                fca.tool(guarded)
+            };
+        }
+        if let Some(approver) = &agent.approver {
+            fca = fca.approver(SharedApprover(Arc::clone(approver)));
+        }
+        if let Some(observer) = &agent.observer {
+            let observer = Arc::clone(observer);
+            let task_id = task.id;
+            fca = fca.on_event(move |event: &AgentEvent| {
+                observer.on_event(&AutonomousEvent::Agent {
+                    task_id,
+                    event: event.clone(),
+                });
+            });
+        }
+        let result = fca.run(&input).await?;
+        Ok((result.output, result.tool_invocations.len()))
+    }
+}
+
+struct SharedApprover(Arc<dyn Approver>);
+
+#[async_trait]
+impl Approver for SharedApprover {
+    async fn approve(&self, request: ApprovalRequest) -> Approval {
+        self.0.approve(request).await
     }
 }
 
 #[async_trait]
 impl Chain for AutonomousAgent {
+    /// Runs toward the `"input"` goal. A completed run returns the answer
+    /// with the run's token usage; any other outcome is an error naming it.
     async fn call(&self, input_variables: PromptArgs) -> Result<GenerateResult, ChainError> {
         let goal = input_variables
             .get("input")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| ChainError::MissingVariable("input".to_string()))?;
-
-        let result = self.run(goal).await?;
-        Ok(GenerateResult::from_text(result.output).with_tokens(result.tokens))
+            .ok_or_else(|| ChainError::MissingVariable("input".to_owned()))?;
+        let run = self.run(goal).await?;
+        match run.outcome {
+            RunOutcome::Completed { answer } => {
+                Ok(GenerateResult::from_text(answer).with_tokens(run.state.usage))
+            }
+            other => Err(ChainError::Other(format!(
+                "autonomous run did not complete: {other}"
+            ))),
+        }
     }
 
     fn input_keys(&self) -> Vec<String> {
-        vec!["input".to_string()]
-    }
-}
-
-fn history_block(history: &[StepRecord]) -> String {
-    if history.is_empty() {
-        return "(no work has been done yet)".to_string();
-    }
-    history
-        .iter()
-        .enumerate()
-        .map(|(i, record)| format!("{}. {} -> {}", i + 1, record.task, record.output))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn last_progress(history: &[StepRecord]) -> String {
-    history.last().map_or_else(
-        || "(no work completed)".to_string(),
-        |record| record.output.clone(),
-    )
-}
-
-/// Parse lines like `"1. Do the thing"` or `"2) Do another thing"` into a task list.
-fn parse_numbered_list(text: &str) -> Vec<String> {
-    text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            let after_digits = trimmed.trim_start_matches(|c: char| c.is_ascii_digit());
-            if after_digits.len() == trimmed.len() {
-                return None;
-            }
-            let rest = after_digits.trim_start_matches(['.', ')']).trim();
-            if rest.is_empty() {
-                None
-            } else {
-                Some(rest.to_string())
-            }
-        })
-        .collect()
-}
-
-fn parse_reflection(text: &str) -> Reflection {
-    let status = text.lines().find_map(|line| {
-        let trimmed = line.trim_start();
-        let upper = trimmed.to_uppercase();
-        upper
-            .starts_with("STATUS:")
-            .then(|| upper["STATUS:".len()..].trim().to_string())
-    });
-
-    match status.as_deref() {
-        Some("DONE") => Reflection::Done(
-            extract_after_prefix(text, "ANSWER:").unwrap_or_else(|| text.trim().to_string()),
-        ),
-        Some("CONTINUE") => Reflection::Continue(parse_numbered_list(text)),
-        _ => {
-            // No explicit STATUS line — fall back to a lenient heuristic rather
-            // than failing the run outright on a slightly malformed response.
-            if text.to_uppercase().contains("DONE") {
-                Reflection::Done(text.trim().to_string())
-            } else {
-                let tasks = parse_numbered_list(text);
-                if tasks.is_empty() {
-                    Reflection::Continue(vec![text.trim().to_string()])
-                } else {
-                    Reflection::Continue(tasks)
-                }
-            }
-        }
-    }
-}
-
-fn extract_after_prefix(text: &str, prefix: &str) -> Option<String> {
-    let upper = text.to_uppercase();
-    let idx = upper.find(prefix)?;
-    Some(text[idx + prefix.len()..].trim().to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use rune_chain_core::{
-        FunctionDefinition as FnDef, LlmError, ToolCall, ToolChoice, ToolError, prompt_args,
-    };
-    use std::sync::Mutex;
-
-    struct EchoTool;
-
-    #[async_trait]
-    impl Tool for EchoTool {
-        fn name(&self) -> &'static str {
-            "echo"
-        }
-        fn description(&self) -> &'static str {
-            "Returns its input."
-        }
-        async fn run(&self, input: &str) -> Result<String, ToolError> {
-            Ok(input.to_string())
-        }
-    }
-
-    #[test]
-    fn parse_numbered_list_extracts_tasks() {
-        let text = "1. Research the topic\n2) Write a draft\n3. Publish it";
-        assert_eq!(
-            parse_numbered_list(text),
-            vec!["Research the topic", "Write a draft", "Publish it"]
-        );
-    }
-
-    #[test]
-    fn parse_numbered_list_ignores_non_list_lines() {
-        let text = "Here is the plan:\n1. Do the thing\nThat's it.";
-        assert_eq!(parse_numbered_list(text), vec!["Do the thing"]);
-    }
-
-    #[test]
-    fn parse_reflection_done_extracts_answer() {
-        let text = "STATUS: DONE\nANSWER: The report is complete.";
-        match parse_reflection(text) {
-            Reflection::Done(answer) => assert_eq!(answer, "The report is complete."),
-            Reflection::Continue(_) => panic!("expected Done"),
-        }
-    }
-
-    #[test]
-    fn parse_reflection_continue_extracts_next_tasks() {
-        let text = "STATUS: CONTINUE\nNEXT_TASKS:\n1. Gather more data\n2. Re-check figures";
-        match parse_reflection(text) {
-            Reflection::Continue(tasks) => {
-                assert_eq!(tasks, vec!["Gather more data", "Re-check figures"]);
-            }
-            Reflection::Done(_) => panic!("expected Continue"),
-        }
-    }
-
-    #[test]
-    fn parse_reflection_falls_back_when_status_missing() {
-        match parse_reflection("Looks fully DONE to me.") {
-            Reflection::Done(_) => {}
-            Reflection::Continue(_) => panic!("expected Done fallback"),
-        }
-
-        match parse_reflection("Not finished yet, needs more research.") {
-            Reflection::Continue(tasks) => assert_eq!(tasks.len(), 1),
-            Reflection::Done(_) => panic!("expected Continue fallback"),
-        }
-    }
-
-    struct FakeLlm(&'static str);
-
-    #[async_trait]
-    impl Llm for FakeLlm {
-        async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
-            Ok(GenerateResult::from_text(self.0))
-        }
-    }
-
-    #[tokio::test]
-    async fn execute_task_without_tools_uses_plain_generate() {
-        let agent = AutonomousAgent::new(Arc::new(FakeLlm("done with task")));
-        let output = agent
-            .execute_task("goal", "task", &[], &mut None)
-            .await
-            .unwrap();
-        assert_eq!(output, "done with task");
-    }
-
-    struct ToolCallLlm {
-        call_count: Mutex<usize>,
-    }
-
-    #[async_trait]
-    impl Llm for ToolCallLlm {
-        async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
-            Ok(GenerateResult::from_text(""))
-        }
-
-        async fn generate_with_tools(
-            &self,
-            _messages: &[Message],
-            _tools: &[FnDef],
-            _tool_choice: Option<ToolChoice>,
-        ) -> Result<GenerateResult, LlmError> {
-            let mut count = self.call_count.lock().unwrap();
-            *count += 1;
-            if *count == 1 {
-                Ok(
-                    GenerateResult::from_text(String::new()).with_tool_calls(vec![ToolCall::new(
-                        "call_1",
-                        "echo",
-                        r#"{"input": "hi"}"#,
-                    )]),
-                )
-            } else {
-                Ok(GenerateResult::from_text("task complete: hi"))
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn execute_task_with_tools_loops_through_tool_call() {
-        let agent = AutonomousAgent::new(Arc::new(ToolCallLlm {
-            call_count: Mutex::new(0),
-        }))
-        .tool(EchoTool);
-        let output = agent
-            .execute_task("goal", "echo hi", &[], &mut None)
-            .await
-            .unwrap();
-        assert_eq!(output, "task complete: hi");
-    }
-
-    /// Scripts: plan -> two tasks; execute task 1; execute task 2; reflect -> DONE.
-    struct ScriptedLlm {
-        call_count: Mutex<usize>,
-    }
-
-    #[async_trait]
-    impl Llm for ScriptedLlm {
-        #[allow(
-            clippy::significant_drop_tightening,
-            reason = "the guard must outlive the values borrowed from it"
-        )]
-        async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
-            let mut count = self.call_count.lock().unwrap();
-            *count += 1;
-            let response = match *count {
-                1 => "1. Do X\n2. Do Y",
-                2 => "X is done.",
-                3 => "Y is done.",
-                _ => "STATUS: DONE\nANSWER: Goal fully achieved.",
-            };
-            Ok(GenerateResult::from_text(response))
-        }
-    }
-
-    #[tokio::test]
-    async fn run_completes_after_executing_the_plan() {
-        let agent = AutonomousAgent::new(Arc::new(ScriptedLlm {
-            call_count: Mutex::new(0),
-        }));
-        let result = agent.run("Ship the feature").await.unwrap();
-
-        assert_eq!(result.status, RunStatus::Completed);
-        assert_eq!(result.output, "Goal fully achieved.");
-        assert_eq!(
-            result.plans,
-            vec![vec!["Do X".to_string(), "Do Y".to_string()]]
-        );
-        assert_eq!(result.history.len(), 2);
-        assert_eq!(result.history[0].output, "X is done.");
-        assert_eq!(result.history[1].output, "Y is done.");
-    }
-
-    /// Scripts one replan: plan -> [task1]; execute; reflect -> CONTINUE [task2];
-    /// execute; reflect -> DONE.
-    struct ReplanningLlm {
-        call_count: Mutex<usize>,
-    }
-
-    #[async_trait]
-    impl Llm for ReplanningLlm {
-        #[allow(
-            clippy::significant_drop_tightening,
-            reason = "the guard must outlive the values borrowed from it"
-        )]
-        async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
-            let mut count = self.call_count.lock().unwrap();
-            *count += 1;
-            let response = match *count {
-                1 => "1. Draft the outline",
-                2 => "Outline drafted.",
-                3 => "STATUS: CONTINUE\nNEXT_TASKS:\n1. Fill in the details",
-                4 => "Details filled in.",
-                _ => "STATUS: DONE\nANSWER: Document finished.",
-            };
-            Ok(GenerateResult::from_text(response))
-        }
-    }
-
-    #[tokio::test]
-    async fn run_replans_when_reflection_says_continue() {
-        let agent = AutonomousAgent::new(Arc::new(ReplanningLlm {
-            call_count: Mutex::new(0),
-        }));
-        let result = agent.run("Write a document").await.unwrap();
-
-        assert_eq!(result.status, RunStatus::Completed);
-        assert_eq!(result.output, "Document finished.");
-        assert_eq!(result.plans.len(), 2);
-        assert_eq!(result.history.len(), 2);
-    }
-
-    struct AlwaysContinueLlm {
-        call_count: Mutex<usize>,
-    }
-
-    #[async_trait]
-    impl Llm for AlwaysContinueLlm {
-        #[allow(
-            clippy::significant_drop_tightening,
-            reason = "the guard must outlive the values borrowed from it"
-        )]
-        async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
-            let mut count = self.call_count.lock().unwrap();
-            *count += 1;
-            if *count == 1 {
-                return Ok(GenerateResult::from_text("1. Try something"));
-            }
-            Ok(GenerateResult::from_text(
-                "STATUS: CONTINUE\nNEXT_TASKS:\n1. Try something else",
-            ))
-        }
-    }
-
-    #[tokio::test]
-    async fn run_stops_when_replan_limit_reached() {
-        let agent = AutonomousAgent::new(Arc::new(AlwaysContinueLlm {
-            call_count: Mutex::new(0),
-        }))
-        .max_replans(2);
-        let result = agent.run("An impossible goal").await.unwrap();
-
-        match result.status {
-            RunStatus::Blocked(_) => {}
-            other => panic!("expected Blocked, got {other:?}"),
-        }
-        // Initial plan + 2 replans = 3 plans total.
-        assert_eq!(result.plans.len(), 3);
-    }
-
-    struct LoopingLlm;
-
-    #[async_trait]
-    impl Llm for LoopingLlm {
-        async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
-            Ok(GenerateResult::from_text("1. Task A\n2. Task B\n3. Task C"))
-        }
-    }
-
-    #[tokio::test]
-    async fn run_stops_at_step_budget() {
-        let agent = AutonomousAgent::new(Arc::new(LoopingLlm)).max_steps(1);
-        let result = agent.run("A goal with a long plan").await.unwrap();
-
-        assert_eq!(result.status, RunStatus::StepBudgetExhausted);
-        assert_eq!(result.history.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn chain_call_reads_input_key() {
-        let agent = AutonomousAgent::new(Arc::new(ScriptedLlm {
-            call_count: Mutex::new(0),
-        }));
-        let result = agent
-            .call(prompt_args! { "input" => "Ship the feature" })
-            .await
-            .unwrap();
-        assert_eq!(result.generation, "Goal fully achieved.");
-    }
-
-    #[tokio::test]
-    async fn chain_call_missing_input_returns_error() {
-        let agent = AutonomousAgent::new(Arc::new(FakeLlm("x")));
-        let err = agent.call(prompt_args! {}).await.unwrap_err();
-        assert!(matches!(err, ChainError::MissingVariable(_)));
+        vec!["input".to_owned()]
     }
 }

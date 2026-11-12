@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use rune_chain_autonomous::{AutonomousAgent, RunStatus};
+use rune_chain_autonomous::{AutonomousAgent, BudgetKind, RunOutcome};
 use rune_chain_core::testing::{check_chain, check_chain_rejects};
 use rune_chain_core::{Chain, GenerateResult, Llm, LlmError, Message, Role, prompt_args};
 
@@ -42,7 +42,7 @@ impl Llm for Down {
 
 #[tokio::test]
 async fn meets_the_chain_contract() {
-    let agent = AutonomousAgent::new(Arc::new(RoleLlm)).max_steps(5);
+    let agent = AutonomousAgent::new(Arc::new(RoleLlm)).max_tasks(5);
     check_chain(&agent, &prompt_args! { "input" => "Summarise the report" })
         .await
         .unwrap();
@@ -72,10 +72,14 @@ async fn rejects_missing_goal_and_llm_failure() {
 
 #[tokio::test]
 async fn step_budget_bounds_the_run() {
-    let agent = AutonomousAgent::new(Arc::new(RoleLlm)).max_steps(1);
+    let agent = AutonomousAgent::new(Arc::new(RoleLlm)).max_tasks(1);
     let result = agent.run("goal").await.unwrap();
-    assert_ne!(result.status, RunStatus::Completed);
-    assert_eq!(result.history.len(), 1);
+    assert_eq!(
+        result.outcome,
+        RunOutcome::BudgetExceeded(BudgetKind::Tasks)
+    );
+    assert_eq!(result.state.history.len(), 1);
+    assert_eq!(result.state.queue.len(), 1);
 }
 
 /// `RoleLlm` that reports 2 prompt + 1 completion tokens per call.
@@ -94,10 +98,10 @@ impl Llm for MeteredRoleLlm {
 async fn reports_usage_summed_over_plan_execute_and_reflect() {
     // Regression: `call` used to drop usage via `GenerateResult::from_text`.
     // One plan + two tasks + one reflection = four LLM calls.
-    let agent = AutonomousAgent::new(Arc::new(MeteredRoleLlm)).max_steps(5);
+    let agent = AutonomousAgent::new(Arc::new(MeteredRoleLlm)).max_tasks(5);
     let run = agent.run("goal").await.unwrap();
-    assert_eq!(run.status, RunStatus::Completed);
-    assert_eq!(run.tokens.as_ref().unwrap().total_tokens, 12);
+    assert!(run.is_completed());
+    assert_eq!(run.usage().unwrap().total_tokens, 12);
     let r = agent
         .call(prompt_args! { "input" => "goal" })
         .await
@@ -114,6 +118,6 @@ async fn reports_usage_summed_over_plan_execute_and_reflect() {
     check_chain(&agent, &prompt_args! { "input" => "goal" })
         .await
         .unwrap();
-    let plain = AutonomousAgent::new(Arc::new(RoleLlm)).max_steps(5);
-    assert!(plain.run("goal").await.unwrap().tokens.is_none());
+    let plain = AutonomousAgent::new(Arc::new(RoleLlm)).max_tasks(5);
+    assert!(plain.run("goal").await.unwrap().usage().is_none());
 }

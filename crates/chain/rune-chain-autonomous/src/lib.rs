@@ -1,34 +1,68 @@
-//! Autonomous goal-driven agent for `rune-chain`.
+//! Budgeted autonomous agent for `rune-chain`.
 //!
-//! [`AutonomousAgent`] takes a single high-level *goal* — not a single question —
-//! and drives itself to completion without further human input:
+//! [`AutonomousAgent`] takes a *goal* rather than a question and works toward
+//! it without further input, in the style of `AutoGPT` and `BabyAGI`:
 //!
-//! 1. **Plan** — the LLM breaks the goal into an ordered list of concrete tasks.
-//! 2. **Execute** — each task is run in turn, calling registered [`Tool`](rune_chain_core::Tool)s as needed.
-//! 3. **Reflect** — after the plan is exhausted, the LLM judges whether the goal
-//!    is fully achieved. If not, it produces a revised task list and the loop
-//!    continues from step 2.
+//! 1. **Plan.** A [`TaskPlanner`] turns the goal into a queue of tasks.
+//! 2. **Execute.** Tasks run one at a time. With tools registered, each task
+//!    runs in a hardened [`rune_chain_agent::FunctionCallingAgent`]; without
+//!    tools it is a single LLM call.
+//! 3. **Review.** When the queue is empty the planner judges progress and
+//!    either declares the goal done or queues more tasks.
 //!
-//! The run ends when reflection reports the goal is done, the replanning limit
-//! is reached (`Blocked`), or the total step budget is exhausted.
+//! Every run ends with a [`RunOutcome`]: `Completed`, `BudgetExceeded`,
+//! `LoopDetected`, `Stopped` or `Error`, together with an [`AgentState`]
+//! that can be serialized and [resumed](AutonomousAgent::resume).
 //!
-//! This differs from [`AgentExecutor`](https://docs.rs/rune-chain-agent) and
-//! [`FunctionCallingAgent`](https://docs.rs/rune-chain-agent), which each answer
-//! *one* input in a single bounded loop. `AutonomousAgent` sits a level above:
-//! it decomposes a goal into multiple such tasks and keeps re-planning across
-//! them until the goal — not just one task — is satisfied.
+//! # Security model
 //!
-//! # Quick Start
+//! An autonomous loop lets model output decide what happens next, over and
+//! over, so the agent assumes that output can be wrong or hostile:
 //!
-//! The agent works with any [`Llm`](rune_chain_core::Llm). This example runs
-//! offline against a scripted model: it plans two look-ups, executes each by
-//! calling the `price_lookup` tool, then reflects and reports the goal done.
+//! - **Hard limits, on by default.** [`Limits`] caps tasks, planning cycles,
+//!   LLM calls, wall time, total tokens and cost (with a
+//!   [`Pricing`](rune_chain_core::Pricing)), plus the number of generated
+//!   tasks and the queue length. Every LLM call, from the planner, the task
+//!   loop or a custom planner, goes through one governor that checks the
+//!   limits first, so nothing can spend past them by more than the call in
+//!   flight.
+//! - **A stop the model cannot override.** Limits live in the agent's
+//!   configuration, never in a prompt. A [`StopHandle`] and an optional
+//!   [`stop_when`](AutonomousAgent::stop_when) predicate end the run from
+//!   outside. The model can only end a run early (by declaring the goal
+//!   done), never extend it.
+//! - **Loop detection.** A task that already ran
+//!   [`max_task_repeats`](Limits::max_task_repeats) times is not queued again,
+//!   and a review that proposes only such tasks (or nothing) ends the run as
+//!   [`LoopDetected`](RunOutcome::LoopDetected). A tool called with identical
+//!   arguments more than
+//!   [`max_identical_tool_calls`](Limits::max_identical_tool_calls) times is
+//!   refused and ends the run the same way.
+//! - **Checked tools.** Tool calls get the same treatment as in
+//!   `rune-chain-agent`: schema validation, per-call timeouts, output size
+//!   caps, secret redaction in errors, and an [`Approver`] for tools
+//!   registered with
+//!   [`tool_requiring_approval`](AutonomousAgent::tool_requiring_approval)
+//!   (fail-closed without one).
+//! - **Untrusted text stays fenced.** Generated tasks, task results and tool
+//!   output are quoted in `<task>`, `<task_result>` and `<tool_output>` blocks
+//!   with embedded closing tags escaped, always in user/tool turns. System
+//!   prompts are fixed strings and say that fenced text is data. Task text is
+//!   cleaned to one line and capped in length.
+//! - **Bounded memory.** The queue, the stored history, each stored result
+//!   and the context quoted into prompts all have byte or item limits.
+//!
+//! # Quick start
+//!
+//! This runs offline against a scripted model: the planner asks for two
+//! look-ups, each task calls the `price_lookup` tool, and the review reports
+//! the goal done.
 //!
 //! ```rust
 //! use std::sync::Arc;
 //!
 //! use async_trait::async_trait;
-//! use rune_chain_autonomous::{AutonomousAgent, RunStatus};
+//! use rune_chain_autonomous::{AutonomousAgent, RunOutcome};
 //! use rune_chain_core::{
 //!     FunctionDefinition, GenerateResult, Llm, LlmError, Message, Role, Tool, ToolCall,
 //!     ToolChoice, ToolError,
@@ -45,8 +79,7 @@
 //!     }
 //! }
 //!
-//! /// A real model reads the prompts; this script only recognises which phase
-//! /// (planning, task execution, reflection) it is being asked for.
+//! /// Recognises which step it is asked for from the system prompt.
 //! struct ScriptedLlm;
 //!
 //! #[async_trait]
@@ -54,9 +87,9 @@
 //!     async fn generate(&self, messages: &[Message]) -> Result<GenerateResult, LlmError> {
 //!         let system = messages[0].content.text_content();
 //!         let reply = if system.contains("planning") {
-//!             "1. Look up Acme pricing\n2. Look up Globex pricing".to_string()
+//!             "1. Look up Acme pricing\n2. Look up Globex pricing"
 //!         } else {
-//!             "STATUS: DONE\nANSWER: Acme $49 vs Globex $59".to_string()
+//!             "STATUS: DONE\nANSWER: Acme $49 vs Globex $59"
 //!         };
 //!         Ok(GenerateResult::from_text(reply))
 //!     }
@@ -69,13 +102,13 @@
 //!     ) -> Result<GenerateResult, LlmError> {
 //!         let last = messages.last().unwrap();
 //!         if last.role == Role::Tool {
-//!             return Ok(GenerateResult::from_text(last.content.text_content()));
+//!             // `<tool_output tool="price_lookup" status="ok">\nAcme: $49\n</tool_output>`
+//!             let fenced = last.content.text_content();
+//!             return Ok(GenerateResult::from_text(fenced.lines().nth(1).unwrap_or_default()));
 //!         }
-//!         let company = if last.content.text_content().contains("task: Look up Acme") {
-//!             "Acme"
-//!         } else {
-//!             "Globex"
-//!         };
+//!         let prompt = last.content.text_content();
+//!         let current = prompt.split("Current task:").nth(1).unwrap_or_default();
+//!         let company = if current.contains("Acme") { "Acme" } else { "Globex" };
 //!         let args = serde_json::json!({ "input": company }).to_string();
 //!         Ok(GenerateResult::default().with_tool_calls(vec![ToolCall::new("call_1", "price_lookup", args)]))
 //!     }
@@ -84,18 +117,33 @@
 //! # tokio_test::block_on(async {
 //! let agent = AutonomousAgent::new(Arc::new(ScriptedLlm))
 //!     .tool(PriceLookup)
-//!     .max_steps(25)
-//!     .max_replans(3);
+//!     .max_tasks(10);
 //!
-//! let result = agent.run("Compare Acme and Globex pricing.").await.unwrap();
-//! assert_eq!(result.status, RunStatus::Completed);
-//! assert_eq!(result.output, "Acme $49 vs Globex $59");
-//! assert_eq!(result.plans[0], ["Look up Acme pricing", "Look up Globex pricing"]);
-//! assert_eq!(result.history[0].output, "Acme: $49");
-//! assert_eq!(result.history[1].output, "Globex: $59");
+//! let run = agent.run("Compare Acme and Globex pricing.").await.unwrap();
+//! assert_eq!(run.outcome, RunOutcome::Completed { answer: "Acme $49 vs Globex $59".into() });
+//! assert_eq!(run.state.history[0].result, "Acme: $49");
+//! assert_eq!(run.state.history[1].result, "Globex: $59");
+//! assert_eq!(run.state.llm_calls, 6); // plan + 2 × (tool call + answer) + review
 //! # });
 //! ```
 
 mod agent;
+mod event;
+mod governor;
+mod limits;
+mod outcome;
+mod planner;
+mod state;
+mod untrusted;
 
-pub use agent::{AutonomousAgent, AutonomousResult, RunStatus, StepRecord};
+pub use agent::{AutonomousAgent, AutonomousRun};
+pub use event::{AutonomousEvent, AutonomousObserver, DropReason, StopHandle};
+pub use limits::{BudgetKind, Limits};
+pub use outcome::{LoopKind, RunOutcome, StopCause};
+pub use planner::{LlmPlanner, PlanContext, Review, StaticPlanner, TaskPlanner};
+pub use state::{AgentState, CHECKPOINT_VERSION, Task, TaskRecord};
+pub use untrusted::UNTRUSTED_NOTICE;
+
+pub use rune_chain_agent::{
+    AgentEvent, AgentLimits, Approval, ApprovalRequest, Approver, ToolErrorMode, ToolStatus,
+};

@@ -6,7 +6,7 @@ LLM orchestration: core traits, OpenAI/Anthropic/Ollama providers, prompts, memo
 | --- | --- |
 | [`rune-chain-agent`](rune-chain-agent) | Hardened tool-calling agents for rune-chain: ReAct and native function calling with schema validation, limits, approval and fenced tool output |
 | [`rune-chain-anthropic`](rune-chain-anthropic) | Anthropic Claude LLM provider for the rune-chain framework — Messages API client with streaming, prompt caching, thinking and structured output |
-| [`rune-chain-autonomous`](rune-chain-autonomous) | Autonomous goal-driven agent for rune-chain: plans tasks, executes them with tools, and self-evaluates until the goal is met |
+| [`rune-chain-autonomous`](rune-chain-autonomous) | Budgeted autonomous agent for rune-chain: plans and runs tasks toward a goal under hard limits, with loop detection, approval-gated tools, checkpoints and events |
 | [`rune-chain-conversational`](rune-chain-conversational) | ConversationalChain — LLM + memory for ergonomic multi-turn dialogue in rune-chain |
 | [`rune-chain-core`](rune-chain-core) | Core traits and types for the rune-chain LLM orchestration framework |
 | [`rune-chain-embed`](rune-chain-embed) | Embedder trait, hardened OpenAI-compatible/Cohere/Voyage/Jina embedding providers, batching and caching for the rune-chain LLM framework |
