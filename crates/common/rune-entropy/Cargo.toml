@@ -1,13 +1,13 @@
 [package]
 name = "rune-entropy"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Shannon entropy calculator for files and byte streams — useful for detecting encrypted, packed, or compressed data"
+description = "Shannon entropy, ent-style randomness statistics and sliding-window profiles for files and byte streams — spot encrypted, packed, or compressed data"
 license.workspace = true
 keywords = ["entropy", "security", "forensics", "malware", "analysis"]
-categories = ["command-line-utilities", "cryptography"]
+categories = ["command-line-utilities", "cryptography", "no-std"]
 repository.workspace = true
 readme = "README.md"
 publish = true
@@ -18,10 +18,18 @@ name = "rune-entropy"
 path = "src/main.rs"
 
 [features]
-cli = ["dep:clap"]
+default = ["std"]
+std = []
+libm = ["dep:libm"]
+cli = ["std", "dep:clap", "dep:serde_json"]
 
 [dependencies]
 clap = { workspace = true, optional = true }
+libm = { version = "0.2.16", optional = true }
+serde_json = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
 
 [lib]
 name = "rune_entropy"

@@ -22,7 +22,7 @@ Small utilities: encodings, hashes, ciphers, binary formats, secrets, logging.
 | [`rune-dirs`](rune-dirs) | Per-app config, cache, data and state directories (XDG, macOS, Windows) from a caller-supplied environment |
 | [`rune-elf`](rune-elf) | Lightweight ELF binary parser: header, sections, segments, security flags (PIE, NX, RELRO, stack canary, FORTIFY) |
 | [`rune-elf-deps`](rune-elf-deps) | Transitive shared-library dependency closure resolution for ELF binaries — pure-Rust ELF inspection via rune-elf, never executes the binaries it analyzes |
-| [`rune-entropy`](rune-entropy) | Shannon entropy calculator for files and byte streams — useful for detecting encrypted, packed, or compressed data |
+| [`rune-entropy`](rune-entropy) | Shannon entropy, ent-style randomness statistics and sliding-window profiles for files and byte streams — spot encrypted, packed, or compressed data |
 | [`rune-epoch`](rune-epoch) | Unix timestamp conversions — epoch to human-readable and back |
 | [`rune-fnv`](rune-fnv) | FNV-1 and FNV-1a hash functions for byte slices and strings (32 and 64-bit) |
 | [`rune-fuzzyhash`](rune-fuzzyhash) | TLSH and ssdeep (CTPH) fuzzy hashes with distance scoring for near-identical files and payloads |
