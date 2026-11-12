@@ -453,7 +453,7 @@ libc = "0.2"
 # member opts into exactly the signals and transports it uses.
 opentelemetry = { version = "0.31", default-features = false }
 opentelemetry-otlp = { version = "0.31", default-features = false }
-opentelemetry_sdk = { version = "0.31", default-features = false }
+opentelemetry_sdk = { version = "0.32", default-features = false }
 pin-project-lite = "0.2"
 quick-xml = "0.42.0"
 # Dev-dependency for round-trip property tests. Only the `std`

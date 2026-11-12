@@ -23,7 +23,7 @@ axum.workspace = true
 http.workspace = true
 # 9.x verifies with ring (ISC/Apache-2.0). 10.x needs either aws-lc-rs or the
 # RustCrypto `rsa` crate (RUSTSEC-2023-0071), so we stay on 9 for now.
-jsonwebtoken = "9.3.1"
+jsonwebtoken = "10.3.0"
 reqwest = { workspace = true, optional = true }
 rune-jwt.workspace = true
 serde.workspace = true
