@@ -1,0 +1,24 @@
+[package]
+name = "rune-chain-prompt"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Prompt template engine for the rune-chain LLM orchestration framework"
+license.workspace = true
+keywords = ["llm", "langchain", "prompt", "template", "ai"]
+categories = ["template-engine", "asynchronous"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-chain-core.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

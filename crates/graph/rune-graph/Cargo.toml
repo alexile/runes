@@ -1,0 +1,33 @@
+[package]
+name = "rune-graph"
+version = "0.3.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Embedded directed property graph: nodes, edges, labels, key-value properties, traversal, algorithms, and optional snapshot persistence"
+license.workspace = true
+keywords = ["graph", "database", "property-graph", "embedded", "knowledge-graph"]
+categories = ["data-structures", "database-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = []
+persist = ["dep:serde", "dep:serde_json", "dep:bincode"]
+wal     = ["persist"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+bincode    = { version = "1", optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

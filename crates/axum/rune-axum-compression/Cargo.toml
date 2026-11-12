@@ -1,0 +1,49 @@
+[package]
+name = "rune-axum-compression"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Response compression middleware for Axum — negotiated gzip, deflate, br and zstd with a content-type allowlist and minimum size"
+license.workspace = true
+keywords = ["axum", "middleware", "compression", "gzip", "tower"]
+categories = ["web-programming", "compression"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+default = ["gzip", "deflate"]
+## `Content-Encoding: gzip` (RFC 1952), via flate2's pure-Rust backend.
+gzip = ["dep:flate2"]
+## `Content-Encoding: deflate` (zlib stream, RFC 1950), via flate2.
+deflate = ["dep:flate2"]
+## `Content-Encoding: br` (RFC 7932), via the pure-Rust `brotli` crate.
+br = ["dep:brotli"]
+## `Content-Encoding: zstd` (RFC 8878). Builds the bundled C libzstd.
+zstd = ["dep:zstd"]
+## Every encoding.
+full = ["gzip", "deflate", "br", "zstd"]
+
+[dependencies]
+# brotli matches tower-http 0.6; zstd >= 0.14.3 clears the 2026 zstd-safe advisories.
+brotli = { version = "8", default-features = false, features = ["std"], optional = true }
+bytes.workspace = true
+flate2 = { workspace = true, optional = true }
+http.workspace = true
+http-body.workspace = true
+pin-project-lite.workspace = true
+thiserror.workspace = true
+tower.workspace = true
+zstd = { version = "0.14.3", default-features = false, optional = true }
+
+[dev-dependencies]
+axum.workspace = true
+flate2.workspace = true
+http-body-util.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

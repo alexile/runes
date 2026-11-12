@@ -1,0 +1,34 @@
+[package]
+name = "rune-host-match"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Hostname pattern matching: exact, *.suffix egress allowlists and RFC 6125 certificate wildcards"
+license.workspace = true
+keywords = ["hostname", "wildcard", "allowlist", "tls", "dns"]
+categories = ["network-programming", "parsing"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## Serialize and deserialize `Hostname`, `HostPattern`, `HostAllowlist` and
+## `CertName` as strings (deserialization validates).
+serde = ["dep:serde"]
+## Public Suffix List checks through `rune-psl` (embedded list included):
+## reject certificate wildcards such as `*.co.uk`, and flag allowlist
+## patterns that cover a whole public suffix.
+psl = ["dep:rune-psl"]
+
+[dependencies]
+rune-psl = { workspace = true, optional = true, features = ["embedded"] }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

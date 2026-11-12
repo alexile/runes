@@ -1,0 +1,28 @@
+[package]
+name = "rune-postman"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Postman v2.0/v2.1 collection and environment import into rune-http-model requests, with variable resolution and auth helpers"
+license.workspace = true
+keywords = ["postman", "http", "collection", "import", "api"]
+categories = ["parser-implementations", "web-programming", "development-tools"]
+repository.workspace = true
+readme = "README.md"
+# Kept unpublished while rune-http-model is (a published crate may not
+# depend on an unpublished one).
+publish = false
+
+[dependencies]
+rune-base64.workspace = true
+rune-http-model.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

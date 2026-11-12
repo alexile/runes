@@ -1,0 +1,42 @@
+[package]
+name = "rune-http-model"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Shared HTTP model: requests, responses, byte-exact bodies, headers, timings and exchanges, sans-I/O"
+license.workspace = true
+keywords = ["http", "request", "response", "traffic", "har"]
+categories = ["web-programming", "network-programming", "data-structures"]
+repository.workspace = true
+readme = "README.md"
+# Kept unpublished until the crates.io name is confirmed free.
+publish = false
+
+[features]
+## Serialize and deserialize every type with serde (stable JSON shape).
+serde = ["dep:serde"]
+## Derive `schemars::JsonSchema` for every type. Implies `serde`.
+schemars = ["serde", "dep:schemars"]
+
+[dependencies]
+bytes.workspace = true
+rune-base64.workspace = true
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[[test]]
+name = "proptest"
+required-features = ["serde"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

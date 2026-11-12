@@ -1,0 +1,34 @@
+[package]
+name = "rune-reorder"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Windowed reordering buffer for out-of-sequence timestamped/sequenced items"
+license.workspace = true
+keywords = ["reorder", "sequence", "streaming", "buffer", "windowed"]
+categories = ["data-structures", "algorithms", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-reorder"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_reorder"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,33 @@
+[package]
+name = "rune-hexdump"
+version = "0.2.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Hex dump with sidebar — inspect binary files like xxd"
+license.workspace = true
+keywords = ["hexdump", "xxd", "binary", "forensics", "ctf"]
+categories = ["command-line-utilities", "development-tools"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-hexdump"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

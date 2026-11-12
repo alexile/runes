@@ -1,0 +1,32 @@
+[package]
+name = "rune-hdbscan"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "HDBSCAN clustering — hierarchical density-based clustering with automatic noise detection"
+license.workspace = true
+keywords = ["hdbscan", "clustering", "density", "unsupervised", "machine-learning"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-hdbscan"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_hdbscan"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rayon.workspace = true
+
+[lints]
+workspace = true

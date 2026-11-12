@@ -1,0 +1,20 @@
+{
+  "id": "msg_01Aq9w938a90dw8q",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-6",
+  "content": [
+    { "type": "thinking", "thinking": "The user wants the weather.", "signature": "EqQBCgIYAhIM" },
+    { "type": "text", "text": "Let me check the weather." },
+    { "type": "text", "text": "One moment." },
+    {
+      "type": "tool_use",
+      "id": "toolu_01A09q90qw90lq917835lq9",
+      "name": "get_weather",
+      "input": { "city": "Paris", "unit": "celsius" }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "usage": { "input_tokens": 384, "output_tokens": 57 }
+}

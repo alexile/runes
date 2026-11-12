@@ -1,0 +1,25 @@
+[package]
+name = "rune-axum-bearer"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Bearer token extractor for Axum — typed extraction from Authorization headers"
+license.workspace = true
+keywords = ["axum", "bearer", "auth", "extractor", "tower"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+axum-core = "0.5"
+http.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

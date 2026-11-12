@@ -1,0 +1,34 @@
+[package]
+name = "rune-watermark"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Late-arrival/watermark tracking for out-of-order event streams"
+license.workspace = true
+keywords = ["watermark", "streaming", "out-of-order", "lateness", "events"]
+categories = ["data-structures", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-watermark"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_watermark"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

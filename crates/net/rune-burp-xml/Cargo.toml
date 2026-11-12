@@ -1,0 +1,28 @@
+[package]
+name = "rune-burp-xml"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Burp Suite items and issues XML export reader and writer over rune-http-model, base64 request/response to HttpExchange"
+license.workspace = true
+keywords = ["burp", "http", "xml", "traffic", "import"]
+categories = ["parser-implementations", "web-programming", "encoding"]
+repository.workspace = true
+readme = "README.md"
+# Kept unpublished while rune-http-model is (a published crate may not
+# depend on an unpublished one).
+publish = false
+
+[dependencies]
+quick-xml.workspace = true
+rune-base64.workspace = true
+rune-http-model.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

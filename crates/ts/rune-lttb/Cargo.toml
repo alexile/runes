@@ -1,0 +1,31 @@
+[package]
+name = "rune-lttb"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Largest-Triangle-Three-Buckets downsampling for chart-ready series"
+license.workspace = true
+keywords = ["lttb", "downsampling", "charting", "time-series", "visualization"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-lttb"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_lttb"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

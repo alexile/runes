@@ -1,0 +1,24 @@
+[package]
+name = "rune-tls-hello"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Sans-I/O TLS record and ClientHello/ServerHello parser and builder (SNI, ALPN, versions, extensions)"
+license.workspace = true
+keywords = ["tls", "sni", "client-hello", "parser", "ja3"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+# Captured hellos are test-only.
+exclude = ["tests/"]
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

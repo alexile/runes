@@ -1,0 +1,34 @@
+[package]
+name = "rune-changepoint"
+version = "0.1.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "CUSUM-style changepoint detection over a numeric series"
+license.workspace = true
+keywords = ["cusum", "changepoint", "anomaly", "time-series", "statistics"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-changepoint"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_changepoint"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

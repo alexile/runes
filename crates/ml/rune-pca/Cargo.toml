@@ -1,0 +1,39 @@
+[package]
+name = "rune-pca"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Principal component analysis — exact (eigen / Jacobi SVD) and randomized SVD, whitening, inverse transform"
+license.workspace = true
+keywords = ["pca", "svd", "dimensionality", "machine-learning", "statistics"]
+categories = ["algorithms", "science", "mathematics", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-pca"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_pca"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+serde = ["dep:serde"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rayon.workspace = true
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

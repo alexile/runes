@@ -1,0 +1,26 @@
+[package]
+name = "rune-tower-circuitbreaker"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Circuit-breaker layer for Tower clients — opens on error-rate or slow-call-rate thresholds, probes in half-open, closes on recovery"
+license.workspace = true
+keywords = ["tower", "circuit-breaker", "resilience", "middleware", "client"]
+categories = ["web-programming::http-client", "network-programming", "asynchronous"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+http.workspace = true
+thiserror.workspace = true
+tower.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,4 @@
+[
+  { "name": "users.show", "pattern": "/users/{id}", "file": "src/users.py", "lines": [1, 60] },
+  { "pattern": "/search", "host": "shop.test", "file": "src/search.py" }
+]

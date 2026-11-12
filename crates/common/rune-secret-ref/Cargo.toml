@@ -1,0 +1,38 @@
+[package]
+name = "rune-secret-ref"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Secret references (env, file, command) resolved into a redacting SecretValue"
+license.workspace = true
+keywords = ["secret", "credentials", "config", "redact", "api-key"]
+categories = ["config", "authentication"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+default = []
+# `Serialize`/`Deserialize` for `SecretRef` (string or table form) and a
+# redacting `Serialize` for `SecretValue`. Needed to read references from
+# rune-config layers.
+serde = ["dep:serde"]
+# Wipe a `SecretValue`'s buffer (and intermediate read buffers) on drop.
+zeroize = ["dep:zeroize"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+subtle.workspace = true
+thiserror.workspace = true
+zeroize = { version = "1.8", optional = true, default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+proptest.workspace = true
+rune-config.workspace = true
+serde.workspace = true
+tempfile.workspace = true
+toml.workspace = true
+
+[lints]
+workspace = true

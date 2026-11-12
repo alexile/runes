@@ -1,0 +1,43 @@
+[package]
+name = "rune-openapi"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "OpenAPI 3.x and Swagger 2.0 import: normalized endpoints, typed parameters, schemas, example requests and insertion points"
+license.workspace = true
+keywords = ["openapi", "swagger", "api", "fuzzing", "security"]
+categories = ["web-programming", "parser-implementations", "development-tools::testing"]
+repository.workspace = true
+readme = "README.md"
+# Kept unpublished until the crates.io name is confirmed free.
+publish = false
+
+[features]
+default = ["yaml"]
+## Read YAML documents (JSON is always supported).
+yaml = ["dep:yaml-rust2"]
+## Serialize and deserialize the model with serde.
+serde = ["dep:serde", "rune-http-model/serde"]
+## Derive `schemars::JsonSchema` for the model. Implies `serde`.
+schemars = ["serde", "dep:schemars", "rune-http-model/schemars"]
+
+[dependencies]
+rune-http-model.workspace = true
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json.workspace = true
+# Safe-Rust YAML 1.2 parser (serde_yaml and its unsafe-libyaml are
+# unmaintained: RUSTSEC-2024-0449). Only the event parser is used.
+yaml-rust2 = { version = "0.13.0", default-features = false, optional = true }
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

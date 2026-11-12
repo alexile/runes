@@ -1,0 +1,28 @@
+[package]
+name = "rune-tower-retry"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Retry and hedging layer for Tower clients — backoff with jitter, a retry budget, and request hedging for idempotent calls"
+license.workspace = true
+keywords = ["tower", "retry", "hedging", "resilience", "backoff"]
+categories = ["web-programming::http-client", "network-programming", "asynchronous"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+http.workspace = true
+http-body.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tower.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rune-tower-circuitbreaker.workspace = true
+tokio = { workspace = true, features = ["full", "test-util"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

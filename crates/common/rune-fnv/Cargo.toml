@@ -1,0 +1,27 @@
+[package]
+name = "rune-fnv"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "FNV-1 and FNV-1a hash functions for byte slices and strings (32 and 64-bit)"
+license.workspace = true
+keywords = ["fnv", "hash", "fnv1a", "non-cryptographic", "checksum"]
+categories = ["algorithms", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-fnv"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["std"]
+
+[lints]
+workspace = true

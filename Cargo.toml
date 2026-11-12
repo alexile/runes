@@ -1,0 +1,510 @@
+[workspace]
+resolver = "2"
+
+members = [
+    # stream
+    "crates/stream/rune-canonical-event",
+    "crates/stream/rune-bp-channel",
+    "crates/stream/rune-reorder",
+    "crates/stream/rune-heartbeat",
+    "crates/stream/rune-rate-rule",
+    "crates/stream/rune-schema-sniff",
+    "crates/stream/rune-ingest-ndjson",
+    "crates/stream/rune-ingest-mqtt",
+    "crates/stream/rune-window-agg",
+    "crates/stream/rune-dedupe",
+    "crates/stream/rune-watermark",
+    "crates/stream/rune-multiplex",
+    "crates/stream/rune-retry-queue",
+    "crates/stream/rune-checkpoint",
+
+    # ts
+    "crates/ts/rune-ewma",
+    "crates/ts/rune-zscore",
+    "crates/ts/rune-changepoint",
+    "crates/ts/rune-lttb",
+    "crates/ts/rune-interpolate",
+    "crates/ts/rune-resample",
+    "crates/ts/rune-tdigest",
+    "crates/ts/rune-season-decomp",
+    "crates/ts/rune-forecast-ses",
+    "crates/ts/rune-lowpass",
+    "crates/ts/rune-kalman-1d",
+    "crates/ts/rune-correlate",
+    "crates/ts/rune-derivative",
+    "crates/ts/rune-bin",
+    "crates/ts/rune-quantity",
+    "crates/ts/rune-gap-detect",
+    "crates/ts/rune-stats",
+
+    # geo
+    "crates/geo/rune-geohash",
+    "crates/geo/rune-haversine",
+    "crates/geo/rune-geofence",
+    "crates/geo/rune-mvt",
+    "crates/geo/rune-trace-replay",
+    "crates/geo/rune-polyline",
+    "crates/geo/rune-simplify",
+    "crates/geo/rune-rtree",
+    "crates/geo/rune-map-match",
+    "crates/geo/rune-eta",
+    "crates/geo/rune-kalman-track",
+    "crates/geo/rune-tz-lookup",
+    "crates/geo/rune-bbox",
+    "crates/geo/rune-dwell",
+    "crates/geo/rune-geo-cluster",
+    "crates/geo/rune-static-map",
+
+    # axum
+    "crates/axum/rune-axum-apikey",
+    "crates/axum/rune-axum-basicauth",
+    "crates/axum/rune-axum-jwt",
+    "crates/axum/rune-axum-bearer",
+    "crates/axum/rune-axum-csrf",
+    "crates/axum/rune-axum-helmet",
+    "crates/axum/rune-axum-ipfilter",
+    "crates/axum/rune-axum-ratelimit",
+    "crates/axum/rune-axum-redirect-https",
+    "crates/axum/rune-axum-signature",
+    "crates/axum/rune-axum-size",
+    "crates/axum/rune-axum-sanitize",
+    "crates/axum/rune-axum-brute",
+    "crates/axum/rune-axum-audit",
+    "crates/axum/rune-axum-stack",
+    "crates/axum/rune-axum-trace",
+    "crates/axum/rune-axum-timeout",
+    "crates/axum/rune-axum-concurrency",
+    "crates/axum/rune-axum-requestid",
+    "crates/axum/rune-axum-cors",
+    "crates/axum/rune-axum-health",
+    "crates/axum/rune-axum-compression",
+    "crates/axum/rune-axum-problem",
+    "crates/axum/rune-axum-cache",
+    "crates/axum/rune-tower-circuitbreaker",
+    "crates/axum/rune-tower-retry",
+    "crates/axum/rune-axum-mtls",
+    # chain
+    "crates/chain/rune-chain-core",
+    "crates/chain/rune-chain-prompt",
+    "crates/chain/rune-chain-memory",
+    "crates/chain/rune-chain-openai",
+    "crates/chain/rune-chain-llm",
+    "crates/chain/rune-chain-anthropic",
+    "crates/chain/rune-chain-sequential",
+    "crates/chain/rune-chain-conversational",
+    "crates/chain/rune-chain-ollama",
+    "crates/chain/rune-chain-tools",
+    # graph
+    "crates/graph/rune-graph",
+    "crates/graph/rune-graph-match",
+    "crates/graph/rune-graph-gremlin",
+    "crates/chain/rune-chain-knowledge-graph",
+    "crates/chain/rune-chain-embed",
+    "crates/chain/rune-chain-retrieval",
+    "crates/chain/rune-chain-splitter",
+    "crates/chain/rune-chain-agent",
+    "crates/chain/rune-chain-autonomous",
+    "crates/chain/rune-chain-loader",
+    "crates/chain/rune-chain-output-parser",
+    "crates/chain/rune-chain-parallel",
+    "crates/chain/rune-chain-retry",
+    "crates/chain/rune-tool-schema",
+    "crates/chain/rune-vectorstore",
+    "crates/chain/rune-mcp",
+    "crates/chain/rune-chain-usage",
+    "crates/chain/rune-otel-genai",
+
+    # secops
+    "crates/secops/rune-secops-warden",
+    "crates/secops/rune-finding",
+    "crates/secops/rune-sarif",
+    "crates/secops/rune-taxonomy",
+    "crates/secops/rune-cvss",
+    "crates/secops/rune-landlock",
+    "crates/secops/rune-namespaces",
+    "crates/secops/rune-seccomp",
+    "crates/secops/rune-finding-dedupe",
+    "crates/secops/rune-pledge",
+    "crates/secops/rune-aspm-correlate",
+    "crates/secops/rune-sandbox-preset",
+    "crates/secops/rune-cve",
+    "crates/secops/rune-epss",
+
+    # common
+    "crates/common/rune-cidr",
+    "crates/common/rune-elf-deps",
+    "crates/common/rune-rlimits",
+    "crates/common/rune-strace",
+    "crates/common/rune-relay",
+    "crates/common/rune-caesar",
+    "crates/common/rune-entropy",
+    "crates/common/rune-redact",
+    "crates/common/rune-tokenize",
+    "crates/common/rune-hex",
+    "crates/common/rune-morse",
+    "crates/common/rune-xor",
+    "crates/common/rune-rot13",
+    "crates/common/rune-rot47",
+    "crates/common/rune-atbash",
+    "crates/common/rune-binary",
+    "crates/common/rune-base64",
+    "crates/common/rune-strings",
+    "crates/common/rune-epoch",
+    "crates/common/rune-ascii",
+    "crates/common/rune-hexdump",
+    "crates/common/rune-sha256",
+    "crates/common/rune-sha512",
+    "crates/common/rune-sha1",
+    "crates/common/rune-md5",
+    "crates/common/rune-blake3",
+    "crates/common/rune-crc32",
+    "crates/common/rune-url-encode",
+    "crates/common/rune-html-encode",
+    "crates/common/rune-adler32",
+    "crates/common/rune-fnv",
+    "crates/common/rune-jwt",
+    "crates/common/rune-regex-sec",
+    "crates/common/rune-byte-magic",
+    "crates/common/rune-leak",
+    "crates/common/rune-murmur",
+    "crates/common/rune-xxhash",
+    "crates/common/rune-elf",
+    "crates/common/rune-pe",
+    "crates/common/rune-base",
+    "crates/common/rune-base32",
+    "crates/common/rune-base58",
+    "crates/common/rune-host-match",
+    "crates/common/rune-psl",
+    "crates/common/rune-config",
+    "crates/common/rune-secret-ref",
+    "crates/common/rune-secret-vault",
+    "crates/common/rune-transform",
+    "crates/common/rune-log",
+    "crates/common/rune-telemetry",
+    "crates/common/rune-randomness",
+    "crates/common/rune-which",
+    "crates/common/rune-dirs",
+    "crates/common/rune-simhash",
+    "crates/common/rune-metrics",
+    "crates/common/rune-audit-log",
+    "crates/common/rune-fuzzyhash",
+    "crates/common/rune-notify",
+
+    # ml
+    "crates/ml/rune-hdbscan",
+    "crates/ml/rune-umap",
+    "crates/ml/rune-pagerank",
+    "crates/ml/rune-kmeans",
+    "crates/ml/rune-labelprop",
+    "crates/ml/rune-leiden",
+    "crates/ml/rune-tsne",
+    "crates/ml/rune-node2vec",
+    "crates/ml/rune-pca",
+    "crates/ml/rune-ml-core",
+
+    # net
+    "crates/net/rune-dns-wire",
+    "crates/net/rune-service-probe",
+    "crates/net/rune-sse",
+    "crates/net/rune-tls-hello",
+    "crates/net/rune-http-model",
+    "crates/net/rune-ip",
+    "crates/net/rune-idna",
+    "crates/net/rune-har",
+    "crates/net/rune-openapi",
+    "crates/net/rune-packet",
+    "crates/net/rune-pcap",
+    "crates/net/rune-cookie",
+    "crates/net/rune-dns-records",
+    "crates/net/rune-egress-proxy",
+    "crates/net/rune-ja",
+    "crates/net/rune-matchers",
+    "crates/net/rune-postman",
+    "crates/net/rune-graphql",
+    "crates/net/rune-mime",
+    "crates/net/rune-url",
+    "crates/net/rune-probe-sql",
+    "crates/net/rune-probe-ssh",
+    "crates/net/rune-x509",
+    "crates/net/rune-proxy-protocol",
+    "crates/net/rune-wordlist",
+    "crates/net/rune-ws",
+    "crates/net/rune-probe-mail",
+    "crates/net/rune-asn",
+    "crates/net/rune-probe-nosql",
+    "crates/net/rune-wildcard-dns",
+    "crates/net/rune-http-auth",
+    "crates/net/rune-http-fingerprint",
+    "crates/net/rune-dns-zone",
+    "crates/net/rune-wsdl",
+    "crates/net/rune-socks",
+    "crates/net/rune-cloud-ranges",
+    "crates/net/rune-burp-xml",
+    "crates/net/rune-diff",
+    "crates/net/rune-subdomain-permute",
+    "crates/net/rune-probe-ldap",
+    "crates/net/rune-port-scan",
+    "crates/net/rune-geoip",
+    "crates/net/rune-rdap",
+    "crates/net/rune-macaddr",
+    "crates/net/rune-tls-probe",
+    "crates/net/rune-probe-ms",
+    "crates/net/rune-dns-resolver",
+    "crates/net/rune-ip-intel",
+
+    # web
+    "crates/web/rune-cookie-sec",
+    "crates/web/rune-cors",
+    "crates/web/rune-csp",
+    "crates/web/rune-hsts",
+    "crates/web/rune-payload-encode",
+    "crates/web/rune-permissions-policy",
+    "crates/web/rune-referrer-policy",
+    "crates/web/rune-securitytxt",
+    "crates/web/rune-wellknown",
+    "crates/web/rune-robots",
+    "crates/web/rune-favicon-hash",
+    "crates/web/rune-tech-detect",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+authors = ["alexile"]
+license = "MIT"
+repository = "https://github.com/alexile/runes"
+
+[workspace.dependencies]
+# Intra-workspace crates: `path` for local development, `version` for publishing.
+rune-asn = { path = "crates/net/rune-asn", version = "0.1.0" }
+rune-ascii = { path = "crates/common/rune-ascii", version = "0.3.1" }
+rune-atbash = { path = "crates/common/rune-atbash", version = "0.2.2" }
+rune-audit-log = { path = "crates/common/rune-audit-log", version = "0.1.0" }
+rune-axum-cache = { path = "crates/axum/rune-axum-cache", version = "0.1.0" }
+rune-axum-compression = { path = "crates/axum/rune-axum-compression", version = "0.1.0" }
+rune-axum-concurrency = { path = "crates/axum/rune-axum-concurrency", version = "0.1.0" }
+rune-axum-cors = { path = "crates/axum/rune-axum-cors", version = "0.1.0" }
+rune-axum-csrf = { path = "crates/axum/rune-axum-csrf", version = "0.2.0" }
+rune-axum-helmet = { path = "crates/axum/rune-axum-helmet", version = "0.2.1" }
+rune-axum-health = { path = "crates/axum/rune-axum-health", version = "0.1.0" }
+rune-axum-ipfilter = { path = "crates/axum/rune-axum-ipfilter", version = "0.3.0" }
+rune-axum-jwt = { path = "crates/axum/rune-axum-jwt", version = "0.3.0" }
+rune-axum-problem = { path = "crates/axum/rune-axum-problem", version = "0.1.0" }
+rune-axum-ratelimit = { path = "crates/axum/rune-axum-ratelimit", version = "0.3.0" }
+rune-axum-redirect-https = { path = "crates/axum/rune-axum-redirect-https", version = "0.1.2" }
+rune-axum-requestid = { path = "crates/axum/rune-axum-requestid", version = "0.1.0" }
+rune-axum-size = { path = "crates/axum/rune-axum-size", version = "0.2.0" }
+rune-axum-timeout = { path = "crates/axum/rune-axum-timeout", version = "0.1.0" }
+rune-epss = { path = "crates/secops/rune-epss", version = "0.1.0" }
+rune-subdomain-permute = { path = "crates/net/rune-subdomain-permute", version = "0.1.0" }
+rune-port-scan = { path = "crates/net/rune-port-scan", version = "0.1.0" }
+rune-tower-circuitbreaker = { path = "crates/axum/rune-tower-circuitbreaker", version = "0.1.0" }
+rune-tower-retry = { path = "crates/axum/rune-tower-retry", version = "0.1.0" }
+rune-base = { path = "crates/common/rune-base", version = "0.3.2" }
+rune-base32 = { path = "crates/common/rune-base32", version = "0.1.1" }
+rune-base58 = { path = "crates/common/rune-base58", version = "0.1.1" }
+rune-base64 = { path = "crates/common/rune-base64", version = "0.2.2" }
+rune-murmur = { path = "crates/common/rune-murmur", version = "0.2.2" }
+rune-binary = { path = "crates/common/rune-binary", version = "0.2.2" }
+rune-burp-xml = { path = "crates/net/rune-burp-xml", version = "0.1.0" }
+rune-byte-magic = { path = "crates/common/rune-byte-magic", version = "0.3.1" }
+rune-caesar = { path = "crates/common/rune-caesar", version = "0.2.2" }
+rune-chain-anthropic = { path = "crates/chain/rune-chain-anthropic", version = "0.2.0" }
+rune-chain-core = { path = "crates/chain/rune-chain-core", version = "0.2.1" }
+rune-chain-embed = { path = "crates/chain/rune-chain-embed", version = "0.3.0" }
+rune-chain-llm = { path = "crates/chain/rune-chain-llm", version = "0.2.0" }
+rune-chain-memory = { path = "crates/chain/rune-chain-memory", version = "0.2.0" }
+rune-chain-openai = { path = "crates/chain/rune-chain-openai", version = "0.2.0" }
+rune-chain-prompt = { path = "crates/chain/rune-chain-prompt", version = "0.2.0" }
+rune-chain-splitter = { path = "crates/chain/rune-chain-splitter", version = "0.2.0" }
+rune-chain-usage = { path = "crates/chain/rune-chain-usage", version = "0.1.0" }
+rune-cidr = { path = "crates/common/rune-cidr", version = "0.2.1" }
+rune-config = { path = "crates/common/rune-config", version = "0.1.0" }
+rune-cloud-ranges = { path = "crates/net/rune-cloud-ranges", version = "0.1.0" }
+rune-cookie = { path = "crates/net/rune-cookie", version = "0.1.0" }
+rune-cookie-sec = { path = "crates/web/rune-cookie-sec", version = "0.1.0" }
+rune-cors = { path = "crates/web/rune-cors", version = "0.1.0" }
+rune-csp = { path = "crates/web/rune-csp", version = "0.1.0" }
+rune-cve = { path = "crates/secops/rune-cve", version = "0.1.0" }
+rune-cvss = { path = "crates/secops/rune-cvss", version = "0.1.1" }
+rune-diff = { path = "crates/net/rune-diff", version = "0.1.0" }
+rune-dirs = { path = "crates/common/rune-dirs", version = "0.1.0" }
+rune-dns-records = { path = "crates/net/rune-dns-records", version = "0.1.0" }
+rune-dns-wire = { path = "crates/net/rune-dns-wire", version = "0.1.0" }
+rune-dns-zone = { path = "crates/net/rune-dns-zone", version = "0.1.0" }
+rune-egress-proxy = { path = "crates/net/rune-egress-proxy", version = "0.1.0" }
+rune-elf = { path = "crates/common/rune-elf", version = "0.4.1" }
+rune-elf-deps = { path = "crates/common/rune-elf-deps", version = "0.2.0" }
+rune-epoch = { path = "crates/common/rune-epoch", version = "0.2.2" }
+rune-entropy = { path = "crates/common/rune-entropy", version = "0.3.0" }
+rune-favicon-hash = { path = "crates/web/rune-favicon-hash", version = "0.1.0" }
+rune-finding = { path = "crates/secops/rune-finding", version = "0.1.1" }
+rune-fuzzyhash = { path = "crates/common/rune-fuzzyhash", version = "0.1.0" }
+rune-finding-dedupe = { path = "crates/secops/rune-finding-dedupe", version = "0.1.0" }
+rune-geohash = { path = "crates/geo/rune-geohash", version = "0.1.2" }
+rune-geoip = { path = "crates/net/rune-geoip", version = "0.1.0" }
+rune-graph = { path = "crates/graph/rune-graph", version = "0.3.1" }
+rune-hdbscan = { path = "crates/ml/rune-hdbscan", version = "0.1.1" }
+rune-graphql = { path = "crates/net/rune-graphql", version = "0.1.0" }
+rune-hex = { path = "crates/common/rune-hex", version = "0.2.2" }
+rune-host-match = { path = "crates/common/rune-host-match", version = "0.1.1" }
+rune-hsts = { path = "crates/web/rune-hsts", version = "0.1.0" }
+rune-html-encode = { path = "crates/common/rune-html-encode", version = "0.2.1" }
+rune-har = { path = "crates/net/rune-har", version = "0.1.0" }
+rune-http-auth = { path = "crates/net/rune-http-auth", version = "0.1.0" }
+rune-http-model = { path = "crates/net/rune-http-model", version = "0.1.0" }
+rune-http-fingerprint = { path = "crates/net/rune-http-fingerprint", version = "0.1.0" }
+rune-idna = { path = "crates/net/rune-idna", version = "0.1.1" }
+rune-ip = { path = "crates/net/rune-ip", version = "0.1.0" }
+rune-ip-intel = { path = "crates/net/rune-ip-intel", version = "0.1.0" }
+rune-ja = { path = "crates/net/rune-ja", version = "0.1.0" }
+rune-ingest-ndjson = { path = "crates/stream/rune-ingest-ndjson", version = "0.1.2" }
+rune-jwt = { path = "crates/common/rune-jwt", version = "0.2.1" }
+rune-kmeans = { path = "crates/ml/rune-kmeans", version = "0.1.1" }
+rune-ml-core = { path = "crates/ml/rune-ml-core", version = "0.1.0" }
+rune-landlock = { path = "crates/secops/rune-landlock", version = "0.1.0" }
+rune-leak = { path = "crates/common/rune-leak", version = "0.2.1" }
+rune-log = { path = "crates/common/rune-log", version = "0.1.0" }
+rune-macaddr = { path = "crates/net/rune-macaddr", version = "0.1.0" }
+rune-md5 = { path = "crates/common/rune-md5", version = "0.2.1" }
+rune-metrics = { path = "crates/common/rune-metrics", version = "0.1.0" }
+rune-mime = { path = "crates/net/rune-mime", version = "0.1.0" }
+rune-mvt = { path = "crates/geo/rune-mvt", version = "0.1.1" }
+rune-namespaces = { path = "crates/secops/rune-namespaces", version = "0.1.0" }
+rune-openapi = { path = "crates/net/rune-openapi", version = "0.1.0" }
+rune-matchers = { path = "crates/net/rune-matchers", version = "0.1.0" }
+rune-packet = { path = "crates/net/rune-packet", version = "0.1.0" }
+rune-pcap = { path = "crates/net/rune-pcap", version = "0.1.0" }
+rune-payload-encode = { path = "crates/web/rune-payload-encode", version = "0.1.0" }
+rune-pe = { path = "crates/common/rune-pe", version = "0.1.1" }
+rune-permissions-policy = { path = "crates/web/rune-permissions-policy", version = "0.1.0" }
+rune-polyline = { path = "crates/geo/rune-polyline", version = "0.1.1" }
+rune-postman = { path = "crates/net/rune-postman", version = "0.1.0" }
+rune-probe-ssh = { path = "crates/net/rune-probe-ssh", version = "0.1.0" }
+rune-proxy-protocol = { path = "crates/net/rune-proxy-protocol", version = "0.1.0" }
+rune-rdap = { path = "crates/net/rune-rdap", version = "0.1.0" }
+# Default features off; members enable `embedded` themselves.
+rune-psl = { path = "crates/common/rune-psl", version = "0.1.1", default-features = false }
+rune-redact = { path = "crates/common/rune-redact", version = "0.2.0" }
+rune-referrer-policy = { path = "crates/web/rune-referrer-policy", version = "0.1.0" }
+rune-regex-sec = { path = "crates/common/rune-regex-sec", version = "0.2.0" }
+rune-relay = { path = "crates/common/rune-relay", version = "0.1.0" }
+rune-retry-queue = { path = "crates/stream/rune-retry-queue", version = "0.1.0" }
+rune-rlimits = { path = "crates/common/rune-rlimits", version = "0.2.0" }
+rune-rot13 = { path = "crates/common/rune-rot13", version = "0.2.2" }
+rune-rot47 = { path = "crates/common/rune-rot47", version = "0.2.2" }
+rune-sarif = { path = "crates/secops/rune-sarif", version = "0.1.0" }
+rune-sandbox-preset = { path = "crates/secops/rune-sandbox-preset", version = "0.1.0" }
+rune-schema-sniff = { path = "crates/stream/rune-schema-sniff", version = "0.1.1" }
+rune-secret-ref = { path = "crates/common/rune-secret-ref", version = "0.1.0" }
+rune-service-probe = { path = "crates/net/rune-service-probe", version = "0.1.0" }
+rune-probe-mail = { path = "crates/net/rune-probe-mail", version = "0.1.0" }
+rune-probe-sql = { path = "crates/net/rune-probe-sql", version = "0.1.0" }
+rune-probe-ms = { path = "crates/net/rune-probe-ms", version = "0.1.0" }
+rune-probe-ldap = { path = "crates/net/rune-probe-ldap", version = "0.1.0" }
+rune-probe-nosql = { path = "crates/net/rune-probe-nosql", version = "0.1.0" }
+rune-seccomp = { path = "crates/secops/rune-seccomp", version = "0.1.0" }
+rune-sha1 = { path = "crates/common/rune-sha1", version = "0.2.1" }
+rune-securitytxt = { path = "crates/web/rune-securitytxt", version = "0.1.0" }
+rune-sha256 = { path = "crates/common/rune-sha256", version = "0.2.1" }
+rune-sha512 = { path = "crates/common/rune-sha512", version = "0.2.1" }
+rune-socks = { path = "crates/net/rune-socks", version = "0.1.0" }
+rune-sse = { path = "crates/net/rune-sse", version = "0.1.0" }
+rune-stats = { path = "crates/ts/rune-stats", version = "0.1.1" }
+rune-strace = { path = "crates/common/rune-strace", version = "0.2.0" }
+rune-strings = { path = "crates/common/rune-strings", version = "0.2.2" }
+rune-taxonomy = { path = "crates/secops/rune-taxonomy", version = "0.1.1" }
+rune-tech-detect = { path = "crates/web/rune-tech-detect", version = "0.1.0" }
+rune-telemetry = { path = "crates/common/rune-telemetry", version = "0.1.0" }
+rune-tls-hello = { path = "crates/net/rune-tls-hello", version = "0.1.0" }
+rune-tls-probe = { path = "crates/net/rune-tls-probe", version = "0.1.0" }
+rune-tokenize = { path = "crates/common/rune-tokenize", version = "0.1.2" }
+rune-tool-schema = { path = "crates/chain/rune-tool-schema", version = "0.1.1" }
+rune-transform = { path = "crates/common/rune-transform", version = "0.1.0" }
+rune-url-encode = { path = "crates/common/rune-url-encode", version = "0.3.1" }
+rune-url = { path = "crates/net/rune-url", version = "0.1.0" }
+rune-vectorstore = { path = "crates/chain/rune-vectorstore", version = "0.1.0" }
+rune-wellknown = { path = "crates/web/rune-wellknown", version = "0.1.0" }
+rune-robots = { path = "crates/web/rune-robots", version = "0.1.0" }
+rune-wildcard-dns = { path = "crates/net/rune-wildcard-dns", version = "0.1.0" }
+rune-x509 = { path = "crates/net/rune-x509", version = "0.1.0" }
+rune-wordlist = { path = "crates/net/rune-wordlist", version = "0.1.0" }
+rune-ws = { path = "crates/net/rune-ws", version = "0.1.0" }
+rune-wsdl = { path = "crates/net/rune-wsdl", version = "0.1.0" }
+rune-xor = { path = "crates/common/rune-xor", version = "0.2.1" }
+
+# Third-party crates shared by two or more members, plus versions pinned as
+# workspace policy (toml, rand).
+async-stream = "0.3"
+async-trait = "0.1.92"
+axum = "0.8"
+bytes = "1.10.1"
+clap = { version = "4", features = ["derive"] }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+futures = "0.3.31"
+hmac = "0.12"
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+landlock = "0.4.7"
+libc = "0.2"
+# OpenTelemetry crates move in lockstep (0.31.x). Default features off so a
+# member opts into exactly the signals and transports it uses.
+opentelemetry = { version = "0.31", default-features = false }
+opentelemetry-otlp = { version = "0.31", default-features = false }
+opentelemetry_sdk = { version = "0.31", default-features = false }
+pin-project-lite = "0.2"
+quick-xml = "0.42.0"
+# Dev-dependency for round-trip property tests. Only the `std`
+# feature: no fork/timeout runner, so no extra process or regex machinery.
+proptest = { version = "1.7.0", default-features = false, features = ["std"] }
+rand = "0.9.2"
+rayon = "1"
+regex = "1"
+reqwest = { version = "0.12.28", features = ["json"] }
+schemars = "1"
+# BPF compiler behind rune-seccomp. Default features off: no JSON filter
+# format, just the Rust API.
+seccompiler = { version = "0.5", default-features = false }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha1 = "0.10.6"
+sha2 = "0.10.9"
+subtle = "2"
+tempfile = "3"
+thiserror = "2.0.17"
+tokio = "1.45.1"
+# Default features off (they pull aws-lc-rs); members pick `ring` and `tls12`.
+tokio-rustls = { version = "0.26.6", default-features = false }
+tokio-test = "0.4"
+toml = "1.2.1"
+tower = "0.5"
+tower-layer = "0.3"
+tower-service = "0.3"
+# Only `std` (+ `fmt` for the subscriber): no ansi, env-filter, json or
+# tracing-log, so no extra regex, serde or log machinery.
+tracing = { version = "0.1.41", default-features = false, features = ["std"] }
+tracing-core = "0.1.33"
+tracing-subscriber = { version = "0.3.20", default-features = false, features = ["fmt", "std"] }
+url = "2.5.7"
+
+# Lint policy shared by every member (`[lints] workspace = true`). Tests may unwrap, expect and panic (see clippy.toml). Binaries
+# allow `print_stdout` at their crate root. Code that needs `unsafe` opts out
+# locally, with a justification, on the narrowest item possible.
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+struct_field_names = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"

@@ -1,0 +1,37 @@
+[package]
+name = "rune-payload-encode"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "WAF-evasion payload variants (case, encoding, comment, whitespace, concatenation) as composable rune-transform transforms"
+license.workspace = true
+keywords = ["waf", "evasion", "payload", "fuzzing", "security"]
+categories = ["encoding", "web-programming", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-payload-encode"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## The `rune-payload-encode` command-line tool.
+cli = ["dep:clap"]
+## `Serialize`/`Deserialize` for `Context`, `Technique`, `Variant` and `Report`.
+serde = ["dep:serde"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-html-encode.workspace = true
+rune-transform.workspace = true
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

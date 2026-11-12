@@ -1,0 +1,36 @@
+[package]
+name = "rune-caesar"
+version = "0.2.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Caesar cipher — shift-based substitution cipher with brute-force decoder"
+license.workspace = true
+keywords = ["caesar", "cipher", "encoding", "ctf", "cryptography"]
+categories = ["encoding", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-caesar"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

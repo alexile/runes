@@ -1,0 +1,42 @@
+[package]
+name = "rune-robots"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Parse robots.txt (RFC 9309) and sitemap.xml / sitemap index files (plain or gzipped), and match paths against robots rules"
+license.workspace = true
+keywords = ["robots-txt", "sitemap", "crawler", "rfc9309", "parser"]
+categories = ["web-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-robots"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["gzip"]
+## Transparently decompress gzipped sitemaps (`sitemap.xml.gz`), via
+## flate2's pure-Rust backend.
+gzip = ["dep:flate2"]
+## The `rune-robots` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+flate2 = { workspace = true, optional = true }
+quick-xml.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

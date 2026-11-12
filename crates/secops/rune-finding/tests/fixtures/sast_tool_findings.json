@@ -1,0 +1,147 @@
+[
+  {
+    "rule_id": "python.sqli.format",
+    "message": "SQL built with string formatting",
+    "location": {
+      "file": "src/app.py",
+      "span": {
+        "start": {
+          "line": 42,
+          "column": 5,
+          "offset": 1200
+        },
+        "end": {
+          "line": 42,
+          "column": 61,
+          "offset": 1256
+        }
+      }
+    },
+    "severity": "high",
+    "confidence": "high",
+    "cwe": "CWE-89",
+    "owasp": "A03:2021",
+    "code_snippet": "cursor.execute(f\"SELECT * FROM users WHERE id={uid}\")",
+    "fix": "Use parameterised queries",
+    "dataflow_path": {
+      "source": {
+        "file": "src/app.py",
+        "span": {
+          "start": {
+            "line": 40,
+            "column": 11,
+            "offset": 1100
+          },
+          "end": {
+            "line": 40,
+            "column": 30,
+            "offset": 1119
+          }
+        }
+      },
+      "sink": {
+        "file": "src/app.py",
+        "span": {
+          "start": {
+            "line": 42,
+            "column": 5,
+            "offset": 1200
+          },
+          "end": {
+            "line": 42,
+            "column": 61,
+            "offset": 1256
+          }
+        }
+      },
+      "steps": [
+        {
+          "location": {
+            "file": "src/app.py",
+            "span": {
+              "start": {
+                "line": 41,
+                "column": 5,
+                "offset": 1150
+              },
+              "end": {
+                "line": 41,
+                "column": 20,
+                "offset": 1165
+              }
+            }
+          },
+          "description": "assigned to uid"
+        }
+      ]
+    },
+    "ai_metadata": {
+      "exploitability": 7.5,
+      "criticality": null,
+      "likely_false_positive": false,
+      "explanation": "User input reaches SQL",
+      "remediation": null,
+      "ai_confidence": 87.5
+    },
+    "metadata": {
+      "language": "python",
+      "engine": "taint"
+    }
+  },
+  {
+    "rule_id": "generic.secret",
+    "message": "Hardcoded password",
+    "location": {
+      "file": "src/app.py",
+      "span": {
+        "start": {
+          "line": 3,
+          "column": 1,
+          "offset": 20
+        },
+        "end": {
+          "line": 3,
+          "column": 18,
+          "offset": 37
+        }
+      }
+    },
+    "severity": "info",
+    "confidence": "medium",
+    "cwe": "",
+    "owasp": "",
+    "code_snippet": null,
+    "fix": null,
+    "dataflow_path": null,
+    "ai_metadata": null,
+    "metadata": {}
+  },
+  {
+    "rule_id": "js.eval",
+    "message": "eval() call",
+    "location": {
+      "file": "src/app.py",
+      "span": {
+        "start": {
+          "line": 1,
+          "column": 1,
+          "offset": 0
+        },
+        "end": {
+          "line": 2,
+          "column": 4,
+          "offset": 30
+        }
+      }
+    },
+    "severity": "low",
+    "confidence": "low",
+    "cwe": null,
+    "owasp": null,
+    "code_snippet": null,
+    "fix": null,
+    "dataflow_path": null,
+    "ai_metadata": null,
+    "metadata": {}
+  }
+]

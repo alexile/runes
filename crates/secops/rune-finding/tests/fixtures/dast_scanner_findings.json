@@ -1,0 +1,286 @@
+[
+  {
+    "finding": {
+      "check_id": "xss.reflected",
+      "confidence": "firm",
+      "cvss": {
+        "base_score": 6.1,
+        "vector": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+      },
+      "cwe": "CWE-79",
+      "evidence": [],
+      "exchanges": [
+        {
+          "error": null,
+          "id": 1,
+          "kind": "inline",
+          "label": null,
+          "notes": null,
+          "redirect_chain": [],
+          "remote_address": null,
+          "request": {
+            "body": {
+              "content_encoding": null,
+              "data": "",
+              "encoding": "utf8",
+              "total_len": null,
+              "truncated": false
+            },
+            "headers": [
+              {
+                "name": "Accept",
+                "value": "text/html"
+              }
+            ],
+            "http_version": "http11",
+            "method": "GET",
+            "url": "https://shop.example.test/search?q=%3Cscript%3E"
+          },
+          "response": {
+            "body": {
+              "content_encoding": null,
+              "data": "<script>alert(1)</script>",
+              "encoding": "utf8",
+              "total_len": null,
+              "truncated": false
+            },
+            "headers": [
+              {
+                "name": "Content-Type",
+                "value": "text/html"
+              },
+              {
+                "name": "Set-Cookie",
+                "value": "a=1"
+              },
+              {
+                "name": "Set-Cookie",
+                "value": "b=2"
+              }
+            ],
+            "http_version": "http11",
+            "reason": "OK",
+            "status": 200
+          },
+          "started_at_unix_milliseconds": 0,
+          "tags": [],
+          "timings": {
+            "time_to_headers_milliseconds": null,
+            "total_milliseconds": 0
+          },
+          "tool": "payload-fuzzer"
+        },
+        {
+          "id": 9,
+          "kind": "stored",
+          "store": "proxy-history"
+        }
+      ],
+      "first_seen_unix_ms": 1700000000000,
+      "last_seen_unix_ms": 1700000100000,
+      "location": {
+        "location_kind": "url",
+        "parameter": "q",
+        "url": "https://shop.example.test/search?q=x"
+      },
+      "proof": {
+        "exchanges": [
+          {
+            "error": null,
+            "id": 2,
+            "kind": "inline",
+            "label": null,
+            "notes": null,
+            "redirect_chain": [],
+            "remote_address": null,
+            "request": {
+              "body": {
+                "content_encoding": null,
+                "data": "",
+                "encoding": "utf8",
+                "total_len": null,
+                "truncated": false
+              },
+              "headers": [
+                {
+                  "name": "Accept",
+                  "value": "text/html"
+                }
+              ],
+              "http_version": "http11",
+              "method": "GET",
+              "url": "https://shop.example.test/search?q=2"
+            },
+            "response": {
+              "body": {
+                "content_encoding": null,
+                "data": "<script>alert(1)</script>",
+                "encoding": "utf8",
+                "total_len": null,
+                "truncated": false
+              },
+              "headers": [
+                {
+                  "name": "Content-Type",
+                  "value": "text/html"
+                },
+                {
+                  "name": "Set-Cookie",
+                  "value": "a=1"
+                },
+                {
+                  "name": "Set-Cookie",
+                  "value": "b=2"
+                }
+              ],
+              "http_version": "http11",
+              "reason": "OK",
+              "status": 200
+            },
+            "started_at_unix_milliseconds": 0,
+            "tags": [],
+            "timings": {
+              "time_to_headers_milliseconds": null,
+              "total_milliseconds": 0
+            },
+            "tool": "payload-fuzzer"
+          }
+        ],
+        "steps": [
+          "Send q=<script>alert(1)</script>"
+        ],
+        "summary": "Payload reflected unencoded",
+        "verified_at_unix_ms": 1700000000000
+      },
+      "remediation_refs": [
+        "https://cheatsheetseries.owasp.org/"
+      ],
+      "severity": "high",
+      "taxonomy": [
+        {
+          "framework": "cwe",
+          "id": "CWE-79"
+        },
+        {
+          "framework": "owasp_top10_2025",
+          "id": "A05:2025",
+          "name": "Injection"
+        },
+        {
+          "framework": "wstg",
+          "id": "WSTG-INPV-01"
+        }
+      ],
+      "title": "Reflected XSS"
+    },
+    "fingerprint": "1c1082f846161c22bdf06ddf146b1ec59b99cb19581f33a0690ca72525fd6d12"
+  },
+  {
+    "finding": {
+      "check_id": "xss.reflected",
+      "confidence": "firm",
+      "evidence": [],
+      "location": {
+        "location_kind": "url",
+        "parameter": "q",
+        "url": "https://Example.test/api/users/42/?b=2&a=1#x"
+      },
+      "severity": "high",
+      "title": "Reflected XSS"
+    },
+    "fingerprint": "2849606b401e41664ae7e34af3346a93943b8e3f34db93f9446c60d6261750b1"
+  },
+  {
+    "finding": {
+      "check_id": "tls.weak_protocol",
+      "confidence": "certain",
+      "cwe": "CWE-327",
+      "evidence": [
+        {
+          "label": "tls_version",
+          "snippet": "TLSv1.0"
+        }
+      ],
+      "location": {
+        "host": "Example.TEST",
+        "location_kind": "network",
+        "port": 443
+      },
+      "remediation": {
+        "references": [
+          "https://example.test/tls"
+        ],
+        "summary": "Disable TLS 1.0"
+      },
+      "severity": "informational",
+      "taxonomy": [
+        {
+          "framework": "cwe",
+          "id": "CWE-327"
+        }
+      ],
+      "title": "TLS 1.0 accepted"
+    },
+    "fingerprint": "cd476cd138c2fabd06178cf81d7f1799f1bd3e68641bb9900f77f135c57f1e7f"
+  },
+  {
+    "finding": {
+      "check_id": "secret.aws",
+      "confidence": "tentative",
+      "evidence": [],
+      "location": {
+        "end_line": 13,
+        "location_kind": "file",
+        "path": "src/config.rs",
+        "start_line": 12
+      },
+      "severity": "critical",
+      "title": "AWS key"
+    },
+    "fingerprint": "3b3640da50b00fa623ec373c8d93ddee5de470bd9abaa367c2bc819aa7adbd82"
+  },
+  {
+    "finding": {
+      "check_id": "secret.aws",
+      "confidence": "tentative",
+      "evidence": [],
+      "location": {
+        "location_kind": "file",
+        "path": "src/config.rs"
+      },
+      "severity": "low",
+      "title": "AWS key"
+    },
+    "fingerprint": "068cf4f3bce8acc8226795637723453d3263f93b6ebc7885cda190d2042a7d69"
+  },
+  {
+    "finding": {
+      "check_id": "k8s.ingress.tls",
+      "confidence": "firm",
+      "evidence": [],
+      "location": {
+        "kind": "Ingress",
+        "location_kind": "cluster_object",
+        "name": "web",
+        "namespace": "prod"
+      },
+      "severity": "medium",
+      "title": "Ingress without TLS"
+    },
+    "fingerprint": "5dbe938c48c8dc8213b85b44bba11b09eee73e39a95e3dfd89f4887d4a4a1661"
+  },
+  {
+    "finding": {
+      "check_id": "idor",
+      "confidence": "firm",
+      "evidence": [],
+      "location": {
+        "location_kind": "url",
+        "url": "/api/7/o/123e4567-E89B-12d3-a456-426614174000?x=1&a%62=2#f"
+      },
+      "severity": "high",
+      "title": "Reflected XSS"
+    },
+    "fingerprint": "36072f6b54a65b3b7f5f19c25d59ec59e038efa84e9e7b78a600b76d6e1ebda1"
+  }
+]

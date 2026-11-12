@@ -1,0 +1,34 @@
+[package]
+name = "rune-randomness"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "NIST SP 800-22 and FIPS 140-2 statistical randomness tests for tokens and bit streams"
+license.workspace = true
+keywords = ["randomness", "nist", "statistics", "tokens", "entropy"]
+categories = ["cryptography", "algorithms", "science"]
+repository.workspace = true
+readme = "README.md"
+# The one-million-bit reference sample is only needed by the tests.
+exclude = ["tests/data"]
+publish = true
+
+[lib]
+name = "rune_randomness"
+path = "src/lib.rs"
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+rune-entropy.workspace = true
+rune-stats.workspace = true
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

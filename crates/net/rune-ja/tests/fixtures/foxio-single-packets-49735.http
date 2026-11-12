@@ -1,0 +1,11 @@
+GET /?cid=31&l=en&&mode=json&_dc=1532525525462 HTTP/1.1
+Accept: */*
+X-Requested-With: XMLHttpRequest
+Referer: http://whc.unesco.org/en/interactive-map/
+Accept-Language: en-US
+Accept-Encoding: gzip, deflate
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/12.10240
+Host: whc.unesco.org
+Connection: Keep-Alive
+Cookie: CFID=77281563; CFTOKEN=64733241d30c35e0-304F31D8-AA72-F50C-3869AA2C5D0DFF17; unescomap=open; _ga=GA1.2.1751603294.1532525413; _gid=GA1.2.775336169.1532525413; _gat=1
+

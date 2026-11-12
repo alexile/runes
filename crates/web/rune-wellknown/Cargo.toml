@@ -1,0 +1,45 @@
+[package]
+name = "rune-wellknown"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Discover and parse /.well-known resources (security.txt, change-password, MTA-STS, OpenID configuration, assetlinks, apple-app-site-association) into typed models"
+license.workspace = true
+keywords = ["well-known", "mta-sts", "openid", "assetlinks", "security-txt"]
+categories = ["web-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-wellknown"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## `fetch::discover` and friends over a caller-supplied `Fetcher` (no
+## extra dependencies).
+fetch = []
+## `fetch::ReqwestFetcher`, a `Fetcher` backed by reqwest (needs Tokio).
+reqwest = ["fetch", "dep:reqwest"]
+## The `rune-wellknown` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+rune-securitytxt.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

@@ -1,0 +1,55 @@
+[package]
+name = "rune-aspm-correlate"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "ASPM correlation: ingest external SARIF and DAST findings, correlate SAST and DAST into one risk view with provenance"
+license.workspace = true
+keywords = ["aspm", "sarif", "sast", "dast", "correlation"]
+categories = ["development-tools", "data-structures"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+# Test fixtures (scanner output) are test data only.
+exclude = ["tests/"]
+
+[[bin]]
+name = "rune-aspm-correlate"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## Serialize and deserialize provenance, routes and reports with serde.
+serde = ["dep:serde", "dep:serde_json", "rune-finding-dedupe/serde"]
+## The `rune-aspm-correlate` command-line tool.
+cli = ["serde", "dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-finding = { workspace = true, features = ["serde"] }
+rune-finding-dedupe.workspace = true
+rune-sarif.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+sha2.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[[test]]
+name = "serde"
+required-features = ["serde"]
+
+[[test]]
+name = "sast_dast"
+required-features = ["serde"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

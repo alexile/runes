@@ -1,0 +1,30 @@
+[package]
+name = "rune-stats"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Nonparametric statistics: robust descriptives, rank tests and effect sizes"
+license.workspace = true
+keywords = ["statistics", "mann-whitney", "wilcoxon", "kolmogorov-smirnov", "median"]
+categories = ["science", "mathematics", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[lib]
+name = "rune_stats"
+path = "src/lib.rs"
+
+[features]
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

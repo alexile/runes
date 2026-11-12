@@ -1,0 +1,37 @@
+[package]
+name = "rune-cookie"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "RFC 6265 cookies: Set-Cookie/Cookie parsing and serialization, cookie dates, and a sans-I/O cookie jar with PSL scoping and SameSite"
+license.workspace = true
+keywords = ["cookie", "set-cookie", "rfc6265", "http", "samesite"]
+categories = ["web-programming", "network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+# Unpublished while rune-http-model (a dependency) is unpublished.
+publish = false
+# The RFC 6265 test corpus and the proptests are test-only.
+exclude = ["tests/"]
+
+[features]
+## Serialize and deserialize parsed and stored cookies with serde.
+serde = ["dep:serde"]
+
+[dependencies]
+rune-http-model.workspace = true
+rune-psl = { workspace = true, features = ["embedded"] }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

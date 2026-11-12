@@ -1,0 +1,23 @@
+[package]
+name = "rune-strace"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Syscall tracing for seccomp profiles: ptrace a child to collect the system calls it makes, and parse `strace -f` output"
+license.workspace = true
+keywords = ["strace", "syscall", "tracing", "parser", "debugging"]
+categories = ["parsing", "development-tools::debugging"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+libc.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

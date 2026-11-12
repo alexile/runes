@@ -1,0 +1,32 @@
+[package]
+name = "rune-rtree"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "R-tree spatial index for fast nearest-neighbor and range queries over points"
+license.workspace = true
+keywords = ["rtree", "spatial-index", "geo", "nearest-neighbor", "range-query"]
+categories = ["algorithms", "data-structures", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-rtree"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_rtree"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap", "dep:serde_json"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[lints]
+workspace = true

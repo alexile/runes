@@ -1,0 +1,31 @@
+[package]
+name = "rune-axum-health"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Health and readiness probes plus graceful shutdown for Axum — readiness flips on shutdown and in-flight requests drain before exit"
+license.workspace = true
+keywords = ["axum", "health-check", "readiness", "graceful-shutdown", "middleware"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+## `shutdown_signal()`: resolve on Ctrl-C or, on Unix, SIGTERM.
+signal = ["tokio/signal"]
+
+[dependencies]
+http.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+tower.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full", "test-util"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

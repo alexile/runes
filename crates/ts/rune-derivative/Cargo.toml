@@ -1,0 +1,31 @@
+[package]
+name = "rune-derivative"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Rate-of-change (derivative) and cumulative (integral) calculation over a series"
+license.workspace = true
+keywords = ["derivative", "integral", "calculus", "time-series", "rate-of-change"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-derivative"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_derivative"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

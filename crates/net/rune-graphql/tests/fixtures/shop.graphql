@@ -1,0 +1,116 @@
+"""
+A storefront API exercising most of the type system: interfaces that
+implement interfaces, unions, enums, input objects (recursive and @oneOf),
+default values, deprecations, extensions and custom scalars.
+"""
+schema @link(url: "https://specs.apollo.dev/federation/v2.3") {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+directive @auth(requires: Role = ADMIN) on OBJECT | FIELD_DEFINITION
+directive @cost(weight: Int!) repeatable on FIELD_DEFINITION
+
+scalar DateTime @specifiedBy(url: "https://scalars.graphql.org/andimarek/date-time")
+scalar Money
+scalar Upload
+
+enum Role { ADMIN STAFF CUSTOMER GUEST @deprecated(reason: "use CUSTOMER") }
+enum OrderStatus { PENDING PAID SHIPPED CANCELLED }
+enum SortOrder { ASC DESC }
+
+interface Node { id: ID! }
+interface Timestamped implements Node { id: ID! createdAt: DateTime! }
+
+type User implements Node & Timestamped @auth(requires: STAFF) {
+  id: ID!
+  createdAt: DateTime!
+  email: String! @auth(requires: ADMIN)
+  name: String
+  role: Role!
+  passwordHash: String @deprecated(reason: "never exposed")
+  orders(first: Int = 10, after: String, status: [OrderStatus!]): OrderConnection!
+  manager: User
+  addresses: [Address!]!
+}
+
+type Address { line1: String! city: String! country: String! }
+
+type Product implements Node {
+  id: ID!
+  sku: String!
+  title: String!
+  price(currency: Currency = EUR): Money!
+  reviews(minRating: Int!): [Review!]!
+  related: [Product!]
+}
+
+enum Currency { EUR USD GBP }
+
+type Review implements Node { id: ID! rating: Int! body: String author: User }
+
+type Order implements Node & Timestamped {
+  id: ID!
+  createdAt: DateTime!
+  status: OrderStatus!
+  total: Money!
+  customer: User!
+  lines: [OrderLine!]!
+}
+
+type OrderLine { product: Product! quantity: Int! }
+
+type OrderConnection { edges: [OrderEdge!]! pageInfo: PageInfo! totalCount: Int }
+type OrderEdge { cursor: String! node: Order! }
+type PageInfo { hasNextPage: Boolean! endCursor: String }
+
+union SearchResult = User | Product | Order
+
+input ProductFilter {
+  titleContains: String
+  minPrice: Money
+  and: [ProductFilter!]
+  or: [ProductFilter!]
+  sort: SortOrder = DESC
+}
+
+input UserLookup @oneOf { id: ID email: String }
+
+input AddressInput { line1: String! city: String! country: String! = "DE" }
+
+input CreateOrderInput {
+  customer: UserLookup!
+  lines: [OrderLineInput!]!
+  shipping: AddressInput
+  note: String
+}
+
+input OrderLineInput { sku: String! quantity: Int! = 1 }
+
+type Query {
+  me: User
+  node(id: ID!): Node
+  user(lookup: UserLookup!): User
+  users(role: Role, first: Int = 20): [User!]! @auth(requires: ADMIN)
+  product(id: ID!): Product
+  products(filter: ProductFilter, first: Int = 20): [Product!]! @cost(weight: 5)
+  search(term: String!, limit: Int = 10): [SearchResult!]!
+  order(id: ID!): Order
+}
+
+type Mutation {
+  createOrder(input: CreateOrderInput!): Order!
+  cancelOrder(id: ID!, reason: String): Order
+  updateRole(user: UserLookup!, role: Role!): User @auth(requires: ADMIN)
+  uploadAvatar(file: Upload!): String
+  login(email: String!, password: String!): String
+}
+
+type Subscription { orderUpdated(id: ID!): Order! }
+
+extend type Query {
+  orders(status: OrderStatus, since: DateTime): [Order!]!
+}
+
+extend enum OrderStatus { REFUNDED }

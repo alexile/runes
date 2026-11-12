@@ -1,0 +1,33 @@
+[package]
+name = "rune-xor"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "XOR cipher for byte streams and files — repeating-key and single-byte modes with English-scored brute-force"
+license.workspace = true
+keywords = ["xor", "cipher", "cryptography", "ctf", "brute-force"]
+categories = ["cryptography", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-xor"
+path = "src/main.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

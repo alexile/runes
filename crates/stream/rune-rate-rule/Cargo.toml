@@ -1,0 +1,31 @@
+[package]
+name = "rune-rate-rule"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Composable rule trait plus threshold, rate-of-change, and missing-heartbeat rule implementations"
+license.workspace = true
+keywords = ["rules", "monitoring", "threshold", "anomaly", "streaming"]
+categories = ["data-structures", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-rate-rule"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_rate_rule"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

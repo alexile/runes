@@ -1,0 +1,31 @@
+[package]
+name = "rune-kalman-1d"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "1D Kalman filter for smoothing a single noisy scalar signal"
+license.workspace = true
+keywords = ["kalman", "filter", "signal-processing", "smoothing", "estimation"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-kalman-1d"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_kalman_1d"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

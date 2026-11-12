@@ -1,0 +1,27 @@
+[package]
+name = "rune-regex-sec"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Security-focused regex patterns for detecting IPs, CVEs, hashes, secrets, and PII in text"
+license.workspace = true
+keywords = ["regex", "security", "patterns", "secrets", "scanning"]
+categories = ["text-processing", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-regex-sec"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = []
+
+[dependencies]
+regex.workspace = true
+
+[lints]
+workspace = true

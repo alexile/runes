@@ -1,0 +1,11 @@
+GET /HotelBookableDateJson.json?dt=2018072521&hj=1 HTTP/1.1
+Accept: application/json, text/javascript, */*; q=0.01
+X-Requested-With: XMLHttpRequest
+Referer: http://www.shangri-la.com/
+Accept-Language: en-US
+Accept-Encoding: gzip, deflate
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/12.10240
+Host: www.shangri-la.com
+Connection: Keep-Alive
+Cookie: _ga=GA1.2.349209205.1532525440; _gid=GA1.2.1042544967.1532525440; _gat=1; AMCV_A70E15F354E99A260A4C98A4%40AdobeOrg=-330454231%7CMCIDTS%7C17738%7CMCMID%7C00834244270283740751404491874386840551%7CMCAAMLH-1533130240%7C3%7CMCAAMB-1533130240%7C6G1ynYcLPuiQxYZrsz_pkqfLG9yMXBpb2zX5dvJdYQJzPXImdj0y%7CMCOPTOUT-1532532640s%7CNONE%7CMCSYNCSOP%7C411-17745%7CMCAID%7CNONE%7CvVersion%7C3.1.2; AMCVS_A70E15F354E99A260A4C98A4%40AdobeOrg=1; mbox=session#f11f91da64134d8183e8dda4dc10aaf4#1532527370|PC#f11f91da64134d8183e8dda4dc10aaf4.22_23#1540301510|check#true#1532525570; s_dfa=shgshg-web-global; s_cc=true; s_ppvl=www.shangri-la.com%2C52%2C52%2C499%2C1350%2C498%2C1350%2C615%2C1%2CL; s_ppv=www.shangri-la.com%2C48%2C48%2C498%2C1350%2C498%2C1350%2C615%2C1%2CL; s_sq=%5B%5BB%5D%5D; segmentid=segment%3DC%2Csegment%3Dtesting; aam_uuid=01107346641427687611431242460084872101; app_promotion=1
+

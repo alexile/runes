@@ -1,0 +1,27 @@
+[package]
+name = "rune-crc32"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Compute CRC-32 checksums of byte slices and files (IEEE 802.3 / Ethernet polynomial)"
+license.workspace = true
+keywords = ["crc32", "checksum", "crc", "hash", "forensics"]
+categories = ["algorithms", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-crc32"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["std"]
+
+[lints]
+workspace = true

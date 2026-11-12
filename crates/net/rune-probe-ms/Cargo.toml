@@ -1,0 +1,25 @@
+[package]
+name = "rune-probe-ms"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Read-only SMB negotiate (dialect, signing, SMBv1) and RDP security-protocol negotiation probes"
+license.workspace = true
+keywords = ["smb", "rdp", "probe", "windows", "security"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-service-probe.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rune-service-probe = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

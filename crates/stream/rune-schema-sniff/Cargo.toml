@@ -1,0 +1,32 @@
+[package]
+name = "rune-schema-sniff"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Heuristic column/field-type detector for arbitrary CSV/JSON: guesses timestamp/id/value/lat-lon columns, emits a normalized preview with confidence scores"
+license.workspace = true
+keywords = ["csv", "json", "schema", "type-detection", "heuristics"]
+categories = ["algorithms", "encoding", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-schema-sniff"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_schema_sniff"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+serde_json = { workspace = true, features = ["preserve_order"] }
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

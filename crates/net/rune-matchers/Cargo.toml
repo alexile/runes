@@ -1,0 +1,39 @@
+[package]
+name = "rune-matchers"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Nuclei-style matcher and extractor DSL over rune-http-model exchanges: word, regex, binary, status, header, JSON and XPath rules"
+license.workspace = true
+keywords = ["nuclei", "matcher", "extractor", "http", "security"]
+categories = ["web-programming", "network-programming", "text-processing"]
+repository.workspace = true
+readme = "README.md"
+# Kept unpublished while rune-http-model (a dependency) is unpublished.
+publish = false
+
+[features]
+## Serialize and deserialize rules with serde (nuclei-like JSON shape).
+serde = ["dep:serde"]
+## Derive `schemars::JsonSchema` for rules. Implies `serde`.
+schemars = ["serde", "dep:schemars"]
+
+[dependencies]
+# Event-level XML reader for the XPath-subset extractor.
+quick-xml.workspace = true
+regex.workspace = true
+rune-http-model.workspace = true
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

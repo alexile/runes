@@ -1,0 +1,33 @@
+[package]
+name = "rune-asn"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "IP-to-ASN and ASN-to-prefix lookup over BGP/RIR datasets (RouteViews pfx2as, iptoasn, bgpdump, RIR delegated stats) with longest-prefix match"
+license.workspace = true
+keywords = ["asn", "bgp", "ip", "network", "recon"]
+categories = ["network-programming", "parsing"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-asn"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-cidr.workspace = true
+rune-ip.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

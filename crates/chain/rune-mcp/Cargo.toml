@@ -1,0 +1,50 @@
+[package]
+name = "rune-mcp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Hardened MCP client and server on rmcp: rune tools, resources and prompts, namespaced multi-server tool sets, policy, caps and fencing"
+license.workspace = true
+keywords = ["mcp", "llm", "tools", "agent", "rmcp"]
+categories = ["network-programming", "asynchronous", "api-bindings"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## stdio transports: serve over the process's stdin/stdout, and spawn a local
+## MCP server (`StdioServer`: no shell, cleared environment, killed on drop).
+stdio = ["rmcp/transport-io", "rmcp/transport-child-process", "tokio/process"]
+## Streamable HTTP server: a `tower` service to mount in axum or hyper.
+http-server = ["rmcp/transport-streamable-http-server"]
+## Streamable HTTP client: `HttpClientConfig` (HTTPS unless loopback, redacted
+## auth) and `McpClient::connect_http` over any rmcp HTTP client. Brings no
+## HTTP stack of its own.
+http-client = ["rmcp/transport-streamable-http-client", "dep:http"]
+## Serve `rune_chain_core::Tool`s, and use remote MCP tools as chain tools.
+chain = ["dep:rune-chain-core"]
+
+[dependencies]
+async-trait.workspace = true
+http = { workspace = true, optional = true }
+rmcp = { version = "3.9.0", default-features = false, features = ["server", "client"] }
+rune-chain-core = { workspace = true, optional = true }
+rune-tool-schema.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
+
+[dev-dependencies]
+# In-process HTTP tests (`http-server` feature): requests go straight to the
+# tower service, with no socket.
+http.workspace = true
+http-body-util.workspace = true
+tower = { workspace = true, features = ["util"] }
+tokio = { workspace = true, features = ["io-util", "macros", "rt", "rt-multi-thread", "time"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

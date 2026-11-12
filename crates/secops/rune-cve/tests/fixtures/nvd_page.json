@@ -1,0 +1,169 @@
+{
+  "resultsPerPage": 5,
+  "startIndex": 0,
+  "totalResults": 5,
+  "format": "NVD_CVE",
+  "version": "2.0",
+  "timestamp": "2026-11-01T00:00:00.000",
+  "vulnerabilities": [
+    {
+      "cve": {
+        "id": "CVE-2021-44228",
+        "sourceIdentifier": "security@apache.org",
+        "published": "2021-12-10T10:15:09.143",
+        "lastModified": "2025-02-04T15:15:13.773",
+        "vulnStatus": "Analyzed",
+        "cisaExploitAdd": "2021-12-10",
+        "cisaActionDue": "2021-12-24",
+        "cisaRequiredAction": "For all affected software assets for which updates exist, the only acceptable remediation actions are: 1) Apply updates; OR 2) remove affected assets from agency networks.",
+        "cisaVulnerabilityName": "Apache Log4j2 Remote Code Execution Vulnerability",
+        "descriptions": [
+          { "lang": "en", "value": "Apache Log4j2 2.0-beta9 through 2.15.0 (excluding security releases 2.12.2, 2.12.3, and 2.3.1) JNDI features used in configuration, log messages, and parameters do not protect against attacker controlled LDAP and other JNDI related endpoints." },
+          { "lang": "es", "value": "Las funciones JNDI de Apache Log4j2 no protegen contra LDAP controlado por un atacante." }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
+                "baseScore": 10.0,
+                "baseSeverity": "CRITICAL",
+                "attackVector": "NETWORK"
+              },
+              "exploitabilityScore": 3.9,
+              "impactScore": 6.0
+            }
+          ],
+          "cvssMetricV2": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "2.0",
+                "vectorString": "AV:N/AC:M/Au:N/C:C/I:C/A:C",
+                "baseScore": 9.3
+              },
+              "baseSeverity": "HIGH",
+              "exploitabilityScore": 8.6,
+              "impactScore": 10.0
+            }
+          ]
+        },
+        "weaknesses": [
+          { "source": "security@apache.org", "type": "Secondary", "description": [ { "lang": "en", "value": "CWE-502" }, { "lang": "en", "value": "CWE-400" } ] },
+          { "source": "nvd@nist.gov", "type": "Primary", "description": [ { "lang": "en", "value": "CWE-917" }, { "lang": "en", "value": "CWE-502" } ] }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  { "vulnerable": true, "criteria": "cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*", "versionStartIncluding": "2.0.1", "versionEndExcluding": "2.3.1", "matchCriteriaId": "03FA5E81-F9C0-403E-8A4B-E4284E4E7B72" },
+                  { "vulnerable": true, "criteria": "cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*", "versionStartIncluding": "2.4.0", "versionEndExcluding": "2.12.2", "matchCriteriaId": "AED3D5EC-DAD5-4E5F-8BBD-B4E3349D84FC" },
+                  { "vulnerable": true, "criteria": "cpe:2.3:a:apache:log4j:*:*:*:*:*:*:*:*", "versionStartIncluding": "2.13.0", "versionEndExcluding": "2.15.0", "matchCriteriaId": "D31D423D-FC4D-428A-B863-55AF472B80DC" },
+                  { "vulnerable": true, "criteria": "cpe:2.3:a:apache:log4j:2.0:-:*:*:*:*:*:*", "matchCriteriaId": "17854E42-7063-4A55-BF2A-4C7074CC2D60" },
+                  { "vulnerable": true, "criteria": "cpe:2.3:a:apache:log4j:2.0:beta9:*:*:*:*:*:*", "matchCriteriaId": "53F32FB2-6970-4975-8BD0-EAE12E9AD03A" }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          { "url": "https://logging.apache.org/log4j/2.x/security.html", "source": "security@apache.org", "tags": [ "Release Notes", "Vendor Advisory" ] }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2014-0160",
+        "sourceIdentifier": "secalert@redhat.com",
+        "published": "2014-04-07T22:55:03.893",
+        "lastModified": "2025-04-12T10:46:40.837",
+        "vulnStatus": "Modified",
+        "descriptions": [
+          { "lang": "en", "value": "The (1) TLS and (2) DTLS implementations in OpenSSL 1.0.1 before 1.0.1g do not properly handle Heartbeat Extension packets, aka the Heartbleed bug." }
+        ],
+        "metrics": {
+          "cvssMetricV31": [
+            { "source": "nvd@nist.gov", "type": "Primary", "cvssData": { "version": "3.1", "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N", "baseScore": 7.5, "baseSeverity": "HIGH" }, "exploitabilityScore": 3.9, "impactScore": 3.6 }
+          ]
+        },
+        "weaknesses": [
+          { "source": "nvd@nist.gov", "type": "Primary", "description": [ { "lang": "en", "value": "CWE-125" } ] }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              { "operator": "OR", "negate": false, "cpeMatch": [
+                { "vulnerable": true, "criteria": "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*", "versionStartIncluding": "1.0.1", "versionEndExcluding": "1.0.1g" }
+              ] }
+            ]
+          }
+        ],
+        "references": [
+          { "url": "https://www.openssl.org/news/secadv/20140407.txt", "source": "secalert@redhat.com", "tags": [ "Vendor Advisory" ] }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2099-0001",
+        "vulnStatus": "Analyzed",
+        "descriptions": [ { "lang": "en", "value": "Test record: example agent before 3.0 on Windows allows local privilege escalation." } ],
+        "metrics": {
+          "cvssMetricV40": [
+            { "source": "cna@example.test", "type": "Secondary", "cvssData": { "version": "4.0", "vectorString": "CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N", "baseScore": 8.5, "baseSeverity": "HIGH" } }
+          ],
+          "cvssMetricV31": [
+            { "source": "nvd@nist.gov", "type": "Primary", "cvssData": { "version": "3.1", "vectorString": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H", "baseScore": 7.8, "baseSeverity": "HIGH" } }
+          ]
+        },
+        "weaknesses": [
+          { "source": "nvd@nist.gov", "type": "Primary", "description": [ { "lang": "en", "value": "NVD-CWE-noinfo" } ] }
+        ],
+        "configurations": [
+          {
+            "operator": "AND",
+            "nodes": [
+              { "operator": "OR", "negate": false, "cpeMatch": [
+                { "vulnerable": true, "criteria": "cpe:2.3:a:example:agent:*:*:*:*:*:*:*:*", "versionEndExcluding": "3.0" }
+              ] },
+              { "operator": "OR", "negate": false, "cpeMatch": [
+                { "vulnerable": false, "criteria": "cpe:2.3:o:microsoft:windows:-:*:*:*:*:*:*:*" }
+              ] }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2099-0002",
+        "vulnStatus": "Rejected",
+        "descriptions": [ { "lang": "en", "value": "Rejected reason: This candidate is a duplicate of CVE-2099-0001." } ],
+        "configurations": [
+          { "nodes": [ { "operator": "OR", "negate": false, "cpeMatch": [
+            { "vulnerable": true, "criteria": "cpe:2.3:a:example:agent:*:*:*:*:*:*:*:*" }
+          ] } ] }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2099-0003",
+        "vulnStatus": "Awaiting Analysis",
+        "descriptions": [ { "lang": "en", "value": "Test record: every product of example's 1.x line." } ],
+        "configurations": [
+          { "nodes": [ { "operator": "OR", "negate": false, "cpeMatch": [
+            { "vulnerable": true, "criteria": "cpe:2.3:a:example:*:1.*:*:*:*:*:*:*:*" }
+          ] } ] }
+        ]
+      }
+    }
+  ]
+}

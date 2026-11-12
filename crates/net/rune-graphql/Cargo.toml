@@ -1,0 +1,37 @@
+[package]
+name = "rune-graphql"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "GraphQL SDL and introspection import: type model, bounded query and mutation generation, insertion points and operation validation"
+license.workspace = true
+keywords = ["graphql", "api", "introspection", "fuzzing", "security"]
+categories = ["web-programming", "parser-implementations", "development-tools::testing"]
+repository.workspace = true
+readme = "README.md"
+# Kept unpublished until the crates.io name is confirmed free.
+publish = false
+
+[features]
+## Serialize and deserialize the model with serde.
+serde = ["dep:serde", "rune-http-model/serde"]
+## Derive `schemars::JsonSchema` for the model. Implies `serde`.
+schemars = ["serde", "dep:schemars", "rune-http-model/schemars"]
+
+[dependencies]
+rune-http-model.workspace = true
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

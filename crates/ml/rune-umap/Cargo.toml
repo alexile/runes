@@ -1,0 +1,36 @@
+[package]
+name = "rune-umap"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "UMAP dimensionality reduction — project high-dimensional data into 2D or nD embeddings"
+license.workspace = true
+keywords = ["umap", "dimensionality", "embedding", "visualization", "machine-learning"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-umap"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_umap"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rayon.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

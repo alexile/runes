@@ -1,0 +1,33 @@
+[package]
+name = "rune-tool-schema"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "MCP-shaped tool descriptor: name, description, JSON-schema input, safety level and category"
+license.workspace = true
+keywords = ["mcp", "llm", "tools", "agent", "json-schema"]
+categories = ["data-structures", "encoding"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## Generate input/output schemas from Rust types and derive
+## `schemars::JsonSchema` for the descriptor types.
+schemars = ["dep:schemars"]
+
+[dependencies]
+schemars = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

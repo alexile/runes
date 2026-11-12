@@ -1,0 +1,35 @@
+[package]
+name = "rune-mvt"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Encode and decode Mapbox Vector Tile protobuf"
+license.workspace = true
+keywords = ["mvt", "vector-tile", "protobuf", "geo", "mapbox"]
+categories = ["encoding", "algorithms", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-mvt"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_mvt"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,37 @@
+[package]
+name = "rune-wsdl"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "WSDL 1.1 / 2.0 import: SOAP 1.1 / 1.2 operations, message parts, inline XSD expanded into sample envelopes, HttpRequests and insertion points"
+license.workspace = true
+keywords = ["wsdl", "soap", "xsd", "api", "fuzzing"]
+categories = ["web-programming", "parser-implementations", "development-tools::testing"]
+repository.workspace = true
+readme = "README.md"
+# Kept unpublished until the crates.io name is confirmed free.
+publish = false
+
+[features]
+## Serialize and deserialize the model with serde.
+serde = ["dep:serde", "rune-http-model/serde"]
+## Derive `schemars::JsonSchema` for the model. Implies `serde`.
+schemars = ["serde", "dep:schemars", "rune-http-model/schemars"]
+
+[dependencies]
+quick-xml.workspace = true
+rune-http-model.workspace = true
+schemars = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

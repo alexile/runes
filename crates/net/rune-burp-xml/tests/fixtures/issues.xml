@@ -1,0 +1,66 @@
+<?xml version="1.0"?>
+<!DOCTYPE issues [
+<!ELEMENT issues (issue*)>
+<!ATTLIST issues burpVersion CDATA "">
+<!ATTLIST issues exportTime CDATA "">
+<!ELEMENT issue (serialNumber, type, name, host, path, location, severity, confidence, issueBackground?, remediationBackground?, issueDetail?, remediationDetail?, requestresponse*)>
+<!ELEMENT serialNumber (#PCDATA)>
+<!ELEMENT type (#PCDATA)>
+<!ELEMENT name (#PCDATA)>
+<!ELEMENT host (#PCDATA)>
+<!ATTLIST host ip CDATA "">
+<!ELEMENT path (#PCDATA)>
+<!ELEMENT location (#PCDATA)>
+<!ELEMENT severity (#PCDATA)>
+<!ELEMENT confidence (#PCDATA)>
+<!ELEMENT issueBackground (#PCDATA)>
+<!ELEMENT remediationBackground (#PCDATA)>
+<!ELEMENT issueDetail (#PCDATA)>
+<!ELEMENT remediationDetail (#PCDATA)>
+<!ELEMENT requestresponse (request?, response?, responseRedirected?)>
+<!ELEMENT request (#PCDATA)>
+<!ATTLIST request method CDATA "">
+<!ATTLIST request base64 (true|false) "false">
+<!ELEMENT response (#PCDATA)>
+<!ATTLIST response base64 (true|false) "false">
+<!ELEMENT responseRedirected (#PCDATA)>
+]>
+<issues burpVersion="2024.1.1.4" exportTime="Tue Mar 05 15:00:00 CET 2024">
+  <issue>
+    <serialNumber>5021438746551412736</serialNumber>
+    <type>2097920</type>
+    <name>Cross-site scripting (reflected)</name>
+    <host ip="192.0.2.10">https://shop.example.test</host>
+    <path><![CDATA[/search]]></path>
+    <location><![CDATA[/search [q parameter]]]></location>
+    <severity>High</severity>
+    <confidence>Certain</confidence>
+    <issueBackground><![CDATA[<p>Reflected cross-site scripting vulnerabilities arise when data is copied from a request and echoed into the application's immediate response in an unsafe way.</p>]]></issueBackground>
+    <issueDetail><![CDATA[The value of the <b>q</b> request parameter is copied into the HTML document as plain text between tags.]]></issueDetail>
+    <requestresponse>
+      <request method="GET" base64="true"><![CDATA[R0VUIC9zZWFyY2g/cT0lM0NzY3JpcHQlM0VhbGVydCgxKSUzQyUyRnNjcmlwdCUzRSBIVFRQLzEuMQ0KSG9zdDogc2hvcC5leGFtcGxlLnRlc3QNCkFjY2VwdDogKi8qDQoNCg==]]></request>
+      <response base64="true"><![CDATA[SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvaHRtbA0KQ29udGVudC1MZW5ndGg6IDQ3DQoNCjxwPk5vIHJlc3VsdHMgZm9yIDxzY3JpcHQ+YWxlcnQoMSk8L3NjcmlwdD48L3A+]]></response>
+      <responseRedirected>false</responseRedirected>
+    </requestresponse>
+    <requestresponse>
+      <request method="GET" base64="true"><![CDATA[R0VUIC9zZWFyY2g/cT10ZXN0IEhUVFAvMS4xDQpIb3N0OiBzaG9wLmV4YW1wbGUudGVzdA0KDQo=]]></request>
+      <response base64="true"><![CDATA[SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvaHRtbA0KQ29udGVudC1MZW5ndGg6IDI3DQoNCjxwPk5vIHJlc3VsdHMgZm9yIHRlc3Q8L3A+]]></response>
+      <responseRedirected>false</responseRedirected>
+    </requestresponse>
+  </issue>
+  <issue>
+    <serialNumber>7710399012663201792</serialNumber>
+    <type>6291968</type>
+    <name>Robots.txt file</name>
+    <host ip="192.0.2.10">https://shop.example.test</host>
+    <path><![CDATA[/robots.txt]]></path>
+    <location><![CDATA[/robots.txt]]></location>
+    <severity>Information</severity>
+    <confidence>Certain</confidence>
+    <requestresponse>
+      <request method="GET" base64="true"><![CDATA[R0VUIC9yb2JvdHMudHh0IEhUVFAvMS4xDQpIb3N0OiBzaG9wLmV4YW1wbGUudGVzdA0KDQo=]]></request>
+      <response base64="true"><![CDATA[SFRUUC8xLjEgMjAwIE9LDQpDb250ZW50LVR5cGU6IHRleHQvcGxhaW4NCkNvbnRlbnQtTGVuZ3RoOiAyNg0KDQpEaXNhbGxvdzogL2FkbWluLWJhY2t1cC8K]]></response>
+      <responseRedirected>false</responseRedirected>
+    </requestresponse>
+  </issue>
+</issues>

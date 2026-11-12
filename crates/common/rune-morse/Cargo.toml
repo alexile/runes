@@ -1,0 +1,36 @@
+[package]
+name = "rune-morse"
+version = "0.2.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Morse code encoder and decoder — ASCII text to dots and dashes and back"
+license.workspace = true
+keywords = ["morse", "morse-code", "encoding", "ctf", "radio"]
+categories = ["encoding", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-morse"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

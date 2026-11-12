@@ -1,0 +1,36 @@
+[package]
+name = "rune-tsne"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "t-SNE dimensionality reduction — map high-dimensional data into 2D or 3D for visualisation"
+license.workspace = true
+keywords = ["tsne", "dimensionality", "embedding", "visualization", "machine-learning"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-tsne"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_tsne"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rayon.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

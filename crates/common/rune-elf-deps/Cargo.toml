@@ -1,0 +1,19 @@
+[package]
+name = "rune-elf-deps"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Transitive shared-library dependency closure resolution for ELF binaries — pure-Rust ELF inspection via rune-elf, never executes the binaries it analyzes"
+license.workspace = true
+keywords = ["elf", "shared-library", "dependencies", "linux", "linker"]
+categories = ["command-line-utilities", "os"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-elf.workspace = true
+
+[lints]
+workspace = true

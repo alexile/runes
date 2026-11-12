@@ -1,0 +1,33 @@
+[package]
+name = "rune-axum-csrf"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "CSRF protection middleware for Axum — signed double-submit cookie with Origin/Fetch-Metadata checks"
+license.workspace = true
+keywords = ["axum", "csrf", "middleware", "security", "tower"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+tower.workspace = true
+http.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+bytes.workspace = true
+rand.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+proptest.workspace = true
+
+[lints]
+workspace = true

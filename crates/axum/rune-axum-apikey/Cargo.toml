@@ -1,0 +1,29 @@
+[package]
+name = "rune-axum-apikey"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "API key extractor and middleware for Axum — validates keys from headers, bearer tokens, or query parameters with constant-time comparison"
+license.workspace = true
+keywords = ["axum", "api-key", "authentication", "middleware", "security"]
+categories = ["web-programming::http-server", "authentication"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+axum.workspace = true
+tower-layer.workspace = true
+tower-service.workspace = true
+http.workspace = true
+subtle.workspace = true
+pin-project-lite.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+axum.workspace = true
+
+[lints]
+workspace = true

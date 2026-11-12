@@ -1,0 +1,33 @@
+[package]
+name = "rune-securitytxt"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Parse and validate security.txt files (RFC 9116): fields, expiry, canonical URIs and OpenPGP cleartext signatures"
+license.workspace = true
+keywords = ["security-txt", "rfc9116", "vulnerability", "disclosure", "parser"]
+categories = ["web-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-securitytxt"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## The `rune-securitytxt` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-finding.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

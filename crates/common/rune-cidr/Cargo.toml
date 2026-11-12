@@ -1,0 +1,26 @@
+[package]
+name = "rune-cidr"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "CIDR (IPv4/IPv6) parsing, membership and range math (expand, split, aggregate, overlaps) — no dependencies beyond std"
+license.workspace = true
+keywords = ["cidr", "ip", "network", "security", "subnet"]
+categories = ["network-programming", "parsing"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+
+[dependencies]
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

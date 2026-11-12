@@ -1,0 +1,6 @@
+admin
+backup
+.git
+# not a comment in wordlists unless asked
+wp-admin
+server-status

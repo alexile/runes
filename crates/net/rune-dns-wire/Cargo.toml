@@ -1,0 +1,24 @@
+[package]
+name = "rune-dns-wire"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Sans-I/O DNS message parser and builder (RFC 1035, EDNS0, name compression)"
+license.workspace = true
+keywords = ["dns", "parser", "edns", "dnssec", "sans-io"]
+categories = ["network-programming", "parser-implementations", "encoding"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-base64.workspace = true
+rune-hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

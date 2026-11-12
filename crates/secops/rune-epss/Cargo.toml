@@ -1,0 +1,37 @@
+[package]
+name = "rune-epss"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "EPSS exploit-probability scores and the CISA KEV catalog, parsed from their feeds and joined by CVE id"
+license.workspace = true
+keywords = ["epss", "kev", "cve", "vulnerability", "security"]
+categories = ["parser-implementations", "data-structures"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## `EpssSnapshot::from_csv_gz` for the gzip-compressed daily EPSS feed.
+gzip = ["dep:flate2"]
+## Download the feeds over a caller-supplied HTTP transport.
+fetch = ["gzip", "rune-cve/fetch"]
+
+[dependencies]
+flate2 = { workspace = true, optional = true }
+rune-cve.workspace = true
+serde.workspace = true
+# Parse floats exactly, so scores survive a CSV/JSON round trip bit for bit.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

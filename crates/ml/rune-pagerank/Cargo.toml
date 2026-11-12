@@ -1,0 +1,31 @@
+[package]
+name = "rune-pagerank"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "PageRank — score graph nodes by importance via random-walk convergence"
+license.workspace = true
+keywords = ["pagerank", "graph", "ranking", "network", "machine-learning"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-pagerank"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_pagerank"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

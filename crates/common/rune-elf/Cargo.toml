@@ -1,0 +1,36 @@
+[package]
+name = "rune-elf"
+version = "0.4.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Lightweight ELF binary parser: header, sections, segments, security flags (PIE, NX, RELRO, stack canary, FORTIFY)"
+license.workspace = true
+keywords = ["elf", "binary", "security", "forensics", "analysis"]
+categories = ["command-line-utilities", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-elf"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

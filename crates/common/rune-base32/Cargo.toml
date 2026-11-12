@@ -1,0 +1,36 @@
+[package]
+name = "rune-base32"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Base32 encode/decode — RFC 4648 standard and hex alphabets, pure Rust"
+license.workspace = true
+keywords = ["base32", "encoding", "decoding", "rfc4648"]
+categories = ["command-line-utilities", "encoding"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-base32"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

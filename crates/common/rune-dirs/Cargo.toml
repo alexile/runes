@@ -1,0 +1,22 @@
+[package]
+name = "rune-dirs"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Per-app config, cache, data and state directories (XDG, macOS, Windows) from a caller-supplied environment"
+license.workspace = true
+keywords = ["xdg", "directories", "config", "cache", "appdata"]
+categories = ["filesystem", "config", "os"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

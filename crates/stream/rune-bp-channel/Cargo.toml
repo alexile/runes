@@ -1,0 +1,34 @@
+[package]
+name = "rune-bp-channel"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Bounded channel wrapper with configurable backpressure policy: drop-oldest, drop-newest, block"
+license.workspace = true
+keywords = ["channel", "backpressure", "bounded", "queue", "concurrency"]
+categories = ["concurrency", "data-structures", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-bp-channel"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_bp_channel"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

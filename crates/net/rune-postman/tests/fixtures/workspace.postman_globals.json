@@ -1,0 +1,21 @@
+{
+	"id": "5c2a9b8e-1d4f-4b0a-9e3c-7f6d5a4b3c21",
+	"values": [
+		{
+			"key": "partnerKey",
+			"value": "global-partner-key",
+			"type": "secret",
+			"enabled": true
+		},
+		{
+			"key": "baseUrl",
+			"value": "https://global.example.test",
+			"type": "default",
+			"enabled": true
+		}
+	],
+	"name": "My Workspace Globals",
+	"_postman_variable_scope": "globals",
+	"_postman_exported_at": "2024-03-04T10:11:40.001Z",
+	"_postman_exported_using": "Postman/10.24.3"
+}

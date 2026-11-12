@@ -1,0 +1,28 @@
+[package]
+name = "rune-notify"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Notification sinks for findings and alerts: Slack, Discord, generic JSON webhook and Jira, over a caller-supplied HTTP transport"
+license.workspace = true
+keywords = ["notification", "slack", "discord", "jira", "webhook"]
+categories = ["web-programming", "api-bindings"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+rune-base64.workspace = true
+rune-finding.workspace = true
+rune-retry-queue.workspace = true
+rune-secret-ref.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

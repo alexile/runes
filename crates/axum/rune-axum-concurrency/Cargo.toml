@@ -1,0 +1,27 @@
+[package]
+name = "rune-axum-concurrency"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Concurrency limit middleware for Axum — bounded in-flight requests with 503 load shedding and metrics"
+license.workspace = true
+keywords = ["axum", "middleware", "concurrency", "load-shedding", "tower"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+http.workspace = true
+pin-project-lite.workspace = true
+tower.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["full", "test-util"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

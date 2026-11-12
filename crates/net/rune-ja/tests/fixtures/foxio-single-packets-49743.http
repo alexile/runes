@@ -1,0 +1,9 @@
+GET /maps/api/js/QuotaService.RecordEvent?1shttp%3A%2F%2Fwhc.unesco.org%2Fen%2Finteractive-map%2F&7s164tbp&10e1&callback=_xdc_._iqnmv1&token=71150 HTTP/1.1
+Accept: application/javascript, */*;q=0.8
+Referer: http://whc.unesco.org/en/interactive-map/
+Accept-Language: en-US
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/12.10240
+Accept-Encoding: gzip, deflate
+Host: maps.googleapis.com
+Connection: Keep-Alive
+

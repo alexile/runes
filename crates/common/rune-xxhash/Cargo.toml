@@ -1,0 +1,33 @@
+[package]
+name = "rune-xxhash"
+version = "0.2.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "xxHash (xxh32 / xxh64) — extremely fast non-cryptographic hash, pure Rust"
+license.workspace = true
+keywords = ["xxhash", "hash", "checksum", "fast", "non-cryptographic"]
+categories = ["command-line-utilities", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-xxhash"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

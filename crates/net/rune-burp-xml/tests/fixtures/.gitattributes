@@ -1,0 +1,2 @@
+# Burp stores raw HTTP messages with CRLF line ends; keep them byte for byte.
+*.xml -text

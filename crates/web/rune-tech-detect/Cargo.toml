@@ -1,0 +1,37 @@
+[package]
+name = "rune-tech-detect"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Wappalyzer-style technology fingerprinting engine: header, cookie, HTML, script, meta, URL and favicon-hash rules with versions and confidence"
+license.workspace = true
+keywords = ["wappalyzer", "fingerprint", "technology", "detection", "recon"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+# Kept unpublished while rune-http-model and rune-matchers (dependencies)
+# are unpublished.
+publish = false
+
+[features]
+## Serialize and deserialize rules and detections with serde.
+serde = ["dep:serde"]
+
+[dependencies]
+regex.workspace = true
+rune-favicon-hash.workspace = true
+rune-http-model.workspace = true
+rune-matchers.workspace = true
+serde = { workspace = true, optional = true }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

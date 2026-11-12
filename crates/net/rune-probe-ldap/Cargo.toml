@@ -1,0 +1,25 @@
+[package]
+name = "rune-probe-ldap"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Read-only LDAP probe: rootDSE read, StartTLS offer and opt-in anonymous-bind detection"
+license.workspace = true
+keywords = ["ldap", "probe", "active-directory", "rootdse", "security"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-service-probe.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rune-service-probe = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,43 @@
+[package]
+name = "rune-cve"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "CVE and NVD 2.0 record model with CPE 2.3 parsing and version-range matching"
+license.workspace = true
+keywords = ["cve", "nvd", "cpe", "vulnerability", "security"]
+categories = ["parser-implementations", "data-structures"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-cve"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## NVD CVE API 2.0 queries and paging over a caller-supplied HTTP transport.
+fetch = []
+## The `rune-cve` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-cvss.workspace = true
+rune-finding.workspace = true
+serde.workspace = true
+# Parse floats exactly, so CVSS scores survive a round trip bit for bit.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

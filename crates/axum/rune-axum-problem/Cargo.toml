@@ -1,0 +1,39 @@
+[package]
+name = "rune-axum-problem"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "RFC 9457 problem details for Axum — application/problem+json error responses with extensions, plus a layer for bare error statuses"
+license.workspace = true
+keywords = ["axum", "problem-details", "rfc9457", "error", "tower"]
+categories = ["web-programming", "web-programming::http-server"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+default = ["axum"]
+## `impl axum::response::IntoResponse for Problem`, so handlers can return
+## `Result<T, Problem>`.
+axum = ["dep:axum"]
+
+[dependencies]
+axum = { workspace = true, optional = true }
+http.workspace = true
+http-body.workspace = true
+pin-project-lite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tower.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+http-body-util.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

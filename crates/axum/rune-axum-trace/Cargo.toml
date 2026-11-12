@@ -1,0 +1,38 @@
+[package]
+name = "rune-axum-trace"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "One Axum layer for OpenTelemetry traces (OTLP/gRPC), Prometheus HTTP metrics and redacted access logs"
+license.workspace = true
+keywords = ["axum", "opentelemetry", "tracing", "metrics", "middleware"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+axum.workspace = true
+tower-layer.workspace = true
+tower-service.workspace = true
+http.workspace = true
+pin-project-lite.workspace = true
+opentelemetry = { workspace = true, features = ["trace"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "rt-tokio"] }
+opentelemetry-otlp = { workspace = true, features = ["grpc-tonic", "trace"] }
+opentelemetry-http = "0.31"
+opentelemetry-semantic-conventions = "0.31"
+rune-log.workspace = true
+rune-metrics = { workspace = true, features = ["tower"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+axum.workspace = true
+serde_json.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

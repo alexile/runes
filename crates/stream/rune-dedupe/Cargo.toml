@@ -1,0 +1,34 @@
+[package]
+name = "rune-dedupe"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Idempotency/dedup filter over a keyed, windowed stream"
+license.workspace = true
+keywords = ["dedup", "idempotency", "streaming", "cache", "window"]
+categories = ["data-structures", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-dedupe"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_dedupe"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

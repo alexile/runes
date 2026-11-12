@@ -1,0 +1,13 @@
+POST /RT HTTP/1.1
+Accept: text/html, application/xhtml+xml, image/jxr, */*
+Referer: http://www.shangri-la.com/
+Accept-Language: en-US
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/12.10240
+Content-Type: application/x-www-form-urlencoded
+Accept-Encoding: gzip, deflate
+Host: www.tamgrt.com
+Content-Length: 43
+Connection: Keep-Alive
+Cache-Control: no-cache
+Cookie: RT=%1%enc%3Atg%2FlU7zufFPUle8wLxga3M9JuU9Wqi9L5JCsWOqGF5aUK4qCG413AHFq%2BvIG1jhcNox8JbUSTxk%3D; ServerPool=R
+

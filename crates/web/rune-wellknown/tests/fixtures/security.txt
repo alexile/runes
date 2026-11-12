@@ -1,0 +1,15 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Canonical: https://example.com/.well-known/security.txt
+Contact: mailto:security@example.com
+Contact: https://example.com/security/report
+Encryption: https://example.com/pgp-key.txt
+Policy: https://example.com/security/policy
+Preferred-Languages: en, de
+Expires: 2027-01-31T23:00:00.000Z
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEEexampleexampleexampleexampleexampleFAmexample
+=abcd
+-----END PGP SIGNATURE-----

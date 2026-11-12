@@ -1,0 +1,71 @@
+rune-taxonomy
+Copyright (c) 2026 alexile. The code is licensed under the MIT licence.
+
+The embedded datasets in src/data/ are generated from the third-party
+sources listed in data/sources.toml, under the terms below.
+
+-------------------------------------------------------------------------------
+MITRE CWE, CAPEC and ATT&CK (src/data/cwe.rs, capec.rs, attack.rs, and the
+OWASP Top 10 2021 mapping in owasp.rs, which comes from the CWE catalogue)
+-------------------------------------------------------------------------------
+
+CWE(TM) - Common Weakness Enumeration, version 5.0
+Copyright (c) 2006-2026, The MITRE Corporation. CWE and the CWE logo are
+trademarks of The MITRE Corporation.
+https://cwe.mitre.org/about/termsofuse.html
+
+CAPEC(TM) - Common Attack Pattern Enumeration and Classification, version 3.9
+Copyright (c) 2007-2026, The MITRE Corporation. CAPEC and the CAPEC logo are
+trademarks of The MITRE Corporation.
+https://capec.mitre.org/about/termsofuse.html
+
+MITRE ATT&CK(R) Enterprise, version 20.1
+(c) 2026 The MITRE Corporation. This work is reproduced and distributed with
+the permission of The MITRE Corporation. MITRE ATT&CK and ATT&CK are
+registered trademarks of The MITRE Corporation.
+https://attack.mitre.org/resources/legal-and-branding/terms-of-use/
+
+Licence, as stated by MITRE for each of CWE, CAPEC and ATT&CK:
+
+  The MITRE Corporation (MITRE) hereby grants you a non-exclusive,
+  royalty-free license to use [CWE / CAPEC / ATT&CK] for research,
+  development, and commercial purposes. Any copy you make for such purposes
+  is authorized provided that you reproduce MITRE's copyright designation and
+  this license in any such copy.
+
+  DISCLAIMERS: ALL DOCUMENTS AND THE INFORMATION CONTAINED THEREIN ARE
+  PROVIDED ON AN "AS IS" BASIS AND THE CONTRIBUTOR, THE ORGANIZATION HE/SHE
+  REPRESENTS OR IS SPONSORED BY (IF ANY), THE MITRE CORPORATION, ITS BOARD
+  OF TRUSTEES, OFFICERS, AGENTS, AND EMPLOYEES, DISCLAIM ALL WARRANTIES,
+  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTY THAT THE USE
+  OF THE INFORMATION THEREIN WILL NOT INFRINGE ANY RIGHTS OR ANY IMPLIED
+  WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE.
+
+What is embedded: entry ids, names, status, abstraction, the CWE
+description/summary paragraph, and the relationships between entries
+(ChildOf, CWE-CAPEC, CAPEC-ATT&CK, revocations, tactics). Names and
+descriptions are reproduced as published, with whitespace normalised.
+
+-------------------------------------------------------------------------------
+OWASP Top 10 2025, OWASP API Security Top 10 2023, OWASP ASVS 4.0.3 and 5.0.0
+(src/data/owasp.rs, asvs.rs)
+-------------------------------------------------------------------------------
+
+OWASP Top 10 2025, https://owasp.org/Top10/
+OWASP API Security Top 10 2023, https://owasp.org/API-Security/
+OWASP Application Security Verification Standard 4.0.3 and 5.0.0,
+https://owasp.org/www-project-application-security-verification-standard/
+By the OWASP Foundation and the projects' contributors. These works are
+published under the Creative Commons Attribution-ShareAlike 4.0 licence
+(https://creativecommons.org/licenses/by-sa/4.0/).
+
+What is embedded: only identifiers (A05:2025, API1:2023, V5.3.4), category,
+chapter and section titles, verification levels, and the lists of CWE ids
+mapped to each category or requirement. No descriptive text of these works
+(risk descriptions, prevention guidance, requirement wording) is copied.
+Identifiers, short titles and lists of mapped ids are factual data rather
+than creative expression, which is why this crate as a whole remains under
+the MIT licence; the OWASP Foundation is credited here as their source.
+Consult the standards themselves, under CC BY-SA 4.0, for their content.
+"OWASP" is a registered trademark of the OWASP Foundation; no endorsement is
+implied.

@@ -1,0 +1,32 @@
+[package]
+name = "rune-chain-anthropic"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Anthropic Claude LLM provider for the rune-chain framework — Messages API client with streaming, prompt caching, thinking and structured output"
+license.workspace = true
+keywords = ["anthropic", "claude", "llm", "langchain", "ai"]
+categories = ["asynchronous", "web-programming::http-client"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-chain-core.workspace = true
+async-trait.workspace = true
+async-stream.workspace = true
+futures.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+serde.workspace = true
+serde_json.workspace = true
+rune-sse = { workspace = true, features = ["stream"] }
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
+tokio-test.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

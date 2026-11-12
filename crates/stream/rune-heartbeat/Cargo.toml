@@ -1,0 +1,31 @@
+[package]
+name = "rune-heartbeat"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Missing-heartbeat/liveness detector over a keyed stream of pings"
+license.workspace = true
+keywords = ["heartbeat", "liveness", "monitoring", "timeout", "streaming"]
+categories = ["data-structures", "algorithms", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-heartbeat"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_heartbeat"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

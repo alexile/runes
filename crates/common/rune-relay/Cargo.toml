@@ -1,0 +1,18 @@
+[package]
+name = "rune-relay"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Bidirectional byte relay between two stream halves, plus a ready-made TCP-listener-to-Unix-domain-socket bridge built on it — generic stream plumbing, no protocol awareness"
+license.workspace = true
+keywords = ["proxy", "relay", "unix-socket", "tcp", "networking"]
+categories = ["network-programming", "concurrency"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+
+[lints]
+workspace = true

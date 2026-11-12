@@ -1,0 +1,34 @@
+[package]
+name = "rune-tdigest"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Streaming quantile/percentile estimator (t-digest-style) for large or unbounded series"
+license.workspace = true
+keywords = ["quantile", "percentile", "tdigest", "streaming", "statistics"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-tdigest"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_tdigest"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "rune-log"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Structured tracing logging layer (text or JSON) with field-level secret and PII redaction, configured from env-style values"
+license.workspace = true
+keywords = ["logging", "tracing", "json", "redact", "pii"]
+categories = ["development-tools::debugging"]
+repository.workspace = true
+readme = "README.md"
+# Published: rune-axum-trace (published) depends on it.
+publish = true
+
+[dependencies]
+rune-redact = { workspace = true, features = ["tracing"] }
+thiserror.workspace = true
+tracing-core.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,42 @@
+[package]
+name = "rune-metrics"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Metrics registry with counters, gauges and histograms plus a Prometheus / OpenMetrics text exporter, process collector and HTTP middleware"
+license.workspace = true
+keywords = ["metrics", "prometheus", "openmetrics", "monitoring", "observability"]
+categories = ["development-tools::profiling", "web-programming"]
+repository.workspace = true
+readme = "README.md"
+# Published: rune-axum-trace (published) depends on it.
+publish = true
+
+[features]
+## Tower middleware recording HTTP server metrics, and a `/metrics`
+## endpoint service with content negotiation.
+tower = ["dep:http", "dep:pin-project-lite", "dep:tower-layer", "dep:tower-service"]
+
+[dependencies]
+http = { workspace = true, optional = true }
+pin-project-lite = { workspace = true, optional = true }
+thiserror.workspace = true
+tower-layer = { workspace = true, optional = true }
+tower-service = { workspace = true, optional = true }
+
+[dev-dependencies]
+axum.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[[test]]
+name = "endpoint"
+required-features = ["tower"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

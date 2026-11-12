@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!-- WSDL 2.0 primer, example 2-1 (GreatH hotel reservation service,
+     https://www.w3.org/TR/wsdl20-primer/), with a second operation on an
+     extended interface. -->
+<description
+    xmlns="http://www.w3.org/ns/wsdl"
+    targetNamespace="http://greath.example.com/2004/wsdl/resSvc"
+    xmlns:tns="http://greath.example.com/2004/wsdl/resSvc"
+    xmlns:ghns="http://greath.example.com/2004/schemas/resSvc"
+    xmlns:wsoap="http://www.w3.org/ns/wsdl/soap"
+    xmlns:whttp="http://www.w3.org/ns/wsdl/http"
+    xmlns:wsdlx="http://www.w3.org/ns/wsdl-extensions">
+
+  <documentation>
+    This document describes the GreatH Web service.
+  </documentation>
+
+  <types>
+    <xs:schema
+        xmlns:xs="http://www.w3.org/2001/XMLSchema"
+        targetNamespace="http://greath.example.com/2004/schemas/resSvc"
+        xmlns="http://greath.example.com/2004/schemas/resSvc">
+
+      <xs:element name="checkAvailability" type="tCheckAvailability"/>
+      <xs:complexType name="tCheckAvailability">
+        <xs:sequence>
+          <xs:element name="checkInDate" type="xs:date"/>
+          <xs:element name="checkOutDate" type="xs:date"/>
+          <xs:element name="roomType" type="xs:string"/>
+        </xs:sequence>
+      </xs:complexType>
+
+      <xs:element name="checkAvailabilityResponse" type="xs:double"/>
+      <xs:element name="invalidDataError" type="xs:string"/>
+
+      <xs:element name="makeReservation">
+        <xs:complexType>
+          <xs:sequence>
+            <xs:element name="checkInDate" type="xs:date"/>
+            <xs:element name="nights" type="xs:positiveInteger"/>
+          </xs:sequence>
+        </xs:complexType>
+      </xs:element>
+    </xs:schema>
+  </types>
+
+  <interface name="baseInterface">
+    <operation name="opMakeReservation"
+        pattern="http://www.w3.org/ns/wsdl/in-out">
+      <input messageLabel="In" element="ghns:makeReservation"/>
+      <output messageLabel="Out" element="#any"/>
+    </operation>
+  </interface>
+
+  <interface name="reservationInterface" extends="tns:baseInterface">
+    <fault name="invalidDataFault" element="ghns:invalidDataError"/>
+    <operation name="opCheckAvailability"
+        pattern="http://www.w3.org/ns/wsdl/in-out"
+        style="http://www.w3.org/ns/wsdl/style/iri"
+        wsdlx:safe="true">
+      <documentation>Checks room availability.</documentation>
+      <input messageLabel="In" element="ghns:checkAvailability"/>
+      <output messageLabel="Out" element="ghns:checkAvailabilityResponse"/>
+      <outfault ref="tns:invalidDataFault" messageLabel="Out"/>
+    </operation>
+  </interface>
+
+  <binding name="reservationSOAPBinding"
+      interface="tns:reservationInterface"
+      type="http://www.w3.org/ns/wsdl/soap"
+      wsoap:protocol="http://www.w3.org/2003/05/soap/bindings/HTTP/">
+    <fault ref="tns:invalidDataFault" wsoap:code="soap:Sender"/>
+    <operation ref="tns:opCheckAvailability"
+        wsoap:mep="http://www.w3.org/2003/05/soap/mep/soap-response"
+        wsoap:action="http://greath.example.com/2004/opCheckAvailability"/>
+    <operation ref="tns:opMakeReservation"/>
+  </binding>
+
+  <binding name="reservationHTTPBinding"
+      interface="tns:reservationInterface"
+      type="http://www.w3.org/ns/wsdl/http"/>
+
+  <service name="reservationService" interface="tns:reservationInterface">
+    <endpoint name="reservationEndpoint"
+        binding="tns:reservationSOAPBinding"
+        address="http://greath.example.com/2004/reservation"/>
+    <endpoint name="reservationHTTPEndpoint"
+        binding="tns:reservationHTTPBinding"
+        address="http://greath.example.com/2004/"/>
+  </service>
+</description>

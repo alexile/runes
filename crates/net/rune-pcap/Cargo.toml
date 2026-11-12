@@ -1,0 +1,32 @@
+[package]
+name = "rune-pcap"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Streaming pcap and pcapng reader and writer with link-type aware dissection via rune-packet"
+license.workspace = true
+keywords = ["pcap", "pcapng", "capture", "wireshark", "tcpdump"]
+categories = ["network-programming", "parser-implementations", "encoding"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-pcap"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-packet.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

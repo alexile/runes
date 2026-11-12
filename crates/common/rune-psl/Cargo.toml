@@ -1,0 +1,44 @@
+[package]
+name = "rune-psl"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Public Suffix List: public suffix and registrable domain (eTLD+1) lookups over an embedded, pinned list"
+# The embedded list (src/data.rs) is generated from the Public Suffix List,
+# which is MPL-2.0; see `license-exception` below.
+license = "MIT AND MPL-2.0"
+keywords = ["psl", "public-suffix", "etld", "domain", "dns"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+# The PSL test suite and the proptests are test-only.
+exclude = ["tests/"]
+
+[[bin]]
+name = "rune-psl"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["embedded"]
+## The list pinned in this release (`List::embedded`, about 10,400 rules).
+embedded = []
+## `List::parse`: load a newer or custom list at run time.
+runtime = []
+## The `rune-psl` command-line tool.
+cli = ["dep:clap", "embedded", "runtime"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

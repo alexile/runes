@@ -1,0 +1,38 @@
+[package]
+name = "rune-wordlist"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Versioned, Ed25519-signed wordlist and payload pack loader with streaming, tamper-checked iteration and safe updates"
+license.workspace = true
+keywords = ["wordlist", "payload", "fuzzing", "ed25519", "security"]
+categories = ["command-line-utilities", "cryptography", "filesystem"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-wordlist"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## The `rune-wordlist` binary (keygen, build, verify, cat, install).
+cli = ["dep:clap", "dep:rand"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+ed25519-dalek = "2.2"
+rand = { workspace = true, optional = true }
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

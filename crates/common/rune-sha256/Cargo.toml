@@ -1,0 +1,28 @@
+[package]
+name = "rune-sha256"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Compute SHA-256 hashes of byte slices and files, returning lowercase hex strings"
+license.workspace = true
+keywords = ["sha256", "hash", "checksum", "cryptography", "security"]
+categories = ["cryptography", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-sha256"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = []
+
+[dependencies]
+sha2.workspace = true
+rune-hex.workspace = true
+
+[lints]
+workspace = true

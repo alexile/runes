@@ -1,0 +1,98 @@
+<?xml version="1.0"?>
+<!-- WSDL 1.1 note, examples 4 and 5 combined: an RPC/encoded SOAP 1.1
+     binding with a SOAP header, type-based parts and an HTTP GET binding
+     that is not SOAP. -->
+<definitions name="StockQuote"
+          targetNamespace="http://example.com/stockquote.wsdl"
+          xmlns:tns="http://example.com/stockquote.wsdl"
+          xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+          xmlns:xsd1="http://example.com/stockquote.xsd"
+          xmlns:soapenc="http://schemas.xmlsoap.org/soap/encoding/"
+          xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+          xmlns:http="http://schemas.xmlsoap.org/wsdl/http/"
+          xmlns="http://schemas.xmlsoap.org/wsdl/">
+
+    <types>
+       <schema targetNamespace="http://example.com/stockquote.xsd"
+               xmlns="http://www.w3.org/2001/XMLSchema">
+           <import namespace="http://example.com/common.xsd" schemaLocation="common.xsd"/>
+           <complexType name="TimePeriod">
+              <all>
+                  <element name="startTime" type="xsd:dateTime"/>
+                  <element name="endTime" type="xsd:dateTime"/>
+              </all>
+           </complexType>
+           <simpleType name="Exchange">
+              <restriction base="xsd:string">
+                  <enumeration value="NYSE"/>
+                  <enumeration value="NASDAQ"/>
+              </restriction>
+           </simpleType>
+           <element name="Credentials">
+              <complexType>
+                  <sequence>
+                      <element name="user" type="xsd:string"/>
+                      <element name="token" type="xsd:base64Binary" nillable="true"/>
+                  </sequence>
+                  <attribute name="realm" type="xsd:string" use="required"/>
+              </complexType>
+           </element>
+       </schema>
+    </types>
+
+    <message name="GetTradePricesInput">
+        <part name="tickerSymbol" type="xsd:string"/>
+        <part name="exchange" type="xsd1:Exchange"/>
+        <part name="timePeriod" type="xsd1:TimePeriod"/>
+    </message>
+    <message name="GetTradePricesOutput">
+        <part name="result" type="soapenc:Array"/>
+        <part name="frequency" type="xsd:float"/>
+    </message>
+    <message name="AuthHeader">
+        <part name="auth" element="xsd1:Credentials"/>
+    </message>
+
+    <portType name="StockQuotePortType">
+        <operation name="GetTradePrices">
+           <documentation>Prices of a symbol over a period.</documentation>
+           <input message="tns:GetTradePricesInput"/>
+           <output message="tns:GetTradePricesOutput"/>
+           <fault name="UnknownSymbol" message="tns:GetTradePricesOutput"/>
+        </operation>
+    </portType>
+
+    <binding name="StockQuoteSoapBinding" type="tns:StockQuotePortType">
+        <soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/>
+        <operation name="GetTradePrices">
+           <soap:operation soapAction="http://example.com/GetTradePrices"/>
+           <input>
+               <soap:body use="encoded" namespace="http://example.com/stockquote"
+                          encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+               <soap:header message="tns:AuthHeader" part="auth" use="literal"/>
+           </input>
+           <output>
+               <soap:body use="encoded" namespace="http://example.com/stockquote"
+                          encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/>
+           </output>
+        </operation>
+    </binding>
+
+    <binding name="StockQuoteHttpBinding" type="tns:StockQuotePortType">
+        <http:binding verb="GET"/>
+        <operation name="GetTradePrices">
+           <http:operation location="/prices"/>
+           <input><http:urlEncoded/></input>
+           <output/>
+        </operation>
+    </binding>
+
+    <service name="StockQuoteService">
+        <port name="StockQuotePort" binding="tns:StockQuoteSoapBinding">
+           <soap:address location="http://example.com/stockquote"/>
+        </port>
+        <port name="StockQuoteHttpPort" binding="tns:StockQuoteHttpBinding">
+           <http:address location="http://example.com/"/>
+        </port>
+    </service>
+</definitions>

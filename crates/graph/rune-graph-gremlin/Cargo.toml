@@ -1,0 +1,22 @@
+[package]
+name = "rune-graph-gremlin"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Gremlin-inspired graph traversal engine for rune-graph: typed step pipeline, predicates, repeat, path tracking"
+license.workspace = true
+keywords = ["graph", "gremlin", "traversal", "query", "property-graph"]
+categories = ["data-structures", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-graph.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

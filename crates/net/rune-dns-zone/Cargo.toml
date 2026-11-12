@@ -1,0 +1,26 @@
+[package]
+name = "rune-dns-zone"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Sans-I/O DNS zone-file (RFC 1035 master format) parser and writer with AXFR/IXFR reassembly"
+license.workspace = true
+keywords = ["dns", "zone-file", "axfr", "ixfr", "sans-io"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+rune-base32.workspace = true
+rune-base64.workspace = true
+rune-dns-wire.workspace = true
+rune-hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

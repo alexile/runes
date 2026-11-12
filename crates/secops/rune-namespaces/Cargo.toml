@@ -1,0 +1,33 @@
+[package]
+name = "rune-namespaces"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Linux namespace process isolation: spawn children under bubblewrap or unshare(2) with an ordered mount plan and environment allowlist"
+license.workspace = true
+keywords = ["namespaces", "sandbox", "bubblewrap", "security", "linux"]
+categories = ["os::linux-apis", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-namespaces"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+libc.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

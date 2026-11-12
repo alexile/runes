@@ -1,0 +1,27 @@
+[
+  {
+    "check_id": "sqli.boolean",
+    "title": "Boolean-based blind SQL injection",
+    "severity": "critical",
+    "confidence": "certain",
+    "location": { "location_kind": "url", "url": "https://shop.test/users/7?expand=orders", "parameter": "id" },
+    "taxonomy": [ { "framework": "cwe", "id": "CWE-89" } ],
+    "evidence": [ { "label": "payload", "snippet": "7 AND 1=1" } ]
+  },
+  {
+    "check_id": "xss.reflected",
+    "title": "Reflected cross-site scripting",
+    "severity": "high",
+    "confidence": "firm",
+    "location": { "location_kind": "url", "url": "https://shop.test/search?q=%3Cscript%3E", "parameter": "q" },
+    "taxonomy": [ { "framework": "cwe", "id": "CWE-80" } ]
+  },
+  {
+    "check_id": "headers.hsts_missing",
+    "title": "Strict-Transport-Security header missing",
+    "severity": "low",
+    "confidence": "certain",
+    "location": { "location_kind": "url", "url": "https://shop.test/" },
+    "taxonomy": [ { "framework": "cwe", "id": "CWE-319" } ]
+  }
+]

@@ -1,0 +1,26 @@
+[package]
+name = "rune-axum-timeout"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Request timeout middleware for Axum — per-request deadline with a configurable 504 response, overridable per route"
+license.workspace = true
+keywords = ["axum", "middleware", "timeout", "tower", "security"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+http.workspace = true
+tokio = { workspace = true, features = ["time"] }
+tower.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full", "test-util"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

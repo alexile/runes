@@ -1,0 +1,56 @@
+[package]
+name = "rune-leak"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Scan source trees and git history for hardcoded secrets with a data-driven ruleset and entropy heuristics, reporting rune-finding findings"
+license.workspace = true
+keywords = ["secrets", "security", "scanning", "credentials", "leak"]
+categories = ["command-line-utilities", "development-tools"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-leak"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+## The `rune-leak` command-line tool.
+cli = ["dep:clap", "toml"]
+## `Serialize`/`Deserialize` for `SecretRule` and `ScanReport` (findings use
+## the rune-finding JSON shape).
+serde = ["dep:serde", "rune-finding/serde"]
+## Load user rules from TOML (`rules_from_toml`). Implies `serde`.
+toml = ["serde", "dep:toml"]
+
+[dependencies]
+regex.workspace = true
+rune-entropy.workspace = true
+rune-finding.workspace = true
+rune-regex-sec.workspace = true
+thiserror.workspace = true
+walkdir = "2"
+clap = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+toml = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[[test]]
+name = "toml_rules"
+required-features = ["toml"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

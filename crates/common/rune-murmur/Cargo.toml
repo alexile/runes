@@ -1,0 +1,33 @@
+[package]
+name = "rune-murmur"
+version = "0.2.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "MurmurHash3 — pure-Rust implementation of the 32-bit and 128-bit variants"
+license.workspace = true
+keywords = ["murmurhash", "hash", "checksum", "non-cryptographic", "murmur3"]
+categories = ["command-line-utilities", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-murmur"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

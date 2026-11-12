@@ -1,0 +1,36 @@
+[package]
+name = "rune-base"
+version = "0.3.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Encode and decode integers and byte strings in any numeric base with a custom alphabet"
+license.workspace = true
+keywords = ["base-conversion", "encoding", "radix", "alphabet", "encoding"]
+categories = ["command-line-utilities", "encoding"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-base"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

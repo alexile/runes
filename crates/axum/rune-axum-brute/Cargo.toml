@@ -1,0 +1,29 @@
+[package]
+name = "rune-axum-brute"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Account lockout middleware for Axum — lock out repeated authentication failures per key, with spoof-resistant client IPs and bounded state"
+license.workspace = true
+keywords = ["axum", "brute-force", "lockout", "security", "authentication"]
+categories = ["web-programming::http-server", "authentication"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+axum.workspace = true
+tower-layer.workspace = true
+tower-service.workspace = true
+http.workspace = true
+pin-project-lite.workspace = true
+rune-axum-ipfilter.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,5 @@
+{"model":"qwen3","created_at":"2025-05-01T12:00:00Z","message":{"role":"assistant","content":"","thinking":"The user wants weather."},"done":false}
+{"model":"qwen3","created_at":"2025-05-01T12:00:00Z","message":{"role":"assistant","content":"Checking."},"done":false}
+{"model":"qwen3","created_at":"2025-05-01T12:00:00Z","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"get_weather","arguments":{"city":"Oslo"}}}]},"done":false}
+{"model":"qwen3","created_at":"2025-05-01T12:00:00Z","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_xyz","function":{"name":"get_time","arguments":{"tz":"CET"}}}]},"done":false}
+{"model":"qwen3","created_at":"2025-05-01T12:00:01Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":50,"eval_count":20}

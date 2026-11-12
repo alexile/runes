@@ -1,0 +1,40 @@
+[package]
+name = "rune-axum-mtls"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Mutual-TLS client-certificate extraction for Axum: rustls listener, rune-x509 clientAuth verification, typed extractor"
+license.workspace = true
+keywords = ["axum", "mtls", "client-certificate", "tls", "middleware"]
+categories = ["web-programming::http-server", "authentication", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+# `MtlsListener`: an `axum::serve` listener that terminates TLS with
+# tokio-rustls and exposes the peer certificates as connect info.
+tokio = ["dep:tokio", "dep:tokio-rustls"]
+
+[dependencies]
+axum.workspace = true
+http.workspace = true
+pin-project-lite.workspace = true
+rune-x509.workspace = true
+thiserror.workspace = true
+tower-layer.workspace = true
+tower-service.workspace = true
+# Only with `tokio`. No crypto provider is enabled here: the caller's
+# `rustls::ServerConfig` chooses one.
+tokio = { workspace = true, optional = true, features = ["net", "rt", "sync", "time"] }
+tokio-rustls = { workspace = true, optional = true }
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tokio-rustls = { workspace = true, features = ["ring", "tls12"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

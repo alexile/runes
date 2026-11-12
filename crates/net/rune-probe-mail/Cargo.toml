@@ -1,0 +1,25 @@
+[package]
+name = "rune-probe-mail"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Read-only SMTP/SMTPS and FTP/FTPS probes: greeting banner, EHLO and FEAT capabilities, STARTTLS and AUTH TLS support"
+license.workspace = true
+keywords = ["smtp", "ftp", "starttls", "probe", "security"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-service-probe.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rune-service-probe = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

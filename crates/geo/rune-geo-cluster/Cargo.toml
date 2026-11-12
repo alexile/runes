@@ -1,0 +1,34 @@
+[package]
+name = "rune-geo-cluster"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Spatial clustering of point sets (thin geo-domain wrapper over the existing ml clustering crates)"
+license.workspace = true
+keywords = ["clustering", "geo", "kmeans", "hdbscan", "spatial"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-geo-cluster"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_geo_cluster"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap", "dep:serde_json"]
+
+[dependencies]
+rune-kmeans.workspace = true
+rune-hdbscan.workspace = true
+clap = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[lints]
+workspace = true

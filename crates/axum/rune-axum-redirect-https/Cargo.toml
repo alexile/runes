@@ -1,0 +1,25 @@
+[package]
+name = "rune-axum-redirect-https"
+version = "0.1.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Redirect HTTP requests to HTTPS — Tower middleware for Axum"
+license.workspace = true
+keywords = ["axum", "https", "redirect", "middleware", "security"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+tower.workspace = true
+http.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

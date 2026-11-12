@@ -1,0 +1,35 @@
+[package]
+name = "rune-labelprop"
+version = "0.1.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Label propagation — semi-supervised node classification via iterative neighbourhood smoothing"
+license.workspace = true
+keywords = ["label-propagation", "graph", "semi-supervised", "classification", "network"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-labelprop"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_labelprop"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+
+[lints]
+workspace = true

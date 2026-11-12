@@ -1,0 +1,38 @@
+[package]
+name = "rune-finding-dedupe"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Cross-scan finding deduplication and correlation: merge findings by fingerprint and track stable issue identity over time"
+license.workspace = true
+keywords = ["security", "finding", "deduplication", "correlation", "aspm"]
+categories = ["data-structures", "development-tools"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## Serialize and deserialize the tracker state, reports and groups with serde,
+## so issue identity persists between runs.
+serde = ["dep:serde", "rune-finding/serde"]
+
+[dependencies]
+rune-finding.workspace = true
+serde = { workspace = true, optional = true }
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
+
+[[test]]
+name = "serde"
+required-features = ["serde"]

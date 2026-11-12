@@ -1,0 +1,27 @@
+[package]
+name = "rune-blake3"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Compute BLAKE3 hashes of byte slices and files — faster than SHA-256 and cryptographically secure"
+license.workspace = true
+keywords = ["blake3", "hash", "checksum", "cryptography", "fast"]
+categories = ["cryptography", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-blake3"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = []
+
+[dependencies]
+blake3 = "1"
+
+[lints]
+workspace = true

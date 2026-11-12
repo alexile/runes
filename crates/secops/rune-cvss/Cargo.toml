@@ -1,0 +1,33 @@
+[package]
+name = "rune-cvss"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "CVSS v3.0, v3.1 and v4.0 vector parsing and scoring, exactly as the FIRST specifications and reference calculators define it"
+license = "MIT AND BSD-2-Clause"
+keywords = ["cvss", "vulnerability", "security", "nvd", "severity"]
+categories = ["parser-implementations", "data-structures"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+# The reference corpora are test-only.
+exclude = ["tests/"]
+
+[features]
+## Serialize vectors as strings and scores as numbers.
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

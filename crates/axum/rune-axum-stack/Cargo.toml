@@ -1,0 +1,54 @@
+[package]
+name = "rune-axum-stack"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "All-in-one middleware stack for Axum — security headers, CSRF, limits, timeouts, CORS, request ids, problem details and health probes"
+license.workspace = true
+keywords = ["axum", "security", "middleware", "tower", "stack"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+# Not publishable until the optional layer crates (rune-axum-timeout,
+# -requestid, -concurrency, -compression, -problem, -health, -cors, -cache,
+# rune-tower-circuitbreaker, rune-tower-retry) are released: a published crate
+# cannot depend on `publish = false` ones.
+publish = false
+
+[features]
+## Offer `Content-Encoding: br` in the compression layer.
+br = ["rune-axum-compression/br"]
+## Offer `Content-Encoding: zstd` in the compression layer (builds C libzstd).
+zstd = ["rune-axum-compression/zstd"]
+## Re-export `shutdown_signal()` (Ctrl-C / SIGTERM) from rune-axum-health.
+signal = ["rune-axum-health/signal"]
+
+[dependencies]
+axum.workspace = true
+tower.workspace = true
+rune-axum-cache.workspace = true
+rune-axum-compression.workspace = true
+rune-axum-concurrency.workspace = true
+rune-axum-cors.workspace = true
+rune-axum-csrf.workspace = true
+rune-axum-health.workspace = true
+rune-axum-helmet.workspace = true
+rune-axum-ipfilter.workspace = true
+rune-axum-problem.workspace = true
+rune-axum-ratelimit.workspace = true
+rune-axum-redirect-https.workspace = true
+rune-axum-requestid.workspace = true
+rune-axum-size.workspace = true
+rune-axum-timeout.workspace = true
+rune-tower-circuitbreaker.workspace = true
+rune-tower-retry.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }
+tower = { workspace = true, features = ["util"] }
+http.workspace = true
+http-body-util.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,37 @@
+[package]
+name = "rune-x509"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "X.509 certificate analysis: typed summaries, weak-crypto flags, chain building and path validation, hostname checks"
+license.workspace = true
+keywords = ["x509", "certificate", "tls", "pki", "chain"]
+categories = ["network-programming", "cryptography", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-x509"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-base64.workspace = true
+rune-host-match = { workspace = true, features = ["psl"] }
+rune-idna.workspace = true
+rune-sha256.workspace = true
+thiserror.workspace = true
+# DER parsing; `verify` checks signatures with ring.
+x509-parser = { version = "0.18.1", features = ["verify"] }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

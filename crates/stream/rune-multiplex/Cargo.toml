@@ -1,0 +1,31 @@
+[package]
+name = "rune-multiplex"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Fan-in merge of N ordered sources into one interleaved, time-ordered stream"
+license.workspace = true
+keywords = ["merge", "multiplex", "streaming", "k-way-merge", "fan-in"]
+categories = ["data-structures", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-multiplex"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_multiplex"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

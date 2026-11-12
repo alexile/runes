@@ -1,0 +1,36 @@
+[package]
+name = "rune-pe"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Lightweight PE (Windows executable) parser: headers, sections, imports, exports, security flags (ASLR, DEP, CFG, SafeSEH)"
+license.workspace = true
+keywords = ["pe", "windows", "binary", "security", "forensics"]
+categories = ["command-line-utilities", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-pe"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

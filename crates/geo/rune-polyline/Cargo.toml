@@ -1,0 +1,35 @@
+[package]
+name = "rune-polyline"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Google polyline algorithm encode/decode"
+license.workspace = true
+keywords = ["polyline", "encode", "geospatial", "gis", "maps"]
+categories = ["algorithms", "encoding", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-polyline"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_polyline"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

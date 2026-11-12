@@ -1,0 +1,27 @@
+[package]
+name = "rune-har"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "HAR 1.2 (HTTP Archive) reader and writer over rune-http-model, tolerant of Chrome, Firefox and Charles exports"
+license.workspace = true
+keywords = ["har", "http", "archive", "traffic", "devtools"]
+categories = ["parser-implementations", "web-programming", "encoding"]
+repository.workspace = true
+readme = "README.md"
+# Kept unpublished while rune-http-model is (a published crate may not
+# depend on an unpublished one).
+publish = false
+
+[dependencies]
+rune-http-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

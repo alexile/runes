@@ -1,0 +1,31 @@
+[package]
+name = "rune-geofence"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Point-in-polygon / point-in-circle containment, plus enter/exit event detection over a position stream"
+license.workspace = true
+keywords = ["geofence", "geo", "polygon", "containment", "gps"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-geofence"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_geofence"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

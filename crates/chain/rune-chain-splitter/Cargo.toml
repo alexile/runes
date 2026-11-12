@@ -1,0 +1,31 @@
+[package]
+name = "rune-chain-splitter"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Text splitters for RAG: semantic (embedding-based), recursive, markdown and token chunking with citation offsets"
+license.workspace = true
+keywords = ["llm", "text-splitting", "rag", "chunking", "langchain"]
+categories = ["text-processing", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = ["embed"]
+## `SemanticChunker::chunk`, which embeds sentences through any
+## `rune_chain_embed::Embedder`. Without it, use `chunk_with_embeddings`.
+embed = ["dep:rune-chain-embed"]
+
+[dependencies]
+rune-chain-embed = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true

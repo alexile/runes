@@ -1,0 +1,34 @@
+[package]
+name = "rune-quantity"
+version = "0.1.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Typed physical-quantity/unit system with compile-time-checked conversions (distance, speed, energy, etc.)"
+license.workspace = true
+keywords = ["units", "quantity", "conversion", "physics", "typed"]
+categories = ["science", "data-structures", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-quantity"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_quantity"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,37 @@
+[package]
+name = "rune-cookie-sec"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Analyze Set-Cookie headers for weak security attributes, reporting rune-finding findings"
+license.workspace = true
+keywords = ["cookie", "set-cookie", "samesite", "security", "headers"]
+categories = ["web-programming", "development-tools"]
+repository.workspace = true
+readme = "README.md"
+# Unpublished while rune-cookie (a dependency) is unpublished
+#.
+publish = false
+
+[[bin]]
+name = "rune-cookie-sec"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## The `rune-cookie-sec` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-cookie.workspace = true
+rune-finding.workspace = true
+rune-http-model.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

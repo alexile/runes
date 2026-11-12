@@ -1,0 +1,33 @@
+[package]
+name = "rune-simhash"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "SimHash and MinHash locality-sensitive signatures with shingling and an online near-duplicate clusterer"
+license.workspace = true
+keywords = ["simhash", "minhash", "lsh", "near-duplicate", "clustering"]
+categories = ["algorithms", "text-processing"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-simhash"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:clap"]
+serde = ["dep:serde"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,37 @@
+[package]
+name = "rune-bbox"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Bounding-box math: union, intersection, containment, clustering/merge of overlapping boxes"
+license.workspace = true
+keywords = ["bbox", "geo", "bounding-box", "geometry", "spatial"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-bbox"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_bbox"
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

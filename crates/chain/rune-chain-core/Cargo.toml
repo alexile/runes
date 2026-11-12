@@ -1,0 +1,32 @@
+[package]
+name = "rune-chain-core"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Core traits and types for the rune-chain LLM orchestration framework"
+license.workspace = true
+keywords = ["llm", "langchain", "ai", "chain", "async"]
+categories = ["asynchronous", "science"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[features]
+# Reusable trait-contract checks (`rune_chain_core::testing`) for implementors' tests.
+testing = []
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tokio-test.workspace = true
+
+[lints]
+workspace = true

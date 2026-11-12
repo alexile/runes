@@ -1,0 +1,49 @@
+[package]
+name = "rune-transform"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Registry of named, chainable byte transforms (encode, decode, hash, compress) built on the rune codecs"
+license.workspace = true
+keywords = ["transform", "encoding", "decoder", "codec", "chain"]
+categories = ["encoding", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-transform"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+flate2.workspace = true
+rune-atbash.workspace = true
+rune-base32.workspace = true
+rune-base64.workspace = true
+rune-binary.workspace = true
+rune-hex.workspace = true
+rune-html-encode.workspace = true
+rune-jwt.workspace = true
+rune-md5.workspace = true
+rune-rot13.workspace = true
+rune-rot47.workspace = true
+rune-sha1.workspace = true
+rune-sha256.workspace = true
+rune-sha512.workspace = true
+rune-url-encode.workspace = true
+rune-xor.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

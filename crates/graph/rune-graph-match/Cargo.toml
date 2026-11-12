@@ -1,0 +1,23 @@
+[package]
+name = "rune-graph-match"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Pattern matching engine for rune-graph: filter (node, edge, node) triples by label, property, or node id"
+license.workspace = true
+keywords = ["graph", "pattern-matching", "query", "property-graph"]
+categories = ["data-structures", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-graph.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rune-graph = { workspace = true, features = ["persist"] }
+
+[lints]
+workspace = true

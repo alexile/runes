@@ -1,0 +1,37 @@
+[package]
+name = "rune-ip-intel"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "IP-reputation provider trait with AbuseIPDB, GreyNoise, Shodan InternetDB and Censys adapters, normalized verdicts, caching and rate limits over a caller-supplied transport"
+license.workspace = true
+keywords = ["ip", "reputation", "threat-intel", "abuseipdb", "greynoise"]
+categories = ["network-programming", "api-bindings"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+default = ["abuseipdb", "greynoise", "shodan", "censys"]
+# One feature per adapter; none adds a dependency except `censys`
+# (base64 for HTTP Basic).
+abuseipdb = []
+greynoise = []
+shodan = []
+censys = ["dep:rune-base64"]
+
+[dependencies]
+rune-base64 = { workspace = true, optional = true }
+rune-epoch.workspace = true
+rune-ip.workspace = true
+rune-secret-ref.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rune-epoch.workspace = true
+
+[lints]
+workspace = true

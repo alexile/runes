@@ -1,0 +1,15 @@
+# Upstream source of rune-psl's embedded list (src/data.rs) and of its
+# conformance suite (tests/tests.txt).
+#
+# Both files are pinned to a commit of https://github.com/publicsuffix/list
+# and by SHA-256; src/data.rs and tests/tests.txt are generated from exactly
+# these files. To update, change `commit`, `date`, both URLs and both
+# `sha256` values together to a newer commit.
+#
+# Licences: public_suffix_list.dat is MPL-2.0, tests.txt is CC0. See NOTICE.
+
+commit = "7786aac8931b7069d6fe2174a7471a54d273d3e6"
+date = "2026-11-11"
+
+list = { url = "https://raw.githubusercontent.com/publicsuffix/list/7786aac8931b7069d6fe2174a7471a54d273d3e6/public_suffix_list.dat", sha256 = "449141ef93c067d8c6902335a16497c8d810726f1eff2f94f7ab302a753ea430" }
+tests = { url = "https://raw.githubusercontent.com/publicsuffix/list/7786aac8931b7069d6fe2174a7471a54d273d3e6/tests/tests.txt", sha256 = "61a3a502cf471d1a919d5e43c10e910023b0c4230e1db506f8e2ff0b47d2234e" }

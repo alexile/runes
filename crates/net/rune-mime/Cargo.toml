@@ -1,0 +1,29 @@
+[package]
+name = "rune-mime"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "MIME media types: Content-Type parsing and formatting, charset detection, and bounded multipart/form-data and multipart/mixed parsing"
+license.workspace = true
+keywords = ["mime", "content-type", "multipart", "charset", "http"]
+categories = ["web-programming", "parser-implementations", "encoding"]
+repository.workspace = true
+readme = "README.md"
+# Unpublished while rune-http-model (a dependency) is unpublished.
+publish = false
+# The conformance and property tests are test-only.
+exclude = ["tests/"]
+
+[dependencies]
+rune-http-model.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

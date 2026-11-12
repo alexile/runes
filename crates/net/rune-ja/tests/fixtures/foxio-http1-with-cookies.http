@@ -1,0 +1,8 @@
+GET / HTTP/1.1
+Host: localhost:8000
+User-Agent: curl/8.1.2
+Accept: */*
+Referer: https://fake.example
+Cookie: yummy_cookie=choco; tasty_cookie=strawberry
+Accept-Language: da, en-GB;q=0.8, en;q=0.7
+

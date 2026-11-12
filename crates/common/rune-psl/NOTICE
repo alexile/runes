@@ -1,0 +1,27 @@
+rune-psl
+Copyright (c) 2026 alexile. The code is licensed under the MIT licence.
+
+-------------------------------------------------------------------------------
+Public Suffix List (src/data.rs)
+-------------------------------------------------------------------------------
+
+src/data.rs is generated from public_suffix_list.dat of the Public Suffix
+List, https://publicsuffix.org/, at the commit of
+https://github.com/publicsuffix/list pinned in data/sources.toml.
+
+The Public Suffix List is published under the Mozilla Public License,
+version 2.0: https://mozilla.org/MPL/2.0/. src/data.rs is therefore covered
+by the MPL-2.0 and carries its notice. The source form of that file is in
+this package. The upstream list is available at the address above.
+
+What is embedded: every rule of the list (names, wildcard and exception
+markers, and the ICANN or private section each comes from), with
+internationalized names in Unicode form. Comments are not embedded.
+
+-------------------------------------------------------------------------------
+Public Suffix List test suite (tests/tests.txt, not packaged)
+-------------------------------------------------------------------------------
+
+tests/tests.txt is copied from the same commit of publicsuffix/list. It is
+dedicated to the public domain (CC0 1.0,
+https://creativecommons.org/publicdomain/zero/1.0/).

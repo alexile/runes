@@ -1,0 +1,25 @@
+[package]
+name = "rune-probe-sql"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Read-only MySQL/MariaDB, PostgreSQL and MSSQL (TDS prelogin) handshake and version probes"
+license.workspace = true
+keywords = ["mysql", "postgresql", "mssql", "probe", "security"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-service-probe.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rune-service-probe = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

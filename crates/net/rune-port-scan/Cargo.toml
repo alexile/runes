@@ -1,0 +1,39 @@
+[package]
+name = "rune-port-scan"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Rate-limited async TCP connect scanner with port-list parsing, banner grabbing and service and OS hints"
+license.workspace = true
+keywords = ["port-scan", "scanner", "network", "banner", "security"]
+categories = ["network-programming", "asynchronous"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+## Async connect scanner over tokio TCP sockets, with a concurrency bound, pacing and timeouts.
+tokio = ["dep:tokio", "tokio/net", "tokio/time", "tokio/io-util", "tokio/sync", "tokio/rt"]
+## Serialize and deserialize ports, hints and reports with serde.
+serde = ["dep:serde"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+
+[[test]]
+name = "scan"
+required-features = ["tokio"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

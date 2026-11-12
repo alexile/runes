@@ -1,0 +1,27 @@
+[package]
+name = "rune-axum-ipfilter"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "IP allowlist / blocklist middleware for Axum — CIDR filtering with spoof-resistant client IP resolution (socket peer, trusted proxies)"
+license.workspace = true
+keywords = ["axum", "ip-filter", "middleware", "security", "tower"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+axum.workspace = true
+tower.workspace = true
+http.workspace = true
+rune-cidr.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

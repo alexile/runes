@@ -1,0 +1,17 @@
+# Upstream sources of rune-idna's embedded Unicode data (src/data.rs).
+#
+# All three files are pinned to a Unicode version and by SHA-256. To update:
+# download the files of the new version into one directory, check their
+# checksums, then run
+#
+#     RUNE_IDNA_UCD_DIR=<dir> cargo test -p rune-idna --test regenerate -- --ignored
+#
+# review the diff of src/data.rs and pin the new version and checksums here.
+#
+# Licence: Unicode License v3 (Unicode-3.0). See NOTICE.
+
+version = "18.0.0"
+
+confusables = { url = "https://www.unicode.org/Public/18.0.0/security/confusables.txt", sha256 = "6ed3ee967c9dfdf6677d563c9985182fbc50a2efb7d6059cd57b2e2ce18f5b92" }
+identifier-status = { url = "https://www.unicode.org/Public/18.0.0/security/IdentifierStatus.txt", sha256 = "5863c7d99ca18f213c41c7318aa5528bebfb6d32ec0f1d5944e37192c119aebd" }
+idna-mapping-table = { url = "https://www.unicode.org/Public/18.0.0/idna/IdnaMappingTable.txt", sha256 = "a03b1eb38032268c696406a83f0972d6a815acd2c8d4151d42ec0fda70ffced1" }

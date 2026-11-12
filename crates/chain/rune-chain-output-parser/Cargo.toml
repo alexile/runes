@@ -1,0 +1,40 @@
+[package]
+name = "rune-chain-output-parser"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Typed LLM output for rune-chain: instructor-style extraction with re-ask, JSON Schema validation, partial streaming, and classic parsers"
+license.workspace = true
+keywords = ["llm", "langchain", "parser", "output", "ai"]
+categories = ["asynchronous", "parsing"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-chain-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "rt-multi-thread"] }
+schemars = { workspace = true, optional = true }
+
+[features]
+## Derive extraction schemas from types: `Extractor::for_type`, `extract`, `schema_for`.
+schemars = ["dep:schemars"]
+
+[dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
+proptest.workspace = true
+async-trait.workspace = true
+schemars.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

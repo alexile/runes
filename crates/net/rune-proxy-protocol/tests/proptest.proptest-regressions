@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 542be0ba0c38c3b1b9a3411517e4b5383281b2ae6abb83ed1b98aa0a82174621 # shrinks to addresses = Ipv6 { source: [::]:0, destination: [::]:0 }, tlvs = [Tlv { kind: 4, value: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, Tlv { kind: 4, value: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }, Tlv { kind: 4, value: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] }], flip = Index(17437937757507538456)

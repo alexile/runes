@@ -1,0 +1,32 @@
+[package]
+name = "rune-ingest-ndjson"
+version = "0.1.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Streaming NDJSON reader with a time-compression replay clock (Nx speed)"
+license.workspace = true
+keywords = ["ndjson", "streaming", "replay", "ingest", "json"]
+categories = ["data-structures", "encoding", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-ingest-ndjson"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_ingest_ndjson"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+serde_json.workspace = true
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

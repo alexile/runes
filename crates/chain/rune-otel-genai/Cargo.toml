@@ -1,0 +1,42 @@
+[package]
+name = "rune-otel-genai"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "OpenTelemetry GenAI semantic-convention spans for rune-chain LLM calls, tool executions and agents — model, tokens, cost and errors"
+license.workspace = true
+keywords = ["opentelemetry", "genai", "llm", "tracing", "observability"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## `OtelMetrics`: GenAI duration and token histograms on an OpenTelemetry `Meter`.
+opentelemetry = ["dep:opentelemetry"]
+## `ContentPolicy::with_default_redaction`, backed by `rune-redact`.
+redact = ["dep:rune-redact"]
+
+[dependencies]
+async-trait.workspace = true
+futures.workspace = true
+opentelemetry = { workspace = true, optional = true, features = ["metrics"] }
+rune-chain-core.workspace = true
+rune-chain-usage.workspace = true
+rune-redact = { workspace = true, optional = true }
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+opentelemetry = { workspace = true, features = ["trace", "metrics"] }
+opentelemetry_sdk = { workspace = true, features = ["trace", "metrics", "testing"] }
+tokio-test.workspace = true
+tracing-opentelemetry = { version = "0.32.1", default-features = false }
+tracing-subscriber = { workspace = true, features = ["registry"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

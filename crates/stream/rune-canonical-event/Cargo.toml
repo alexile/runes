@@ -1,0 +1,33 @@
+[package]
+name = "rune-canonical-event"
+version = "0.1.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Typed event envelope for streaming pipelines — source, timestamp, sequence, kind, payload, and metadata, with a validating builder"
+license.workspace = true
+keywords = ["event", "envelope", "streaming", "ingest", "serde"]
+categories = ["data-structures", "encoding"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-canonical-event"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_canonical_event"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

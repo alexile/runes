@@ -1,0 +1,33 @@
+[package]
+name = "rune-geoip"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Pure-Rust MaxMind DB (MMDB) reader for GeoLite2/GeoIP2 and DB-IP databases: search tree, data decoder, typed city/country/ASN records"
+license.workspace = true
+keywords = ["geoip", "maxmind", "mmdb", "geolocation", "asn"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-geoip"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-cidr.workspace = true
+rune-ip.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

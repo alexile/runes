@@ -1,0 +1,2 @@
+# Captured HTTP heads keep their CRLF line endings byte for byte.
+*.http -text

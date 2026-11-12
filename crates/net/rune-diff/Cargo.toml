@@ -1,0 +1,42 @@
+[package]
+name = "rune-diff"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Myers line/word diff with unified output, volatile-field masking and structural HTTP response diff (status, headers, JSON and text bodies)"
+license.workspace = true
+keywords = ["diff", "myers", "http", "comparer", "security"]
+categories = ["text-processing", "algorithms", "web-programming", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+# rune-http-model is unpublished too, so this one must stay unpublished.
+publish = false
+
+[[bin]]
+name = "rune-diff"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## Serialize and deserialize diff results with serde.
+serde = ["dep:serde"]
+## The `rune-diff` binary (text and HTTP response diffs).
+cli = ["serde", "dep:clap", "rune-http-model/serde"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+regex.workspace = true
+rune-http-model.workspace = true
+serde = { workspace = true, optional = true }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

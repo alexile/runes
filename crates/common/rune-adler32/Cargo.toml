@@ -1,0 +1,27 @@
+[package]
+name = "rune-adler32"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Compute Adler-32 checksums of byte slices and files (RFC 1950)"
+license.workspace = true
+keywords = ["adler32", "checksum", "adler", "zlib", "hash"]
+categories = ["algorithms", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-adler32"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["std"]
+
+[lints]
+workspace = true

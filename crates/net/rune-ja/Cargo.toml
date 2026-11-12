@@ -1,0 +1,30 @@
+[package]
+name = "rune-ja"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "JA3/JA3S and JA4/JA4S/JA4H/JA4T TLS, HTTP and TCP client/server fingerprints"
+license.workspace = true
+keywords = ["ja3", "ja4", "tls", "fingerprint", "network"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+# Unpublished until the JA4+ licensing question is settled: JA4S, JA4H and
+# JA4T are covered by the FoxIO License 1.1 (non-commercial, patent pending).
+# See "Licensing" in README.md.
+publish = false
+# Captured hellos and requests are test-only.
+exclude = ["tests/"]
+
+[dependencies]
+rune-md5.workspace = true
+rune-sha256.workspace = true
+rune-tls-hello.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

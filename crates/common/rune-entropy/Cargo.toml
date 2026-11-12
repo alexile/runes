@@ -1,0 +1,31 @@
+[package]
+name = "rune-entropy"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Shannon entropy calculator for files and byte streams — useful for detecting encrypted, packed, or compressed data"
+license.workspace = true
+keywords = ["entropy", "security", "forensics", "malware", "analysis"]
+categories = ["command-line-utilities", "cryptography"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-entropy"
+path = "src/main.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lib]
+name = "rune_entropy"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

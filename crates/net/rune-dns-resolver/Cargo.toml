@@ -1,0 +1,50 @@
+[package]
+name = "rune-dns-resolver"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Async DNS stub resolver over rune-dns-wire: UDP with TCP fallback, DoT and DoH, timeouts, retries and typed lookups"
+license.workspace = true
+keywords = ["dns", "resolver", "doh", "dot", "async"]
+categories = ["network-programming", "asynchronous"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[features]
+# The async resolver over UDP and TCP. Without it the crate is the sans-I/O
+# core: upstream configuration, query building, response checks and answer
+# extraction.
+tokio = ["dep:tokio", "dep:rand"]
+# DNS over TLS (RFC 7858), with rustls (ring) and the webpki root store.
+tls = ["tokio", "dep:tokio-rustls", "dep:webpki-roots"]
+# DNS over HTTPS (RFC 8484), HTTP/1.1 and HTTP/2 via hyper.
+doh = ["tls", "dep:hyper", "dep:hyper-util", "dep:http", "dep:http-body-util", "dep:bytes"]
+# `rune_wildcard_dns::AsyncResolver` for `Resolver`, so wildcard detection
+# can run over this resolver.
+wildcard = ["tokio", "dep:rune-wildcard-dns"]
+# Tests that query public resolvers. They are also `#[ignore]`d: run them
+# with `cargo test --features online -- --ignored`.
+online = ["doh"]
+
+[dependencies]
+bytes = { workspace = true, optional = true }
+http = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
+hyper = { version = "1.12", optional = true, default-features = false, features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1.21", optional = true, default-features = false, features = ["tokio"] }
+rand = { workspace = true, optional = true }
+rune-dns-wire.workspace = true
+rune-wildcard-dns = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio = { workspace = true, optional = true, features = ["net", "time", "io-util", "sync", "rt", "macros"] }
+tokio-rustls = { workspace = true, optional = true, features = ["ring", "tls12"] }
+webpki-roots = { version = "1.0.12", optional = true }
+
+[dev-dependencies]
+hyper = { version = "1.12", default-features = false, features = ["server", "http1", "http2"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time", "io-util", "sync"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+/target
+**/target/
+
+# The workspace Cargo.lock is committed. Lockfiles inside member
+# directories are leftovers from building a crate on its own; never commit them.
+/crates/**/Cargo.lock

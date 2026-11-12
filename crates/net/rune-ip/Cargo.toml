@@ -1,0 +1,36 @@
+[package]
+name = "rune-ip"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "IPv4/IPv6 classification per the IANA special-purpose registries (global, private, bogon, scope) with SSRF-safe mapped-address unwrapping"
+license.workspace = true
+keywords = ["ip", "ssrf", "bogon", "network", "security"]
+categories = ["network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-ip"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[[example]]
+name = "ssrf_guard"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

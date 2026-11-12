@@ -1,0 +1,27 @@
+[package]
+name = "rune-md5"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Compute MD5 checksums of byte slices and files"
+license.workspace = true
+keywords = ["md5", "hash", "checksum", "digest", "ctf"]
+categories = ["cryptography", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-md5"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = []
+
+[dependencies]
+md5 = "0.7"
+
+[lints]
+workspace = true

@@ -1,0 +1,46 @@
+[package]
+name = "rune-hsts"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Parse and analyze Strict-Transport-Security headers and check HSTS preload-list eligibility and membership"
+license.workspace = true
+keywords = ["hsts", "strict-transport", "preload", "security", "headers"]
+categories = ["web-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-hsts"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["psl"]
+## Preload eligibility checks that the domain is a registrable domain
+## (eTLD+1), using the Public Suffix List embedded in `rune-psl`.
+psl = ["dep:rune-psl"]
+## `PreloadList::from_chromium_json`: read Chromium's
+## `transport_security_state_static.json`.
+chromium = ["dep:serde", "dep:serde_json"]
+## The `rune-hsts` command-line tool.
+cli = ["dep:clap", "psl", "chromium"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-finding.workspace = true
+rune-psl = { workspace = true, optional = true, features = ["embedded"] }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

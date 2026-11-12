@@ -1,0 +1,6 @@
+version: STSv1
+mode: enforce
+mx: mail.example.com
+mx: *.example.net
+mx: backupmx.example.com
+max_age: 604800

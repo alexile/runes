@@ -1,0 +1,29 @@
+[package]
+name = "rune-axum-cors"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "CORS middleware for Axum — exact origin allowlists, preflight handling, configs vetted by rune-cors at build time"
+license.workspace = true
+keywords = ["axum", "middleware", "cors", "tower", "security"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+http.workspace = true
+rune-cors.workspace = true
+rune-finding.workspace = true
+thiserror.workspace = true
+tower.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+proptest.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

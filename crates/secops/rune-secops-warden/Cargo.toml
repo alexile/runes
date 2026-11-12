@@ -1,0 +1,46 @@
+[package]
+name = "rune-secops-warden"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Whitelist-only TOML policy engine for sandboxing AI coding agents (Claude Code and friends) via bubblewrap namespaces and a seccomp-bpf syscall filter — filesystem, network, env vars, commands, and syscalls all deny-by-default"
+license.workspace = true
+keywords = ["security", "sandbox", "ai-agent", "bubblewrap", "namespaces"]
+categories = ["os", "config"]
+repository.workspace = true
+readme = "README.md"
+# Was `true` up to 0.2.0. The sandbox mechanisms now live in rune-landlock,
+# rune-seccomp, rune-namespaces and rune-egress-proxy, none of which is
+# on crates.io yet; flip back once they are.
+publish = false
+
+# Test-only helper for tests/e2e.rs, not a CLI. It is a real binary because
+# the Landlock and network stub protocols re-exec the calling executable,
+# which cannot be the test harness (see the binary's module docs). Off by
+# default, so neither `cargo build` nor `cargo install` produces it; CI's
+# `--all-features` test run builds it and runs the tests that use it.
+[[bin]]
+name = "landlock-e2e-helper"
+path = "src/bin/landlock-e2e-helper.rs"
+required-features = ["e2e-helper"]
+
+[features]
+e2e-helper = []
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
+libc.workspace = true
+rune-egress-proxy.workspace = true
+rune-elf-deps.workspace = true
+rune-landlock.workspace = true
+rune-namespaces.workspace = true
+rune-relay.workspace = true
+rune-rlimits.workspace = true
+rune-sandbox-preset.workspace = true
+rune-seccomp.workspace = true
+rune-strace.workspace = true
+
+[lints]
+workspace = true

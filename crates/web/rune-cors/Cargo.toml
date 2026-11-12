@@ -1,0 +1,33 @@
+[package]
+name = "rune-cors"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Analyze CORS response headers for dangerous origin, credential and allowlist combinations, reporting rune-finding findings"
+license.workspace = true
+keywords = ["cors", "origin", "security", "headers", "web"]
+categories = ["web-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-cors"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## The `rune-cors` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-finding.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

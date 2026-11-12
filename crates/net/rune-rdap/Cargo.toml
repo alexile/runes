@@ -1,0 +1,46 @@
+[package]
+name = "rune-rdap"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "RDAP client for domains, IP networks and ASNs with IANA bootstrap (RFC 9224), typed responses, caching and rate limiting"
+license.workspace = true
+keywords = ["rdap", "whois", "bootstrap", "registration", "recon"]
+categories = ["network-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-rdap"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## `client::Client`: bootstrap, redirects, caching and rate limiting over a
+## caller-supplied `client::Fetcher` (needs Tokio's timer).
+client = ["dep:tokio", "tokio/time"]
+## `client::ReqwestFetcher`, a `Fetcher` backed by reqwest.
+reqwest = ["client", "dep:reqwest"]
+## The `rune-rdap` command-line tool.
+cli = ["reqwest", "dep:clap", "tokio/rt", "tokio/macros"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+url.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "time", "test-util"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

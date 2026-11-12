@@ -1,0 +1,9 @@
+GET /usersync?b=ada&i=407182987561 HTTP/1.1
+Accept: image/png, image/svg+xml, image/jxr, image/*;q=0.8, */*;q=0.5
+Referer: http://www.shangri-la.com/
+Accept-Language: en-US
+User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/42.0.2311.135 Safari/537.36 Edge/12.10240
+Accept-Encoding: gzip, deflate
+Host: rtb.gumgum.com
+Connection: Keep-Alive
+

@@ -1,0 +1,11 @@
+{
+  "model": "llava",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Compare these two pictures.",
+      "images": ["iVBORw0KGgo=", "R0lGODlhAQABAAAAACw="]
+    }
+  ],
+  "stream": false
+}

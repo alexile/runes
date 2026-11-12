@@ -1,0 +1,29 @@
+format = 1
+name = "sample"
+version = "1.0.0"
+key-id = "3097e2dee2cb4a34"
+description = "Fixture pack for rune-wordlist tests"
+
+[[lists]]
+name = "dirs"
+path = "lists/dirs.txt"
+kind = "wordlist"
+sha256 = "5a9fe33b605d8e7e87881a4dd0ded761954c42d94328f8fa4634e949f802ea13"
+size = 83
+entries = 6
+
+[[lists]]
+name = "params"
+path = "lists/params.txt"
+kind = "wordlist"
+sha256 = "bbbfccf19173adfb1db94a187d04d920c92347d99438eb631af7e2d26eea482f"
+size = 26
+entries = 4
+
+[[lists]]
+name = "xss"
+path = "payloads/xss.txt"
+kind = "payload"
+sha256 = "277d1f388c62bb0a5bb3c3e8f0a4e5722e2475b356f84aa46e01722e03fb6f05"
+size = 85
+entries = 3

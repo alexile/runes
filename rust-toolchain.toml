@@ -1,0 +1,9 @@
+# The pinned toolchain: CI and local builds use it, so lints and formatting
+# are reproducible. Bumping it never changes the MSRV.
+#
+# The MSRV is `rust-version` in the root Cargo.toml (1.88). The CI `MSRV` job
+# overrides this file with `cargo +1.88`, and the `stable` job with
+# `cargo +stable`.
+[toolchain]
+channel = "1.99.1"
+components = ["clippy", "rustfmt"]

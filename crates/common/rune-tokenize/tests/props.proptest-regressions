@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4142fad7a076b1592037a4a18ea5889155c385ff425ddc9c539e6f66c89ca2fc # shrinks to text = "👨\u{200d}👩\u{200d}👧\u{200d}\u{200d}e\u{301}", max = 1, overlap = 0, b = Grapheme, p = Simple
+cc 1a451a54ff8da68880a82e3190c1eaf2892136b9af6bbc0b72744f4113994b69 # shrinks to text = ". \u{200d}", max = 1, overlap = 0, b = Grapheme, p = Cl100k
+cc 01e7042d212b676dd27851f7cb7635713de2f7302f8aefabf56f0ce4ac4f69a6 # shrinks to text = ".\r\n.", max = 1, overlap = 0, b = Grapheme, p = Llama2

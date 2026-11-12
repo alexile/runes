@@ -1,0 +1,42 @@
+[package]
+name = "rune-idna"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Internationalized domain names: Punycode (RFC 3492), UTS #46 / IDNA2008 conversion, and UTS #39 confusable and mixed-script homograph detection"
+# src/data.rs is generated from Unicode data files (Unicode-3.0); see
+# `license-exception` below.
+license = "MIT AND Unicode-3.0"
+keywords = ["idna", "punycode", "homograph", "confusables", "unicode"]
+categories = ["network-programming", "encoding", "internationalization"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+# The data generator and the proptests are test-only.
+exclude = ["tests/"]
+
+[[bin]]
+name = "rune-idna"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## The `rune-idna` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+icu_normalizer = { version = "2.4", default-features = false, features = ["compiled_data"] }
+icu_properties = "2.4"
+idna = "1.1"
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

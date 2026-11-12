@@ -1,0 +1,42 @@
+[package]
+name = "rune-taxonomy"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "CWE, CAPEC, ATT&CK, OWASP Top 10 and ASVS reference data with typed, validated ids and cross-mappings"
+license.workspace = true
+keywords = ["cwe", "owasp", "mitre-attack", "capec", "security"]
+categories = ["data-structures", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+# The SAST rule tag fixture and the proptests are test-only.
+exclude = ["tests/"]
+
+[[bin]]
+name = "rune-taxonomy"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## `Serialize` for records; `Serialize`/`Deserialize` for ids and enums.
+serde = ["dep:serde", "rune-finding/serde"]
+## The `rune-taxonomy` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-finding.workspace = true
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

@@ -1,0 +1,38 @@
+[package]
+name = "rune-tls-probe"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Read-only TLS server probe over raw handshakes: SSLv3-TLS 1.3 version and cipher-suite enumeration, weak-suite flags, fallback SCSV, compression, secure renegotiation"
+license.workspace = true
+keywords = ["tls", "ssl", "cipher-suites", "scanner", "security"]
+categories = ["network-programming", "cryptography"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## `scan`: the whole scan over rune-service-probe's tokio runner.
+tokio = ["rune-service-probe/tokio"]
+
+[dependencies]
+rune-finding.workspace = true
+rune-service-probe.workspace = true
+rune-tls-hello.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+rune-service-probe = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["full"] }
+
+[[test]]
+name = "loopback"
+required-features = ["tokio"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

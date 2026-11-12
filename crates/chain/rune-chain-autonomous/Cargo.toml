@@ -1,0 +1,26 @@
+[package]
+name = "rune-chain-autonomous"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Autonomous goal-driven agent for rune-chain: plans tasks, executes them with tools, and self-evaluates until the goal is met"
+license.workspace = true
+keywords = ["agent", "autonomous", "llm", "planning", "ai"]
+categories = ["asynchronous"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-chain-core.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
+tokio-test.workspace = true
+tokio = { workspace = true, features = ["full"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

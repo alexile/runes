@@ -1,0 +1,33 @@
+[package]
+name = "rune-chain-tools"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Standard LLM-callable tool implementations for rune-chain: encoding, hashing, graph, entropy, and more"
+license.workspace = true
+keywords = ["llm", "tools", "langchain", "agent", "ai"]
+categories = ["asynchronous", "encoding"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-chain-core.workspace = true
+async-trait.workspace = true
+rune-hex.workspace = true
+rune-base64.workspace = true
+rune-entropy.workspace = true
+rune-sha256.workspace = true
+rune-strings.workspace = true
+rune-caesar.workspace = true
+rune-xor.workspace = true
+rune-tool-schema.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
+tokio-test.workspace = true
+
+[lints]
+workspace = true

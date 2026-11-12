@@ -1,0 +1,33 @@
+[package]
+name = "rune-strings"
+version = "0.2.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Extract printable strings from binary files — configurable minimum length and encoding"
+license.workspace = true
+keywords = ["strings", "binary", "forensics", "ctf", "analysis"]
+categories = ["command-line-utilities", "development-tools"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-strings"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

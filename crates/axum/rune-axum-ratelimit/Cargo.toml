@@ -1,0 +1,27 @@
+[package]
+name = "rune-axum-ratelimit"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Rate limiter middleware for Axum — fixed-window or GCRA per client, pluggable store, spoof-resistant client IPs, IETF RateLimit headers"
+license.workspace = true
+keywords = ["axum", "rate-limit", "middleware", "security", "tower"]
+categories = ["web-programming", "network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+tower.workspace = true
+http.workspace = true
+rune-axum-ipfilter.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full", "test-util"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

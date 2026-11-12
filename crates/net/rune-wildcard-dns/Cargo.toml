@@ -1,0 +1,26 @@
+[package]
+name = "rune-wildcard-dns"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Wildcard DNS detection and filtering for subdomain enumeration, over a caller-supplied resolver"
+license.workspace = true
+keywords = ["dns", "wildcard", "subdomain", "recon", "enumeration"]
+categories = ["network-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rand.workspace = true
+rune-dns-wire.workspace = true
+rune-idna.workspace = true
+rune-psl = { workspace = true, features = ["embedded"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

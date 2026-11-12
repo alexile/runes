@@ -1,0 +1,57 @@
+[package]
+name = "rune-redact"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Redact PII and secrets from text, streams, writers and tracing output with a configurable mask, hash or tokenize policy"
+license.workspace = true
+keywords = ["redact", "pii", "privacy", "secrets", "tracing"]
+categories = ["text-processing", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-redact"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## The `rune-redact` command-line tool.
+cli = []
+## `AsyncRedactingWriter`, a redacting `tokio::io::AsyncWrite` adapter.
+tokio = ["dep:tokio"]
+## `RedactingMakeWriter` and `RedactingFields` for `tracing-subscriber`'s fmt layer.
+tracing = ["dep:tracing-subscriber", "dep:tracing-core"]
+
+[dependencies]
+regex.workspace = true
+rune-entropy.workspace = true
+rune-leak.workspace = true
+rune-regex-sec.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, optional = true }
+tracing-core = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+rune-finding.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "io-util"] }
+tracing.workspace = true
+
+[[test]]
+name = "tracing"
+required-features = ["tracing"]
+
+[[test]]
+name = "async_writer"
+required-features = ["tokio"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

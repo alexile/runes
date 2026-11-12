@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "payload-fuzzer",
+          "semanticVersion": "0.1.0",
+          "rules": [
+            {
+              "id": "xss.reflected",
+              "name": "Reflected XSS",
+              "shortDescription": {
+                "text": "Reflected XSS"
+              },
+              "helpUri": "https://cheatsheetseries.owasp.org/",
+              "properties": {
+                "security-severity": "8.0",
+                "tags": [
+                  "CWE-79"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "xss.reflected",
+          "level": "error",
+          "message": {
+            "text": "Reflected XSS"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "https://shop.example.test/search?q=x#q"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "security-severity": "8.0",
+            "confidence": "firm"
+          },
+          "partialFingerprints": {
+            "netsecFingerprint/v1": "1c1082f846161c22bdf06ddf146b1ec59b99cb19581f33a0690ca72525fd6d12"
+          },
+          "taxa": [
+            {
+              "id": "CWE-79",
+              "index": 0,
+              "toolComponent": {
+                "name": "CWE",
+                "index": 0
+              }
+            },
+            {
+              "id": "A05:2025",
+              "index": 0,
+              "toolComponent": {
+                "name": "OWASP Top 10 2025",
+                "index": 1
+              }
+            },
+            {
+              "id": "WSTG-INPV-01",
+              "index": 0,
+              "toolComponent": {
+                "name": "OWASP WSTG",
+                "index": 2
+              }
+            }
+          ],
+          "webRequest": {
+            "protocol": "HTTP",
+            "version": "1.1",
+            "target": "https://shop.example.test/search?q=%3Cscript%3E",
+            "method": "GET",
+            "headers": {
+              "Accept": "text/html"
+            }
+          },
+          "webResponse": {
+            "protocol": "HTTP",
+            "version": "1.1",
+            "statusCode": 200,
+            "reasonPhrase": "OK",
+            "headers": {
+              "Content-Type": "text/html",
+              "Set-Cookie": "a=1, b=2"
+            },
+            "body": {
+              "text": "<script>alert(1)</script>"
+            }
+          },
+          "attachments": [
+            {
+              "description": {
+                "text": "Stored HTTP exchange 9 in proxy-history"
+              },
+              "artifactLocation": {
+                "uri": "netsec-exchange:proxy-history/9"
+              }
+            },
+            {
+              "description": {
+                "text": "HTTP exchange 2: GET https://shop.example.test/search?q=2 -> 200"
+              },
+              "artifactLocation": {
+                "uri": "netsec-exchange:inline/2"
+              }
+            }
+          ]
+        }
+      ],
+      "taxonomies": [
+        {
+          "name": "CWE",
+          "organization": "MITRE",
+          "informationUri": "https://cwe.mitre.org/",
+          "taxa": [
+            {
+              "id": "CWE-79"
+            }
+          ]
+        },
+        {
+          "name": "OWASP Top 10 2025",
+          "organization": "OWASP",
+          "informationUri": "https://owasp.org/Top10/",
+          "taxa": [
+            {
+              "id": "A05:2025",
+              "name": "Injection"
+            }
+          ]
+        },
+        {
+          "name": "OWASP WSTG",
+          "organization": "OWASP",
+          "informationUri": "https://owasp.org/www-project-web-security-testing-guide/",
+          "taxa": [
+            {
+              "id": "WSTG-INPV-01"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

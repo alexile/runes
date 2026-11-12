@@ -1,0 +1,36 @@
+[package]
+name = "rune-ml-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Shared ML core: row-major matrices, distance metrics, deterministic RNG and estimator traits"
+license.workspace = true
+keywords = ["machine-learning", "matrix", "distance", "rng", "ml"]
+categories = ["science", "mathematics", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = []
+# Serialize / deserialize `Matrix`, `Metric` and `Rng` (validated on load).
+serde = ["dep:serde"]
+# Parallel pairwise distances and row iterators.
+rayon = ["dep:rayon"]
+
+[dependencies]
+rayon = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[[bench]]
+name = "kernels"
+harness = false
+
+[lints]
+workspace = true

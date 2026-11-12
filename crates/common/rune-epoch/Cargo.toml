@@ -1,0 +1,33 @@
+[package]
+name = "rune-epoch"
+version = "0.2.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Unix timestamp conversions — epoch to human-readable and back"
+license.workspace = true
+keywords = ["epoch", "timestamp", "unix", "datetime", "converter"]
+categories = ["date-and-time", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+required-features = ["cli"]
+name = "rune-epoch"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["dep:clap", "std"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

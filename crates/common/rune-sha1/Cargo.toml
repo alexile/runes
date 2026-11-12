@@ -1,0 +1,28 @@
+[package]
+name = "rune-sha1"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Compute SHA-1 hashes of byte slices and files"
+license.workspace = true
+keywords = ["sha1", "hash", "checksum", "digest", "security"]
+categories = ["cryptography", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-sha1"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = []
+
+[dependencies]
+sha1.workspace = true
+rune-hex.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,31 @@
+[package]
+name = "rune-correlate"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Cross-correlation and lag detection between two numeric series"
+license.workspace = true
+keywords = ["correlation", "cross-correlation", "lag", "pearson", "time-series"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-correlate"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_correlate"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

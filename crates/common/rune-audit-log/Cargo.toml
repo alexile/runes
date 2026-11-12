@@ -1,0 +1,29 @@
+[package]
+name = "rune-audit-log"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Append-only, hash-chained (optionally HMAC-signed) tamper-evident audit log with pluggable storage"
+license.workspace = true
+keywords = ["audit", "log", "hash-chain", "tamper-evident", "security"]
+categories = ["cryptography", "development-tools::debugging"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+hmac.workspace = true
+rune-hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

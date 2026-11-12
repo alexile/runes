@@ -1,0 +1,30 @@
+[package]
+name = "rune-chain-ollama"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Ollama (local models) provider for rune-chain: streaming, native tool calls, structured output, embeddings, model management"
+license.workspace = true
+keywords = ["ollama", "llm", "local-ai", "langchain", "ai"]
+categories = ["asynchronous", "web-programming::http-client"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-chain-core.workspace = true
+async-trait.workspace = true
+async-stream.workspace = true
+futures.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+rune-chain-embed.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
+tokio-test.workspace = true
+
+[lints]
+workspace = true

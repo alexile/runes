@@ -1,0 +1,53 @@
+//! The parsers never panic, and corrupting a certificate never makes it
+//! verify.
+
+#![allow(clippy::unwrap_used, reason = "test helpers fail loudly")]
+
+use proptest::prelude::*;
+use rune_x509::{Certificate, TrustStore, VerifyOptions, parse_pem, verify_chain};
+
+fn fixture(name: &str) -> Certificate {
+    let path = format!("{}/tests/fixtures/{name}.pem", env!("CARGO_MANIFEST_DIR"));
+    Certificate::from_pem(&std::fs::read(path).unwrap()).unwrap()
+}
+
+/// Byte range of `tbsCertificate` in a certificate whose outer and TBS
+/// lengths both use the two-byte long form (true for the fixtures).
+fn tbs_range(der: &[u8]) -> (usize, usize) {
+    assert_eq!(der[..2], [0x30, 0x82]);
+    assert_eq!(der[4..6], [0x30, 0x82]);
+    let len = usize::from(der[6]) << 8 | usize::from(der[7]);
+    (4, 8 + len)
+}
+
+proptest! {
+    #[test]
+    fn der_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
+        let _ = Certificate::from_der(&bytes);
+    }
+
+    #[test]
+    fn pem_never_panics(text in "\\PC*") {
+        let _ = parse_pem(text.as_bytes());
+        let wrapped = format!("-----BEGIN CERTIFICATE-----\n{text}\n-----END CERTIFICATE-----\n");
+        let _ = parse_pem(wrapped.as_bytes());
+    }
+
+    #[test]
+    fn flipped_bit_never_verifies(index in any::<prop::sample::Index>(), bit in 0u8..8) {
+        // Only the signed part: bytes outside tbsCertificate (the outer
+        // header, the signature itself) are not covered by the signature,
+        // and the parser tolerates some non-DER encodings there.
+        let leaf = fixture("leaf");
+        let mut der = leaf.der().to_vec();
+        let (start, end) = tbs_range(&der);
+        let at = start + index.index(end - start);
+        der[at] ^= 1 << bit;
+        if let Ok(corrupt) = Certificate::from_der(&der) {
+            let store = TrustStore::new().with(fixture("root"));
+            let options = VerifyOptions::default().with_time(1_780_272_000);
+            let report = verify_chain(&corrupt, &[fixture("inter")], &store, &options);
+            prop_assert!(!report.is_trusted() || corrupt == leaf);
+        }
+    }
+}

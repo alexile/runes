@@ -1,0 +1,499 @@
+{
+	"info": {
+		"_postman_id": "6f1c1a52-8a1e-4c55-9c2e-0a4c2b7d9e10",
+		"name": "Shop API",
+		"description": "Fixture: the shop API as exported by the Postman app (Collection v2.1).",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+		"_exporter_id": "1234567"
+	},
+	"item": [
+		{
+			"name": "Auth",
+			"item": [
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.environment.set(\"token\", pm.response.json().token);"
+								],
+								"type": "text/javascript",
+								"packages": {}
+							}
+						}
+					],
+					"request": {
+						"auth": {
+							"type": "noauth"
+						},
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "urlencoded",
+							"urlencoded": [
+								{
+									"key": "username",
+									"value": "{{username}}",
+									"type": "text"
+								},
+								{
+									"key": "password",
+									"value": "{{password}}",
+									"type": "text"
+								},
+								{
+									"key": "remember",
+									"value": "1",
+									"type": "text",
+									"disabled": true
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/auth/login",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"auth",
+								"login"
+							]
+						},
+						"description": "Exchanges credentials for a session token."
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Catalog",
+			"event": [
+				{
+					"listen": "prerequest",
+					"script": {
+						"exec": [
+							"// Catalog calls use the v2 API and a request id",
+							"pm.collectionVariables.set(\"apiVersion\", \"v2\");",
+							"pm.variables.set(\"requestId\", require('uuid').v4());"
+						],
+						"type": "text/javascript",
+						"packages": {}
+					}
+				}
+			],
+			"item": [
+				{
+					"name": "Products",
+					"item": [
+						{
+							"name": "List products",
+							"request": {
+								"method": "GET",
+								"header": [
+									{
+										"key": "Accept",
+										"value": "application/json",
+										"type": "text"
+									},
+									{
+										"key": "X-Debug",
+										"value": "1",
+										"type": "text",
+										"disabled": true
+									}
+								],
+								"url": {
+									"raw": "{{baseUrl}}/{{apiVersion}}/products?page=1&limit={{pageSize}}",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"{{apiVersion}}",
+										"products"
+									],
+									"query": [
+										{
+											"key": "page",
+											"value": "1"
+										},
+										{
+											"key": "limit",
+											"value": "{{pageSize}}"
+										},
+										{
+											"key": "sort",
+											"value": "price",
+											"disabled": true
+										}
+									]
+								}
+							},
+							"response": [
+								{
+									"name": "Two products",
+									"originalRequest": {
+										"method": "GET",
+										"header": [],
+										"url": {
+											"raw": "{{baseUrl}}/v2/products?page=1&limit=2",
+											"host": [
+												"{{baseUrl}}"
+											],
+											"path": [
+												"v2",
+												"products"
+											]
+										}
+									},
+									"status": "OK",
+									"code": 200,
+									"_postman_previewlanguage": "json",
+									"header": [
+										{
+											"key": "Content-Type",
+											"value": "application/json"
+										}
+									],
+									"cookie": [],
+									"body": "[{\"id\": 1}, {\"id\": 2}]"
+								}
+							]
+						},
+						{
+							"name": "Get product",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{baseUrl}}/{{apiVersion}}/products/:productId",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"{{apiVersion}}",
+										"products",
+										":productId"
+									],
+									"variable": [
+										{
+											"key": "productId",
+											"value": "{{productId}}",
+											"description": "Product SKU id"
+										}
+									]
+								}
+							},
+							"response": []
+						},
+						{
+							"name": "Create product",
+							"event": [
+								{
+									"listen": "prerequest",
+									"script": {
+										"exec": [
+											"pm.variables.set('sku', 'SKU-0042');"
+										],
+										"type": "text/javascript",
+										"packages": {}
+									}
+								}
+							],
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "X-Request-Id",
+										"value": "{{requestId}}",
+										"type": "text"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"sku\": \"{{sku}}\",\n    \"name\": \"Mug\",\n    \"price\": {{price}}\n}",
+									"options": {
+										"raw": {
+											"language": "json"
+										}
+									}
+								},
+								"url": {
+									"raw": "{{baseUrl}}/{{apiVersion}}/products",
+									"host": [
+										"{{baseUrl}}"
+									],
+									"path": [
+										"{{apiVersion}}",
+										"products"
+									]
+								}
+							},
+							"response": []
+						}
+					]
+				},
+				{
+					"name": "Upload image",
+					"request": {
+						"method": "POST",
+						"header": [],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "alt",
+									"value": "A blue mug",
+									"type": "text"
+								},
+								{
+									"key": "image",
+									"type": "file",
+									"src": "/home/tester/Pictures/mug.png"
+								},
+								{
+									"key": "legacy",
+									"value": "1",
+									"type": "text",
+									"disabled": true
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/{{apiVersion}}/products/{{productId}}/image",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"{{apiVersion}}",
+								"products",
+								"{{productId}}",
+								"image"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Partners",
+			"auth": {
+				"type": "apikey",
+				"apikey": [
+					{
+						"key": "in",
+						"value": "query",
+						"type": "string"
+					},
+					{
+						"key": "value",
+						"value": "{{partnerKey}}",
+						"type": "string"
+					},
+					{
+						"key": "key",
+						"value": "api_key",
+						"type": "string"
+					}
+				]
+			},
+			"item": [
+				{
+					"name": "Partner feed",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/partners/feed?format=xml",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"partners",
+								"feed"
+							],
+							"query": [
+								{
+									"key": "format",
+									"value": "xml"
+								}
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Partner OAuth",
+					"request": {
+						"auth": {
+							"type": "oauth2",
+							"oauth2": [
+								{
+									"key": "accessToken",
+									"value": "partner-access-token",
+									"type": "string"
+								},
+								{
+									"key": "tokenType",
+									"value": "Bearer",
+									"type": "string"
+								},
+								{
+									"key": "addTokenTo",
+									"value": "header",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/partners/me",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"partners",
+								"me"
+							]
+						}
+					},
+					"response": []
+				},
+				{
+					"name": "Legacy digest",
+					"request": {
+						"auth": {
+							"type": "digest",
+							"digest": [
+								{
+									"key": "username",
+									"value": "legacy",
+									"type": "string"
+								},
+								{
+									"key": "password",
+									"value": "not-a-real-password",
+									"type": "string"
+								}
+							]
+						},
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/partners/legacy",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"partners",
+								"legacy"
+							]
+						}
+					},
+					"response": []
+				}
+			]
+		},
+		{
+			"name": "Search (GraphQL)",
+			"request": {
+				"method": "POST",
+				"header": [],
+				"body": {
+					"mode": "graphql",
+					"graphql": {
+						"query": "query Search($q: String!, $first: Int) {\n  search(query: $q, first: $first) { id name }\n}",
+						"variables": "{\n  \"q\": \"mug\",\n  \"first\": {{pageSize}}\n}"
+					}
+				},
+				"url": {
+					"raw": "{{baseUrl}}/graphql",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"graphql"
+					]
+				}
+			},
+			"response": []
+		},
+		{
+			"name": "Health",
+			"request": {
+				"auth": {
+					"type": "noauth"
+				},
+				"method": "HEAD",
+				"header": [],
+				"url": {
+					"raw": "{{baseUrl}}/health",
+					"host": [
+						"{{baseUrl}}"
+					],
+					"path": [
+						"health"
+					]
+				}
+			},
+			"response": []
+		}
+	],
+	"auth": {
+		"type": "bearer",
+		"bearer": [
+			{
+				"key": "token",
+				"value": "{{token}}",
+				"type": "string"
+			}
+		]
+	},
+	"event": [
+		{
+			"listen": "prerequest",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					"pm.request.headers.add({ key: 'X-Client', value: 'postman' });"
+				]
+			}
+		},
+		{
+			"listen": "test",
+			"script": {
+				"type": "text/javascript",
+				"packages": {},
+				"exec": [
+					"pm.test(\"status is 2xx\", () => pm.response.to.be.success);"
+				]
+			}
+		}
+	],
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "https://shop.example.test",
+			"type": "string"
+		},
+		{
+			"key": "apiVersion",
+			"value": "v1",
+			"type": "string"
+		},
+		{
+			"key": "pageSize",
+			"value": "20",
+			"type": "string"
+		},
+		{
+			"key": "price",
+			"value": "12.5",
+			"type": "string"
+		}
+	]
+}

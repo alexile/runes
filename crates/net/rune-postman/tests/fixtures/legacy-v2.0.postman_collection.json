@@ -1,0 +1,101 @@
+{
+	"variables": [],
+	"info": {
+		"name": "Legacy API",
+		"_postman_id": "a3c1e5d2-0000-4000-8000-000000000020",
+		"description": {
+			"content": "Exported as Collection v2.0.",
+			"type": "text/markdown"
+		},
+		"schema": "https://schema.getpostman.com/json/collection/v2.0.0/collection.json"
+	},
+	"variable": [
+		{
+			"id": "host",
+			"value": "legacy.example.test",
+			"type": "string"
+		},
+		{
+			"id": "port",
+			"value": 8080,
+			"type": "number"
+		}
+	],
+	"auth": {
+		"type": "basic",
+		"basic": {
+			"username": "admin",
+			"password": "{{adminPassword}}",
+			"saveHelperData": true,
+			"showPassword": false
+		}
+	},
+	"item": [
+		{
+			"name": "Accounts",
+			"description": "Account management",
+			"item": [
+				{
+					"name": "Find account",
+					"request": {
+						"url": {
+							"protocol": "http",
+							"host": [
+								"{{host}}"
+							],
+							"port": "{{port}}",
+							"path": [
+								"accounts",
+								{
+									"type": "string",
+									"value": "search"
+								}
+							],
+							"query": [
+								{
+									"key": "email",
+									"value": "{{email}}",
+									"equals": true
+								}
+							]
+						},
+						"method": "GET",
+						"header": "Accept: application/xml\nX-Trace: on\n",
+						"description": "Finds an account by e-mail."
+					},
+					"response": []
+				},
+				{
+					"name": "Ping",
+					"request": "{{host}}:{{port}}/ping",
+					"response": []
+				},
+				{
+					"name": "Rotate key",
+					"request": {
+						"auth": {
+							"type": "bearer",
+							"bearer": {
+								"token": "rotation-token"
+							}
+						},
+						"url": "http://{{host}}:{{port}}/accounts/:accountId/key",
+						"method": "put",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer manual-override",
+								"description": ""
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "<rotate reason=\"scheduled\"/>"
+						}
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}

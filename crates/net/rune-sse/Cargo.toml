@@ -1,0 +1,31 @@
+[package]
+name = "rune-sse"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Incremental sans-I/O Server-Sent Events (text/event-stream) parser"
+license.workspace = true
+keywords = ["sse", "eventsource", "event-stream", "parser", "sans-io"]
+categories = ["network-programming", "parser-implementations", "web-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## `futures::Stream` adapter over a stream of byte chunks.
+stream = ["dep:futures"]
+## `Serialize`/`Deserialize` for `Event`.
+serde = ["dep:serde"]
+
+[dependencies]
+futures = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+futures.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true

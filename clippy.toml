@@ -1,0 +1,9 @@
+# Tests may unwrap, expect and panic: a failing
+# assertion is the point of a test. Library and binary code may not.
+too-many-lines-threshold = 200
+cognitive-complexity-threshold = 15
+too-many-arguments-threshold = 6
+
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

@@ -1,0 +1,49 @@
+[package]
+name = "rune-axum-jwt"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "JWT bearer auth for Axum 0.8: HMAC, RSA, ECDSA and EdDSA keys, cached JWKS and OIDC discovery, scope/role checks, RFC 6750 errors"
+license.workspace = true
+keywords = ["axum", "jwt", "jwks", "oidc", "authentication"]
+categories = ["web-programming::http-server", "authentication"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = ["jwks"]
+## `JwksSource`: fetch and cache keys from a JWKS URL or via OIDC discovery
+## (reqwest + Tokio).
+jwks = ["dep:reqwest", "dep:tokio"]
+
+[dependencies]
+axum.workspace = true
+http.workspace = true
+# 9.x verifies with ring (ISC/Apache-2.0). 10.x needs either aws-lc-rs or the
+# RustCrypto `rsa` crate (RUSTSEC-2023-0071), so we stay on 9 for now.
+jsonwebtoken = "9.3.1"
+reqwest = { workspace = true, optional = true }
+rune-jwt.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, optional = true, features = ["sync"] }
+tower-layer.workspace = true
+tower-service.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+ring = "0.17.14"
+rune-base64.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

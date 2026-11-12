@@ -1,0 +1,32 @@
+[package]
+name = "rune-kmeans"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "K-Means++ clustering — partition points into k clusters with smart initialisation"
+license.workspace = true
+keywords = ["kmeans", "clustering", "unsupervised", "machine-learning", "centroid"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-kmeans"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_kmeans"
+path = "src/lib.rs"
+
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

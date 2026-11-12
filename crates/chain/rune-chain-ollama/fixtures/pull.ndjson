@@ -1,0 +1,6 @@
+{"status":"pulling manifest"}
+{"status":"pulling dde5aa3fc5ff","digest":"sha256:dde5aa3fc5ff","total":2019377376,"completed":1009688688}
+{"status":"pulling dde5aa3fc5ff","digest":"sha256:dde5aa3fc5ff","total":2019377376,"completed":2019377376}
+{"status":"verifying sha256 digest"}
+{"status":"writing manifest"}
+{"status":"success"}

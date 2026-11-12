@@ -1,0 +1,31 @@
+[package]
+name = "rune-zscore"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Z-score and IQR-based outlier/anomaly detector"
+license.workspace = true
+keywords = ["zscore", "outlier", "anomaly", "iqr", "statistics"]
+categories = ["algorithms", "science", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-zscore"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_zscore"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

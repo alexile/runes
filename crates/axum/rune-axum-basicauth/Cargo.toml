@@ -1,0 +1,30 @@
+[package]
+name = "rune-axum-basicauth"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "HTTP Basic authentication extractor and middleware layer for Axum with constant-time credential comparison"
+license.workspace = true
+keywords = ["axum", "basic-auth", "authentication", "middleware", "security"]
+categories = ["web-programming::http-server", "authentication"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+axum.workspace = true
+tower-layer.workspace = true
+tower-service.workspace = true
+http.workspace = true
+base64 = "0.22"
+subtle.workspace = true
+pin-project-lite.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+axum.workspace = true
+
+[lints]
+workspace = true

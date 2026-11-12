@@ -1,0 +1,30 @@
+[package]
+name = "rune-html-encode"
+version = "0.2.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "HTML entity encoding and decoding — escape and unescape HTML special characters"
+license.workspace = true
+keywords = ["html", "encode", "decode", "entities", "escape"]
+categories = ["encoding", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-html-encode"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["std"]
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

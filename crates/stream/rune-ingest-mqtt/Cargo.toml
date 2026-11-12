@@ -1,0 +1,32 @@
+[package]
+name = "rune-ingest-mqtt"
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Minimal MQTT subscriber normalizing messages into a typed event channel"
+license.workspace = true
+keywords = ["mqtt", "iot", "pubsub", "subscriber", "protocol"]
+categories = ["network-programming", "encoding", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-ingest-mqtt"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lib]
+name = "rune_ingest_mqtt"
+path = "src/lib.rs"
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+serde_json.workspace = true
+clap = { workspace = true, optional = true }
+
+[lints]
+workspace = true

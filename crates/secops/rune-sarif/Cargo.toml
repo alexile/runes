@@ -1,0 +1,40 @@
+[package]
+name = "rune-sarif"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "SARIF 2.1.0 for security findings: typed log model, writer from rune-finding, reader for CodeQL, Semgrep, Trivy and Gitleaks output, GitHub upload checks"
+license.workspace = true
+keywords = ["sarif", "security", "sast", "code-scanning", "finding"]
+categories = ["encoding", "parser-implementations", "development-tools"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+# The tests need the vendored SARIF schema and scanner fixtures, which are
+# test data only (and the schema is under the OASIS IPR policy).
+exclude = ["tests/"]
+
+[features]
+## `Options::with_taxonomy_names`: name and describe `taxa` from rune-taxonomy.
+taxonomy = ["dep:rune-taxonomy"]
+
+[dependencies]
+rune-finding = { workspace = true, features = ["serde"] }
+serde.workspace = true
+# Parse floats exactly, so CVSS scores survive a round trip bit for bit.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+rune-taxonomy = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+# Validates written logs against the vendored OASIS SARIF 2.1.0 schema
+# (draft-04). Chosen over `jsonschema` for its much smaller dependency tree.
+boon = "0.6.1"
+proptest.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

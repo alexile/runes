@@ -1,0 +1,33 @@
+[package]
+name = "rune-csp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Parse, analyze and canonicalize Content-Security-Policy headers, reporting weaknesses as rune-finding findings"
+license.workspace = true
+keywords = ["csp", "content-security", "security", "headers", "web"]
+categories = ["web-programming", "parser-implementations"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-csp"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+## The `rune-csp` command-line tool.
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+rune-finding.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

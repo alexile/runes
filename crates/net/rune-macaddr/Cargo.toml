@@ -1,0 +1,31 @@
+[package]
+name = "rune-macaddr"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "MAC address (EUI-48/EUI-64) parsing, formatting and classification with IEEE OUI vendor lookup over caller-supplied registry data"
+license.workspace = true
+keywords = ["mac-address", "eui-48", "eui-64", "oui", "network"]
+categories = ["network-programming", "parsing"]
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[[bin]]
+name = "rune-macaddr"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:clap"]
+
+[dependencies]
+clap = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

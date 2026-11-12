@@ -1,0 +1,28 @@
+[package]
+name = "rune-axum-sanitize"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Input sanitization middleware for Axum — strips HTML tags and null bytes from query params and request bodies"
+license.workspace = true
+keywords = ["axum", "sanitize", "xss", "security", "middleware"]
+categories = ["web-programming::http-server", "web-programming"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+axum.workspace = true
+tower-layer.workspace = true
+tower-service.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true, features = ["util"] }
+
+[lints]
+workspace = true

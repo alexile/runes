@@ -1,0 +1,30 @@
+[package]
+name = "rune-tokenize"
+version = "0.1.2"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Approximate token counting, budget checking, text truncation, and overlapping chunk splitting for LLM context windows"
+license.workspace = true
+keywords = ["tokenize", "tokens", "llm", "context-window", "chunking"]
+categories = ["text-processing", "command-line-utilities"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[[bin]]
+name = "rune-tokenize"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[features]
+default = ["std"]
+# Without `std` the library builds on `core` and `alloc` only.
+std = []
+cli = ["std"]
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
