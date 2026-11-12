@@ -156,11 +156,14 @@ fn shop() {
             "note": "string"
         }})
     );
-    let pointers: Vec<_> = create
+    // Pointers follow the variables' map order, which is sorted by key
+    // unless serde_json's `preserve_order` feature is on, so compare sorted.
+    let mut pointers: Vec<_> = create
         .insertion_points
         .iter()
         .map(|p| p.name.as_str())
         .collect();
+    pointers.sort_unstable();
     assert_eq!(
         pointers,
         [

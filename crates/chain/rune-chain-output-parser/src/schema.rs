@@ -695,7 +695,11 @@ mod tests {
             "additionalProperties": {"type": "integer"}
         }));
         assert!(s.is_valid(&json!({"x-a": "s", "n": 1})));
-        assert_eq!(paths(&s, &json!({"x-a": 1, "n": "s"})), ["/n", "/x-a"]);
+        // Violations follow the instance's map order, which depends on
+        // serde_json's `preserve_order` feature, so compare them sorted.
+        let mut got = paths(&s, &json!({"x-a": 1, "n": "s"}));
+        got.sort();
+        assert_eq!(got, ["/n", "/x-a"]);
     }
 
     #[test]

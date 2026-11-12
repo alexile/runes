@@ -63,13 +63,14 @@
 //! let order = spec.endpoint("createOrder").unwrap();
 //! assert_eq!(order.request.method, "POST");
 //! assert_eq!(order.request.url, "https://shop.example.test/v1/orders?dryRun=true");
-//! assert_eq!(order.request.body.as_utf8(), Some(r#"{"quantity":1,"sku":"A-1"}"#));
+//! let body: serde_json::Value = serde_json::from_slice(order.request.body.as_bytes())?;
+//! assert_eq!(body, serde_json::json!({"quantity": 1, "sku": "A-1"}));
 //!
 //! let sku = order.insertion_point(InsertionLocation::JsonPointer, "/sku").unwrap();
 //! assert!(sku.required);
 //! assert_eq!(sku.schema_type(), SchemaType::String);
 //! assert_eq!(order.insertion_points.len(), 3); // dryRun, /quantity, /sku
-//! # Ok::<(), rune_openapi::OpenApiError>(())
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
 #![forbid(unsafe_code)]

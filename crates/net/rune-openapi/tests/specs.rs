@@ -192,7 +192,11 @@ mod petstore_30 {
         let spec = spec();
         let update = by_op(&spec, "updatePet");
         assert_eq!(update.request.method, "PUT");
-        assert_eq!(update.request.body.as_utf8(), Some("age=0&name=rex"));
+        // Fields follow the schema's property order, which is sorted by name
+        // unless serde_json's `preserve_order` feature is on.
+        let mut fields: Vec<_> = update.request.body.as_utf8().unwrap().split('&').collect();
+        fields.sort_unstable();
+        assert_eq!(fields, ["age=0", "name=rex"]);
         assert_eq!(
             update.request.content_type(),
             Some("application/x-www-form-urlencoded")

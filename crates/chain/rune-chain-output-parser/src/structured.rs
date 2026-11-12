@@ -628,8 +628,10 @@ mod tests {
         let StructuredError::SchemaViolation(vs) = &err else {
             panic!("{err:?}")
         };
-        let paths: Vec<_> = vs.iter().map(|v| v.path.as_str()).collect();
-        // serde_json's map iterates in key order.
+        let mut paths: Vec<_> = vs.iter().map(|v| v.path.as_str()).collect();
+        // The order follows serde_json's map, which is sorted by key unless
+        // its `preserve_order` feature is on, so compare sorted.
+        paths.sort_unstable();
         assert_eq!(paths, ["/extra", "/line", "/rule"]);
         let prompt = parser().repair_prompt(&err);
         assert!(prompt.contains("- at /line"));
