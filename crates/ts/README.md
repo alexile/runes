@@ -5,7 +5,7 @@ Time series: statistics, smoothing, resampling, change points, forecasting.
 | Crate | Description |
 | --- | --- |
 | [`rune-bin`](rune-bin) | Fixed and adaptive histogram binning for numeric distributions |
-| [`rune-changepoint`](rune-changepoint) | CUSUM-style changepoint detection over a numeric series |
+| [`rune-changepoint`](rune-changepoint) | Change-point detection: PELT and binary segmentation over L2, normal and Poisson costs, CUSUM, and Bayesian online detection |
 | [`rune-correlate`](rune-correlate) | Cross-correlation and lag detection between two numeric series |
 | [`rune-derivative`](rune-derivative) | Rate-of-change (derivative) and cumulative (integral) calculation over a series |
 | [`rune-ewma`](rune-ewma) | Exponentially weighted moving average over a numeric stream |

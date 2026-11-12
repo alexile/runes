@@ -1,13 +1,41 @@
-//! CUSUM-style changepoint detection over a numeric series.
+//! Change-point detection for numeric series: offline segmentation with
+//! PELT and binary segmentation over pluggable costs, the classic two-sided
+//! CUSUM control chart, and Bayesian online detection.
 //!
-//! Implements the classic two-sided cumulative sum (CUSUM) control chart: two
-//! running accumulators track sustained drift above (`pos`) or below (`neg`)
-//! a `target` value, each accumulator resetting whenever it would go
-//! negative. A small `drift` allowance keeps normal noise from slowly
-//! accumulating into a false signal; once an accumulator exceeds `threshold`,
-//! a changepoint is signalled and that accumulator resets to zero.
+//! # Offline segmentation
 //!
-//! # Quick Start
+//! [`Pelt`] (Killick et al., 2012) finds the segmentation that exactly
+//! minimises the total segment cost plus a penalty per change point;
+//! [`BinSeg`] does the same greedily by repeated splitting. Both work with
+//! any [`Cost`]:
+//!
+//! - [`L2`]: change in mean (Gaussian, known variance).
+//! - [`NormalMeanVar`]: change in mean and/or variance.
+//! - [`Poisson`]: change in the rate of counts.
+//!
+//! Penalties are [`Penalty::Bic`], [`Penalty::Mbic`] or a manual value, and
+//! a minimum segment length keeps segments from getting too short. Change
+//! points are reported as the index where each new segment starts.
+//!
+//! ```rust
+//! use rune_changepoint::{L2, Pelt, Penalty};
+//!
+//! let data: Vec<f64> = (0..90)
+//!     .map(|t| if t < 40 { 1.0 } else if t < 70 { 6.0 } else { 3.0 } + [0.4, -0.3, 0.1][t % 3])
+//!     .collect();
+//! let cost = L2::with_estimated_variance(&data)?;
+//! let cps = Pelt::new().penalty(Penalty::Bic).min_size(5).detect(&cost)?;
+//! assert_eq!(cps, vec![40, 70]);
+//! # Ok::<(), rune_changepoint::Error>(())
+//! ```
+//!
+//! # CUSUM
+//!
+//! Two running accumulators track sustained drift above (`pos`) or below
+//! (`neg`) a `target` value, each resetting whenever it would go negative.
+//! A small `drift` allowance keeps normal noise from slowly accumulating
+//! into a false signal; once an accumulator exceeds `threshold`, a change
+//! is signalled and that accumulator resets to zero.
 //!
 //! ```rust
 //! use rune_changepoint::{Cusum, ChangeDirection};
@@ -23,10 +51,22 @@
 //! assert_eq!(signalled, Some(ChangeDirection::Up));
 //! ```
 //!
+//! # Online Bayesian detection
+//!
+//! With the default `std` feature, [`Bocpd`] implements the Bayesian
+//! online change-point detection of Adams and `MacKay` (2007) for Gaussian data with
+//! unknown mean and variance.
+//!
+//! # `no_std`
+//!
+//! Without the `std` feature everything except [`Bocpd`] builds on `core`
+//! and `alloc`.
+//!
 //! # CLI
 //!
 //! ```bash
 //! rune-changepoint --target 0 --threshold 5 --drift 0.5 0 0 0 3 3 3 3
+//! rune-changepoint --method pelt --cost l2 --penalty bic 0 0 0 0 5 5 5 5
 //! ```
 
 #![cfg_attr(not(any(feature = "std", test)), no_std)]
@@ -34,6 +74,74 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
+use core::fmt;
+
+#[cfg(feature = "std")]
+mod bocpd;
+mod cost;
+mod math;
+mod segment;
+
+#[cfg(feature = "std")]
+pub use bocpd::{Bocpd, NormalGammaPrior};
+pub use cost::{Cost, L2, NormalMeanVar, Poisson, noise_variance};
+pub use segment::{BinSeg, Pelt, Penalty};
+
+/// Errors from building costs or detectors.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum Error {
+    /// The value at `index` is `NaN` or infinite.
+    NonFinite {
+        /// Position of the offending value.
+        index: usize,
+    },
+    /// A count at `index` is negative (Poisson cost).
+    Negative {
+        /// Position of the offending value.
+        index: usize,
+    },
+    /// A manual penalty that is negative or not finite.
+    InvalidPenalty {
+        /// The penalty that was given.
+        value: f64,
+    },
+    /// A minimum segment length of 0.
+    InvalidMinSize {
+        /// The length that was given.
+        min_size: usize,
+    },
+    /// A setting outside its allowed range.
+    InvalidParameter {
+        /// Name of the setting.
+        name: &'static str,
+        /// The value that was given.
+        value: f64,
+    },
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NonFinite { index } => write!(f, "value at index {index} is not finite"),
+            Self::Negative { index } => write!(f, "count at index {index} is negative"),
+            Self::InvalidPenalty { value } => {
+                write!(f, "penalty must be finite and non-negative, got {value}")
+            }
+            Self::InvalidMinSize { min_size } => {
+                write!(
+                    f,
+                    "minimum segment length must be at least 1, got {min_size}"
+                )
+            }
+            Self::InvalidParameter { name, value } => {
+                write!(f, "{name} = {value} is out of range")
+            }
+        }
+    }
+}
+
+impl core::error::Error for Error {}
 
 /// Which direction a detected changepoint moved: a sustained rise or fall
 /// relative to `target`.
@@ -46,6 +154,7 @@ pub enum ChangeDirection {
 }
 
 /// Incremental two-sided CUSUM changepoint detector.
+#[derive(Debug, Clone)]
 pub struct Cusum {
     target: f64,
     threshold: f64,
@@ -80,6 +189,39 @@ impl Cusum {
             pos: 0.0,
             neg: 0.0,
         }
+    }
+
+    /// Like [`Cusum::new`], but checks the settings: all must be finite and
+    /// `threshold` and `drift` non-negative.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidParameter`] naming the first bad setting.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rune_changepoint::{Cusum, Error};
+    ///
+    /// assert!(Cusum::try_new(0.0, 5.0, 0.5).is_ok());
+    /// assert_eq!(
+    ///     Cusum::try_new(0.0, -1.0, 0.5).unwrap_err(),
+    ///     Error::InvalidParameter { name: "threshold", value: -1.0 }
+    /// );
+    /// ```
+    pub fn try_new(target: f64, threshold: f64, drift: f64) -> Result<Self, Error> {
+        if !target.is_finite() {
+            return Err(Error::InvalidParameter {
+                name: "target",
+                value: target,
+            });
+        }
+        for (name, value) in [("threshold", threshold), ("drift", drift)] {
+            if !(value.is_finite() && value >= 0.0) {
+                return Err(Error::InvalidParameter { name, value });
+            }
+        }
+        Ok(Self::new(target, threshold, drift))
     }
 
     /// Feeds one new observation. Returns `Some(direction)` if this
@@ -146,6 +288,14 @@ pub fn detect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn try_new_validates() {
+        assert!(Cusum::try_new(1.0, 0.0, 0.0).is_ok());
+        assert!(Cusum::try_new(f64::NAN, 1.0, 0.0).is_err());
+        assert!(Cusum::try_new(0.0, 1.0, f64::INFINITY).is_err());
+        assert!(Cusum::try_new(0.0, 1.0, -0.1).is_err());
+    }
 
     #[test]
     fn flat_series_never_signals() {
