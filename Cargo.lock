@@ -3334,13 +3334,14 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-parallel"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures",
  "rune-chain-core",
  "serde_json",
  "tokio",
+ "tokio-test",
 ]
 
 [[package]]

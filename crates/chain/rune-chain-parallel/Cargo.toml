@@ -1,10 +1,10 @@
 [package]
 name = "rune-chain-parallel"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "ParallelChain for rune-chain: fan-out to multiple chains concurrently and merge outputs"
+description = "ParallelChain for rune-chain: fan-out with bounded concurrency, per-branch timeouts, fail-fast cancellation or collect-all errors, ordered outputs and summed usage"
 license.workspace = true
 keywords = ["llm", "langchain", "parallel", "chain", "ai"]
 categories = ["asynchronous", "concurrency"]
@@ -17,10 +17,12 @@ rune-chain-core.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 serde_json.workspace = true
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["sync", "time"] }
 
 [dev-dependencies]
 rune-chain-core = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
+tokio-test.workspace = true
 
 [lints]
 workspace = true

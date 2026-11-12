@@ -17,7 +17,7 @@ LLM orchestration: core traits, OpenAI/Anthropic/Ollama providers, prompts, memo
 | [`rune-chain-ollama`](rune-chain-ollama) | Ollama (local models) provider for rune-chain: streaming, native tool calls, structured output, embeddings, model management |
 | [`rune-chain-openai`](rune-chain-openai) | OpenAI and OpenAI-compatible (Azure, Mistral, Groq, Together, DeepSeek, OpenRouter, vLLM, LM Studio) LLM provider for rune-chain: streaming, tools, structured output |
 | [`rune-chain-output-parser`](rune-chain-output-parser) | Typed LLM output for rune-chain: instructor-style extraction with re-ask, JSON Schema validation, partial streaming, and classic parsers |
-| [`rune-chain-parallel`](rune-chain-parallel) | ParallelChain for rune-chain: fan-out to multiple chains concurrently and merge outputs |
+| [`rune-chain-parallel`](rune-chain-parallel) | ParallelChain for rune-chain: fan-out with bounded concurrency, per-branch timeouts, fail-fast cancellation or collect-all errors, ordered outputs and summed usage |
 | [`rune-chain-prompt`](rune-chain-prompt) | Prompt template engine for the rune-chain LLM orchestration framework |
 | [`rune-chain-retrieval`](rune-chain-retrieval) | RAG for rune-chain: RetrievalQaChain, BM25, hybrid fusion (RRF), MMR, multi-query and Cohere/Jina/Voyage reranking |
 | [`rune-chain-retry`](rune-chain-retry) | Resilience and routing for rune-chain Llm: retries with jittered backoff, multi-provider router with circuit breakers |
