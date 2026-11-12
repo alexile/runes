@@ -21,7 +21,7 @@ LLM orchestration: core traits, OpenAI/Anthropic/Ollama providers, prompts, memo
 | [`rune-chain-prompt`](rune-chain-prompt) | Prompt template engine for the rune-chain LLM orchestration framework |
 | [`rune-chain-retrieval`](rune-chain-retrieval) | RAG for rune-chain: RetrievalQaChain, BM25, hybrid fusion (RRF), MMR, multi-query and Cohere/Jina/Voyage reranking |
 | [`rune-chain-retry`](rune-chain-retry) | Resilience and routing for rune-chain Llm: retries with jittered backoff, multi-provider router with circuit breakers |
-| [`rune-chain-sequential`](rune-chain-sequential) | SequentialChain — run rune-chain chains in order, piping each output as input to the next |
+| [`rune-chain-sequential`](rune-chain-sequential) | SequentialChain for rune-chain: ordered pipelines with build-time key checks, input/output mapping, per-step timeouts and retries, early exit, step events and summed usage |
 | [`rune-chain-splitter`](rune-chain-splitter) | Text splitters for RAG: semantic (embedding-based), recursive, markdown and token chunking with citation offsets |
 | [`rune-chain-tools`](rune-chain-tools) | Standard LLM-callable tool implementations for rune-chain: encoding, hashing, graph, entropy, and more |
 | [`rune-chain-usage`](rune-chain-usage) | Per-provider token and cost accounting with budget caps for rune-chain LLMs |
