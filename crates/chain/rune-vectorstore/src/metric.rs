@@ -50,8 +50,36 @@ impl Metric {
         }
     }
 
+    /// Stable one-byte tag used by the snapshot format.
+    pub(crate) const fn tag(self) -> u8 {
+        match self {
+            Self::Cosine => 0,
+            Self::DotProduct => 1,
+            Self::Euclidean => 2,
+        }
+    }
+
+    /// Inverse of [`Metric::tag`].
+    pub(crate) const fn from_tag(tag: u8) -> Option<Self> {
+        match tag {
+            0 => Some(Self::Cosine),
+            1 => Some(Self::DotProduct),
+            2 => Some(Self::Euclidean),
+            _ => None,
+        }
+    }
+
     /// Score with precomputed norms (`‖a‖`, `‖b‖`); only cosine uses them.
+    ///
+    /// A score that comes out NaN (only possible when an intermediate
+    /// overflows, e.g. `inf - inf`) is mapped to negative infinity so it
+    /// sorts last instead of poisoning comparisons.
     pub(crate) fn score_with_norms(self, a: &[f32], na: f32, b: &[f32], nb: f32) -> f32 {
+        let s = self.raw_score(a, na, b, nb);
+        if s.is_nan() { f32::NEG_INFINITY } else { s }
+    }
+
+    fn raw_score(self, a: &[f32], na: f32, b: &[f32], nb: f32) -> f32 {
         match self {
             Self::Cosine => {
                 if na == 0.0 || nb == 0.0 {
@@ -165,5 +193,20 @@ mod tests {
         assert!(Metric::Euclidean.validate(&[f32::INFINITY]).is_err());
         assert!(Metric::Euclidean.validate(&[f32::MAX, f32::MAX]).is_err());
         assert!((Metric::Cosine.validate(&[3.0, 4.0]).unwrap() - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn overflowing_scores_never_come_out_nan() {
+        let big = [f32::MAX, -f32::MAX];
+        let s = Metric::DotProduct.score_with_norms(&big, 0.0, &[f32::MAX, f32::MAX], 0.0);
+        assert!(!s.is_nan());
+    }
+
+    #[test]
+    fn tags_round_trip() {
+        for m in [Metric::Cosine, Metric::DotProduct, Metric::Euclidean] {
+            assert_eq!(Metric::from_tag(m.tag()), Some(m));
+        }
+        assert_eq!(Metric::from_tag(9), None);
     }
 }

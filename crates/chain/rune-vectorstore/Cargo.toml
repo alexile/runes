@@ -1,10 +1,10 @@
 [package]
 name = "rune-vectorstore"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Vector-store trait with in-memory flat and HNSW indexes for RAG pipelines"
+description = "Vector stores for RAG: async trait, exact and HNSW in-memory indexes, JSON metadata filters, MMR and checksummed snapshots"
 license.workspace = true
 keywords = ["vector", "hnsw", "embeddings", "rag", "similarity"]
 categories = ["data-structures", "science", "algorithms"]
@@ -14,10 +14,13 @@ publish = true
 
 [dependencies]
 async-trait.workspace = true
+rune-crc32.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tokio-test.workspace = true
 

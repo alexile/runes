@@ -3353,7 +3353,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-retrieval"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures",
@@ -5119,10 +5119,13 @@ dependencies = [
 
 [[package]]
 name = "rune-vectorstore"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "proptest",
+ "rune-crc32",
+ "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-test",

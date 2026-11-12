@@ -33,8 +33,8 @@ always returns an empty list):
 
 ```toml
 [dependencies]
-rune-chain-retrieval = "0.2"
-rune-chain-embed     = "0.1"  # for OpenAiEmbedder
+rune-chain-retrieval = "0.3"
+rune-chain-embed     = "0.3"  # for OpenAiEmbedder
 ```
 
 ## Usage
@@ -108,6 +108,10 @@ let store = Arc::new(VectorStoreBackend::new(InMemoryVectorStore::new(
 let chain = RetrievalQaChain::new(llm, embedder, store);
 ```
 
+Document metadata is stored as JSON strings, so `rune_vectorstore::Filter`
+queries on the backend (via `store.inner()`) match it with string values,
+e.g. `Filter::eq("topic", "geo")`.
+
 ## Hybrid search with reranking
 
 ```rust
@@ -178,6 +182,17 @@ let chain = RetrievalQaChain::new(llm, embedder, store)
     .top_k(8)                                      // retrieve 8 documents (default: 4)
     .with_system("Answer in bullet points only.");  // custom system prompt
 ```
+
+## Migrating from 0.2
+
+0.3 only moves `VectorStoreBackend` onto `rune-vectorstore` 0.2; the rest of
+the API is unchanged.
+
+- `VectorStoreBackend<S>` now requires a `rune-vectorstore` 0.2
+  `VectorStore`. Upgrade `rune-vectorstore` alongside this crate (see its
+  own migration notes: JSON metadata, the new `Filter` builders).
+- Metadata that was written to the backend directly with non-string JSON
+  values comes back in `Document::metadata` as its JSON text.
 
 ## Migrating from 0.1
 

@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
-use rune_vectorstore::{Query, Record};
+use rune_vectorstore::{Query, Record, Value};
 
 use crate::document::{Document, StoreError};
 use crate::store::VectorStore;
@@ -11,7 +11,9 @@ use crate::store::VectorStore;
 ///
 /// [`VectorStore::add`] assigns each document a fresh id
 /// (`<prefix><counter>`, default prefix `doc-`) and upserts it with its
-/// content and metadata; [`VectorStore::search`] runs a top-`k` query.
+/// content and metadata (as JSON strings); [`VectorStore::search`] runs a
+/// top-`k` query. Non-string metadata written to the backend directly comes
+/// back as its JSON text.
 /// Use a distinct prefix per adapter if several write to the same backend,
 /// and reach the backend through [`inner`](Self::inner) for upserts by your
 /// own ids, deletes, filters or scores.
@@ -64,6 +66,15 @@ impl<S: rune_vectorstore::VectorStore> VectorStoreBackend<S> {
     }
 }
 
+/// [`Document`] metadata is string-valued: strings pass through, any other
+/// JSON value (written to the backend directly) is rendered as JSON text.
+fn meta_to_string(value: Value) -> String {
+    match value {
+        Value::String(s) => s,
+        other => other.to_string(),
+    }
+}
+
 fn store_err(err: &rune_vectorstore::StoreError) -> StoreError {
     StoreError::Other(err.to_string())
 }
@@ -80,7 +91,11 @@ impl<S: rune_vectorstore::VectorStore> VectorStore for VectorStoreBackend<S> {
                 let n = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let mut record = Record::new(format!("{}{n}", self.prefix), vector.clone())
                     .with_content(doc.content.clone());
-                record.metadata.extend(doc.metadata.clone());
+                record.metadata.extend(
+                    doc.metadata
+                        .iter()
+                        .map(|(k, v)| (k.clone(), Value::String(v.clone()))),
+                );
                 record
             })
             .collect();
@@ -101,7 +116,12 @@ impl<S: rune_vectorstore::VectorStore> VectorStore for VectorStoreBackend<S> {
             .into_iter()
             .map(|hit| Document {
                 content: hit.record.content,
-                metadata: hit.record.metadata.into_iter().collect(),
+                metadata: hit
+                    .record
+                    .metadata
+                    .into_iter()
+                    .map(|(k, v)| (k, meta_to_string(v)))
+                    .collect(),
             })
             .collect())
     }

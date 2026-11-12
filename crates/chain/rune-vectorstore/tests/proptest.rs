@@ -5,7 +5,9 @@
 use std::collections::HashMap;
 
 use proptest::prelude::*;
-use rune_vectorstore::{FlatIndex, HnswIndex, HnswParams, Metric, Query, Record, VectorIndex};
+use rune_vectorstore::{
+    Filter, FlatIndex, HnswIndex, HnswParams, Metric, Query, Record, VectorIndex,
+};
 
 const DIM: usize = 4;
 
@@ -130,5 +132,35 @@ proptest! {
             prop_assert_eq!(a.len(), b.len());
             prop_assert!(a.iter().chain(&b).all(|h| h.score.is_finite()));
         }
+    }
+
+    #[test]
+    fn filtered_hnsw_returns_every_match_it_should(
+        vectors in prop::collection::vec(vector(), 1..150),
+        buckets in prop::collection::vec(0u8..10, 150),
+        q in vector(),
+        k in 1usize..10,
+        cut in 0u8..11,
+        ef in 1usize..40,
+    ) {
+        let records: Vec<Record> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| Record::new(i.to_string(), v.clone()).with_meta("b", buckets[i]))
+            .collect();
+        let mut flat = FlatIndex::new(Metric::Euclidean);
+        let mut hnsw = HnswIndex::new(
+            Metric::Euclidean,
+            HnswParams::default().with_m(4).with_ef_search(ef),
+        );
+        flat.upsert(records.clone()).unwrap();
+        hnsw.upsert(records).unwrap();
+        let filter = Filter::lt("b", cut);
+        let query = Query::new(q, k).with_filter(filter.clone());
+        let exact = flat.query(&query).unwrap();
+        let approx = hnsw.query(&query).unwrap();
+        prop_assert_eq!(approx.len(), exact.len());
+        prop_assert!(approx.iter().all(|h| filter.matches(&h.record)));
+        prop_assert!(approx.windows(2).all(|w| w[0].score >= w[1].score));
     }
 }

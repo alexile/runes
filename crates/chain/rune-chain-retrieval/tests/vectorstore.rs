@@ -171,3 +171,21 @@ async fn backend_errors_become_store_errors() {
     let err = store.search(&[1.0, 2.0], 1).await.unwrap_err();
     assert!(err.to_string().contains("dimensions"), "{err}");
 }
+
+#[tokio::test]
+async fn non_string_backend_metadata_comes_back_as_json_text() {
+    let store = VectorStoreBackend::new(InMemoryVectorStore::new(Options::default()));
+    store
+        .inner()
+        .upsert(vec![
+            rune_vectorstore::Record::new("x", vec![1.0, 0.0])
+                .with_content("numbers")
+                .with_meta("page", 3)
+                .with_meta("tags", rune_vectorstore::Value::from(vec!["a", "b"])),
+        ])
+        .await
+        .unwrap();
+    let docs = store.search(&[1.0, 0.0], 1).await.unwrap();
+    assert_eq!(docs[0].metadata["page"], "3");
+    assert_eq!(docs[0].metadata["tags"], r#"["a","b"]"#);
+}

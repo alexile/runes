@@ -1,6 +1,10 @@
-//! Records, queries, filters and hits.
+//! Records, queries and hits.
 
 use std::collections::BTreeMap;
+
+use serde_json::Value;
+
+use crate::{Filter, StoreError};
 
 /// One stored item: a unique id, its embedding, and the payload returned on a hit.
 ///
@@ -11,8 +15,10 @@ use std::collections::BTreeMap;
 ///
 /// let r = Record::new("doc-1", vec![0.1, 0.2, 0.3])
 ///     .with_content("Paris is the capital of France.")
-///     .with_meta("source", "geo.md");
+///     .with_meta("source", "geo.md")
+///     .with_meta("page", 3);
 /// assert_eq!(r.metadata["source"], "geo.md");
+/// assert_eq!(r.metadata["page"], 3);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -23,8 +29,8 @@ pub struct Record {
     pub vector: Vec<f32>,
     /// Text the vector was computed from (or any payload text).
     pub content: String,
-    /// Arbitrary string metadata, usable in [`Filter`]s.
-    pub metadata: BTreeMap<String, String>,
+    /// Arbitrary JSON metadata, usable in [`Filter`]s.
+    pub metadata: BTreeMap<String, Value>,
 }
 
 impl Record {
@@ -46,54 +52,12 @@ impl Record {
         self
     }
 
-    /// Add one metadata entry.
+    /// Add one metadata entry. Anything convertible to a JSON value works:
+    /// strings, numbers, booleans, or a `serde_json::json!` literal.
     #[must_use]
-    pub fn with_meta(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn with_meta(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self
-    }
-}
-
-/// Metadata filter: a record matches when every listed key has exactly the
-/// listed value. The empty filter matches everything.
-///
-/// # Example
-///
-/// ```
-/// use rune_vectorstore::{Filter, Record};
-///
-/// let f = Filter::default().must_equal("lang", "en");
-/// assert!(f.matches(&Record::new("a", vec![1.0]).with_meta("lang", "en")));
-/// assert!(!f.matches(&Record::new("b", vec![1.0]).with_meta("lang", "de")));
-/// assert!(!f.matches(&Record::new("c", vec![1.0])));
-/// ```
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct Filter {
-    /// Required `key == value` pairs.
-    pub equals: BTreeMap<String, String>,
-}
-
-impl Filter {
-    /// Require `metadata[key] == value`.
-    #[must_use]
-    pub fn must_equal(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.equals.insert(key.into(), value.into());
-        self
-    }
-
-    /// `true` if the filter has no conditions.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.equals.is_empty()
-    }
-
-    /// `true` if `record` satisfies every condition.
-    #[must_use]
-    pub fn matches(&self, record: &Record) -> bool {
-        self.equals
-            .iter()
-            .all(|(k, v)| record.metadata.get(k) == Some(v))
     }
 }
 
@@ -105,8 +69,9 @@ impl Filter {
 /// use rune_vectorstore::{Filter, Query};
 ///
 /// let q = Query::new(vec![0.1, 0.9], 5)
-///     .with_filter(Filter::default().must_equal("lang", "en"))
-///     .with_min_score(0.5);
+///     .with_filter(Filter::eq("lang", "en").and(Filter::gte("year", 2020)))
+///     .with_min_score(0.5)
+///     .with_ef_search(128);
 /// assert_eq!(q.top_k, 5);
 /// ```
 #[derive(Debug, Clone, PartialEq)]
@@ -118,8 +83,14 @@ pub struct Query {
     pub top_k: usize,
     /// Metadata filter applied to candidates.
     pub filter: Filter,
-    /// Drop hits whose score is below this value.
+    /// Drop hits whose score is below this value. NaN is rejected.
     pub min_score: Option<f32>,
+    /// Per-query override of the HNSW search breadth (ignored by exact
+    /// indexes). `None` uses the index default.
+    pub ef_search: Option<usize>,
+    /// Return each hit's vector. Default `true`; turn it off to skip copying
+    /// vectors when only ids, content and metadata are needed. MMR needs them.
+    pub include_vectors: bool,
 }
 
 impl Query {
@@ -131,6 +102,8 @@ impl Query {
             top_k,
             filter: Filter::default(),
             min_score: None,
+            ef_search: None,
+            include_vectors: true,
         }
     }
 
@@ -148,9 +121,46 @@ impl Query {
         self
     }
 
-    /// `true` if a hit with `score` on `record` passes the filter and threshold.
-    pub(crate) fn accepts(&self, score: f32, record: &Record) -> bool {
-        self.min_score.is_none_or(|m| score >= m) && self.filter.matches(record)
+    /// Override the HNSW search breadth for this query.
+    #[must_use]
+    pub const fn with_ef_search(mut self, ef_search: usize) -> Self {
+        self.ef_search = Some(ef_search);
+        self
+    }
+
+    /// Choose whether hits carry their vectors (default `true`).
+    #[must_use]
+    pub const fn with_vectors(mut self, include: bool) -> Self {
+        self.include_vectors = include;
+        self
+    }
+
+    /// Check the parts of the query that do not depend on the store.
+    pub(crate) fn validate(&self) -> Result<(), StoreError> {
+        if self.min_score.is_some_and(f32::is_nan) {
+            return Err(StoreError::InvalidQuery("min_score is NaN"));
+        }
+        self.filter.validate()
+    }
+
+    /// `true` if `score` passes the minimum-score threshold.
+    pub(crate) fn passes_threshold(&self, score: f32) -> bool {
+        self.min_score.is_none_or(|m| score >= m)
+    }
+
+    /// Build the hit for `record`, honouring [`Query::include_vectors`].
+    pub(crate) fn hit(&self, score: f32, record: &Record) -> Hit {
+        let record = if self.include_vectors {
+            record.clone()
+        } else {
+            Record {
+                id: record.id.clone(),
+                vector: Vec::new(),
+                content: record.content.clone(),
+                metadata: record.metadata.clone(),
+            }
+        };
+        Hit::new(score, record)
     }
 }
 

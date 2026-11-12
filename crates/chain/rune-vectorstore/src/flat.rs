@@ -4,12 +4,15 @@ use std::collections::HashMap;
 
 use crate::index::Schema;
 use crate::record::sort_hits;
-use crate::{Hit, Metric, Query, Record, StoreError, VectorIndex};
+use crate::{Hit, IndexKind, Metric, Query, Record, StoreError, VectorIndex};
 
 /// Exact nearest-neighbour index that scores every record on each query.
 ///
 /// Query cost is `O(n · d)`. That is fast enough for tens of thousands of
-/// records and gives perfect recall, so it is the default backend.
+/// records and gives perfect recall, so it is the default backend and the
+/// reference the approximate [`HnswIndex`](crate::HnswIndex) is tested
+/// against. Metadata filters are applied before scoring, so a filtered
+/// query only scores the matching records.
 ///
 /// # Example
 ///
@@ -106,17 +109,19 @@ impl VectorIndex for FlatIndex {
     }
 
     fn query(&self, query: &Query) -> Result<Vec<Hit>, StoreError> {
-        let qn = self.schema.check_query(&query.vector)?;
+        let qn = self.schema.check_query(query)?;
         if query.top_k == 0 {
             return Ok(Vec::new());
         }
         let metric = self.schema.metric;
+        let filtered = !query.filter.is_empty();
         let mut scored: Vec<(f32, &Record)> = self
             .entries
             .iter()
+            .filter(|(r, _)| !filtered || query.filter.matches(r))
             .filter_map(|(r, n)| {
                 let s = metric.score_with_norms(&query.vector, qn, &r.vector, *n);
-                query.accepts(s, r).then_some((s, r))
+                query.passes_threshold(s).then_some((s, r))
             })
             .collect();
         let by_score = |a: &(f32, &Record), b: &(f32, &Record)| {
@@ -126,17 +131,22 @@ impl VectorIndex for FlatIndex {
             scored.select_nth_unstable_by(query.top_k - 1, by_score);
             scored.truncate(query.top_k);
         }
-        let mut hits: Vec<Hit> = scored
-            .into_iter()
-            .map(|(s, r)| Hit::new(s, r.clone()))
-            .collect();
+        let mut hits: Vec<Hit> = scored.into_iter().map(|(s, r)| query.hit(s, r)).collect();
         sort_hits(&mut hits);
         Ok(hits)
+    }
+
+    fn records(&self) -> Box<dyn Iterator<Item = &Record> + '_> {
+        Box::new(self.entries.iter().map(|(r, _)| r))
     }
 
     fn clear(&mut self) {
         self.entries.clear();
         self.positions.clear();
+    }
+
+    fn kind(&self) -> Option<IndexKind> {
+        Some(IndexKind::Flat)
     }
 }
 
@@ -177,8 +187,10 @@ mod tests {
     #[test]
     fn filter_and_min_score() {
         let idx = sample();
-        let q = Query::new(vec![0.7, 0.7], 3).with_filter(Filter::default().must_equal("k", "1"));
+        let q = Query::new(vec![0.7, 0.7], 3).with_filter(Filter::eq("k", "1"));
         assert_eq!(ids(&idx.query(&q).unwrap()), ["a", "c"]);
+        let q = Query::new(vec![0.7, 0.7], 3).with_filter(Filter::gt("k", "1"));
+        assert_eq!(ids(&idx.query(&q).unwrap()), ["b"]);
         let q = Query::new(vec![1.0, 0.0], 3).with_min_score(0.5);
         assert_eq!(ids(&idx.query(&q).unwrap()), ["a", "b"]);
     }
@@ -195,6 +207,8 @@ mod tests {
         assert!(idx.get("a").is_none());
         assert_eq!(idx.get("c").unwrap().id, "c");
         assert_eq!(idx.get("b").unwrap().id, "b");
+        assert_eq!(idx.delete_where(&Filter::eq("k", "2")).unwrap(), 1);
+        assert_eq!(idx.records().count(), 1);
         idx.clear();
         assert!(idx.is_empty());
         assert_eq!(idx.dimension(), Some(2));
@@ -232,6 +246,15 @@ mod tests {
     }
 
     #[test]
+    fn hits_without_vectors() {
+        let hits = sample()
+            .query(&Query::new(vec![1.0, 0.0], 1).with_vectors(false))
+            .unwrap();
+        assert_eq!(hits[0].record.vector, Vec::<f32>::new());
+        assert_eq!(hits[0].record.metadata["k"], "1");
+    }
+
+    #[test]
     fn query_validation() {
         let idx = sample();
         assert!(matches!(
@@ -240,6 +263,18 @@ mod tests {
         ));
         assert!(matches!(
             idx.query(&Query::new(vec![0.0, 0.0], 1)),
+            Err(StoreError::InvalidVector(_))
+        ));
+        assert_eq!(
+            idx.query(&Query::new(vec![1.0, 0.0], 1).with_min_score(f32::NAN)),
+            Err(StoreError::InvalidQuery("min_score is NaN"))
+        );
+        assert!(matches!(
+            idx.query(&Query::new(vec![1.0, 0.0], 1).with_filter(Filter::gt("k", true))),
+            Err(StoreError::InvalidFilter(_))
+        ));
+        assert!(matches!(
+            idx.query(&Query::new(vec![f32::NAN, 0.0], 1)),
             Err(StoreError::InvalidVector(_))
         ));
         let empty = FlatIndex::with_dimension(Metric::DotProduct, 3);

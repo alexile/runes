@@ -28,6 +28,6 @@ LLM orchestration: core traits, OpenAI/Anthropic/Ollama providers, prompts, memo
 | [`rune-mcp`](rune-mcp) | Hardened MCP client and server on rmcp: rune tools, resources and prompts, namespaced multi-server tool sets, policy, caps and fencing |
 | [`rune-otel-genai`](rune-otel-genai) | OpenTelemetry GenAI semantic-convention spans for rune-chain LLM calls, tool executions and agents — model, tokens, cost and errors |
 | [`rune-tool-schema`](rune-tool-schema) | MCP-shaped tool descriptor: name, description, JSON-schema input, safety level and category |
-| [`rune-vectorstore`](rune-vectorstore) | Vector-store trait with in-memory flat and HNSW indexes for RAG pipelines |
+| [`rune-vectorstore`](rune-vectorstore) | Vector stores for RAG: async trait, exact and HNSW in-memory indexes, JSON metadata filters, MMR and checksummed snapshots |
 
 [All groups](../../README.md)

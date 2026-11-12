@@ -10,7 +10,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use crate::index::Schema;
 use crate::record::sort_hits;
-use crate::{Hit, Metric, Query, Record, StoreError, VectorIndex};
+use crate::{Hit, IndexKind, Metric, Query, Record, StoreError, VectorIndex};
 
 /// Highest layer a node may be assigned to.
 const MAX_LEVEL: usize = 16;
@@ -119,12 +119,32 @@ impl Ord for Cand {
 /// Approximate nearest-neighbour index (HNSW).
 ///
 /// Queries visit `O(log n)` nodes instead of all of them, at the price of
-/// approximate results; raise [`HnswParams::ef_search`] for better recall.
+/// approximate results; raise [`HnswParams::ef_search`] (or set
+/// [`Query::ef_search`] per query) for better recall.
+///
+/// # Deletes and upserts
+///
 /// Deletes and replacing upserts leave tombstones that still route searches
 /// but never appear in results; the graph is rebuilt once tombstones
-/// outnumber live records. If a filtered or thresholded query cannot fill
-/// `top_k` from the graph walk, it falls back to an exact scan, so filters
-/// never lose matches.
+/// outnumber live records (and at least 64 exist).
+///
+/// # Filtered queries
+///
+/// A query with a metadata filter first evaluates the filter on every live
+/// record (cheap: no vector math) to learn how many match. Then:
+///
+/// - if few records match — at most `ef * 2m`, or under 5 % of the index —
+///   it scores exactly those records (pre-filtering, exact results);
+/// - otherwise it walks the graph through *all* nodes but admits only
+///   matching ones to the result list (filtered search), so the graph stays
+///   connected however the filter cuts it;
+/// - if that walk still finds fewer than `top_k` matches, it falls back to
+///   the exact scan.
+///
+/// A filter therefore never loses matches that exist; it can only cost time.
+/// A `min_score` threshold is applied to the walk's results and does not
+/// trigger the fallback.
+///
 ///
 /// # Example
 ///
@@ -220,6 +240,14 @@ impl HnswIndex {
     }
 
     /// Greedy beam search on one layer; returns up to `ef` candidates, best first.
+    ///
+    /// Every reachable node routes the search, but only nodes for which
+    /// `accept` returns `true` enter the result set. That is how tombstones
+    /// and metadata filters are handled without cutting the graph apart.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the query, its norm and the walk settings are all independent"
+    )]
     fn search_layer(
         &self,
         q: &[f32],
@@ -227,10 +255,16 @@ impl HnswIndex {
         entry: &[Cand],
         ef: usize,
         layer: usize,
+        accept: &dyn Fn(usize) -> bool,
     ) -> Vec<Cand> {
         let mut visited: HashSet<usize> = entry.iter().map(|c| c.idx).collect();
         let mut candidates: BinaryHeap<Cand> = entry.iter().copied().collect();
-        let mut results: BinaryHeap<Reverse<Cand>> = entry.iter().copied().map(Reverse).collect();
+        let mut results: BinaryHeap<Reverse<Cand>> = entry
+            .iter()
+            .copied()
+            .filter(|c| accept(c.idx))
+            .map(Reverse)
+            .collect();
         while results.len() > ef {
             results.pop();
         }
@@ -251,9 +285,11 @@ impl HnswIndex {
                 if results.len() < ef || s > worst {
                     let cand = Cand { score: s, idx: nb };
                     candidates.push(cand);
-                    results.push(Reverse(cand));
-                    if results.len() > ef {
-                        results.pop();
+                    if accept(nb) {
+                        results.push(Reverse(cand));
+                        if results.len() > ef {
+                            results.pop();
+                        }
                     }
                 }
             }
@@ -314,7 +350,7 @@ impl HnswIndex {
             idx: entry,
         }];
         for layer in (stop_layer + 1..=top).rev() {
-            eps = self.search_layer(q, qn, &eps, 1, layer);
+            eps = self.search_layer(q, qn, &eps, 1, layer, &|_| true);
         }
         eps
     }
@@ -337,7 +373,10 @@ impl HnswIndex {
         let top = self.nodes[entry].links.len() - 1;
         let mut eps = self.descend(&q, norm, entry, level);
         for layer in (0..=level.min(top)).rev() {
-            let found = self.search_layer(&q, norm, &eps, self.params.ef_construction, layer);
+            let found =
+                self.search_layer(&q, norm, &eps, self.params.ef_construction, layer, &|_| {
+                    true
+                });
             let live: Vec<Cand> = found
                 .iter()
                 .copied()
@@ -401,22 +440,80 @@ impl HnswIndex {
         }
     }
 
-    fn exact_scan(&self, query: &Query, qn: f32) -> Vec<Hit> {
-        let mut hits: Vec<Hit> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| !n.deleted)
-            .filter_map(|(i, n)| {
-                let s = self.score_to(&query.vector, qn, i);
-                query
-                    .accepts(s, &n.record)
-                    .then(|| Hit::new(s, n.record.clone()))
+    /// Score every node `accept` allows; the reference result.
+    fn exact_scan(&self, query: &Query, qn: f32, accept: &dyn Fn(usize) -> bool) -> Vec<Hit> {
+        let mut scored: Vec<Cand> = (0..self.nodes.len())
+            .filter(|&i| accept(i))
+            .map(|i| Cand {
+                score: self.score_to(&query.vector, qn, i),
+                idx: i,
             })
+            .filter(|c| query.passes_threshold(c.score))
+            .collect();
+        self.finish(query, &mut scored)
+    }
+
+    /// Turn best-first candidates into at most `top_k` sorted hits.
+    fn finish(&self, query: &Query, cands: &mut Vec<Cand>) -> Vec<Hit> {
+        let by_score = |a: &Cand, b: &Cand| {
+            b.score.total_cmp(&a.score).then_with(|| {
+                self.nodes[a.idx]
+                    .record
+                    .id
+                    .cmp(&self.nodes[b.idx].record.id)
+            })
+        };
+        if cands.len() > query.top_k {
+            cands.select_nth_unstable_by(query.top_k - 1, by_score);
+            cands.truncate(query.top_k);
+        }
+        let mut hits: Vec<Hit> = cands
+            .iter()
+            .map(|c| query.hit(c.score, &self.nodes[c.idx].record))
             .collect();
         sort_hits(&mut hits);
-        hits.truncate(query.top_k);
         hits
+    }
+
+    /// Graph search restricted to nodes `accept` allows (`allowed` of them
+    /// exist), falling back to an exact scan if the walk comes up short.
+    fn graph_search(
+        &self,
+        query: &Query,
+        qn: f32,
+        entry: usize,
+        allowed: usize,
+        accept: &dyn Fn(usize) -> bool,
+    ) -> Vec<Hit> {
+        let ef = query
+            .ef_search
+            .unwrap_or(self.params.ef_search)
+            .max(query.top_k)
+            .max(1);
+        let eps = self.descend(&query.vector, qn, entry, 0);
+        let found = self.search_layer(&query.vector, qn, &eps, ef, 0, accept);
+        // A walk that found fewer accepted nodes than it should have (sparse
+        // filters, tombstone-heavy regions) is redone exactly. A threshold
+        // that cuts the list short is not a reason: the walk already reached
+        // nodes below it.
+        if found.len() < query.top_k.min(allowed) {
+            return self.exact_scan(query, qn, accept);
+        }
+        let mut kept: Vec<Cand> = found
+            .into_iter()
+            .filter(|c| query.passes_threshold(c.score))
+            .collect();
+        self.finish(query, &mut kept)
+    }
+
+    /// The number of live nodes a filter may match before the index stops
+    /// scanning them exactly and walks the graph instead.
+    fn exact_filter_cutoff(&self, ef: usize) -> usize {
+        // A graph walk scores roughly `ef * 2m` nodes; scanning fewer
+        // matches than that exactly is cheaper and always exact. Below 5 %
+        // selectivity a filtered walk wanders through mostly rejected nodes,
+        // so the exact scan wins there too.
+        (ef.saturating_mul(2 * self.params.m)).max(self.ids.len() / 20)
     }
 }
 
@@ -455,32 +552,47 @@ impl VectorIndex for HnswIndex {
         self.ids.get(id).map(|&i| &self.nodes[i].record)
     }
 
+    fn records(&self) -> Box<dyn Iterator<Item = &Record> + '_> {
+        Box::new(self.nodes.iter().filter(|n| !n.deleted).map(|n| &n.record))
+    }
+
     fn query(&self, query: &Query) -> Result<Vec<Hit>, StoreError> {
-        let qn = self.schema.check_query(&query.vector)?;
+        let qn = self.schema.check_query(query)?;
         let (Some(entry), true) = (self.entry, query.top_k > 0) else {
             return Ok(Vec::new());
         };
-        let eps = self.descend(&query.vector, qn, entry, 0);
-        let ef = self.params.ef_search.max(query.top_k);
-        let mut hits: Vec<Hit> = self
-            .search_layer(&query.vector, qn, &eps, ef, 0)
-            .into_iter()
-            .filter_map(|c| {
-                let n = &self.nodes[c.idx];
-                (!n.deleted && query.accepts(c.score, &n.record))
-                    .then(|| Hit::new(c.score, n.record.clone()))
-            })
-            .collect();
-        if hits.len() < query.top_k.min(self.len()) {
-            return Ok(self.exact_scan(query, qn));
+        let live = |i: usize| !self.nodes[i].deleted;
+        if query.filter.is_empty() {
+            return Ok(self.graph_search(query, qn, entry, self.len(), &live));
         }
-        sort_hits(&mut hits);
-        hits.truncate(query.top_k);
-        Ok(hits)
+        // Pre-filter pass: evaluate the filter on every live node (no vector
+        // math), then pick exact scan or filtered graph walk by selectivity.
+        let mask: Vec<bool> = self
+            .nodes
+            .iter()
+            .map(|n| !n.deleted && query.filter.matches(&n.record))
+            .collect();
+        let allowed = mask.iter().filter(|&&m| m).count();
+        let accept = |i: usize| mask[i];
+        let ef = query
+            .ef_search
+            .unwrap_or(self.params.ef_search)
+            .max(query.top_k);
+        if allowed == 0 {
+            Ok(Vec::new())
+        } else if allowed <= self.exact_filter_cutoff(ef) {
+            Ok(self.exact_scan(query, qn, &accept))
+        } else {
+            Ok(self.graph_search(query, qn, entry, allowed, &accept))
+        }
     }
 
     fn clear(&mut self) {
         self.reset();
+    }
+
+    fn kind(&self) -> Option<IndexKind> {
+        Some(IndexKind::Hnsw(self.params))
     }
 }
 

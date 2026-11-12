@@ -405,6 +405,7 @@ rune-probe-ms = { path = "crates/net/rune-probe-ms", version = "0.1.0" }
 rune-probe-ldap = { path = "crates/net/rune-probe-ldap", version = "0.1.0" }
 rune-probe-nosql = { path = "crates/net/rune-probe-nosql", version = "0.1.0" }
 rune-seccomp = { path = "crates/secops/rune-seccomp", version = "0.1.0" }
+rune-crc32 = { path = "crates/common/rune-crc32", version = "0.2.0" }
 rune-sha1 = { path = "crates/common/rune-sha1", version = "0.2.1" }
 rune-securitytxt = { path = "crates/web/rune-securitytxt", version = "0.1.0" }
 rune-sha256 = { path = "crates/common/rune-sha256", version = "0.2.1" }
@@ -424,7 +425,7 @@ rune-tool-schema = { path = "crates/chain/rune-tool-schema", version = "0.1.1" }
 rune-transform = { path = "crates/common/rune-transform", version = "0.1.0" }
 rune-url-encode = { path = "crates/common/rune-url-encode", version = "0.3.1" }
 rune-url = { path = "crates/net/rune-url", version = "0.1.0" }
-rune-vectorstore = { path = "crates/chain/rune-vectorstore", version = "0.1.0" }
+rune-vectorstore = { path = "crates/chain/rune-vectorstore", version = "0.2.0" }
 rune-wellknown = { path = "crates/web/rune-wellknown", version = "0.1.0" }
 rune-robots = { path = "crates/web/rune-robots", version = "0.1.0" }
 rune-wildcard-dns = { path = "crates/net/rune-wildcard-dns", version = "0.1.0" }
