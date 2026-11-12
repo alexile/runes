@@ -13,6 +13,10 @@ pub struct Graph {
     /// self-loops are ignored); aggregated supernode graphs use it to keep the
     /// weight of the edges collapsed inside each supernode.
     self_loop: Vec<f64>,
+    /// Number of original nodes each node stands for. All ones for
+    /// caller-supplied graphs; supernodes carry the size of their group. Only
+    /// the CPM objective reads it.
+    pub(crate) node_size: Vec<f64>,
     /// CSR row-start offsets into `neighbours`; length `n_nodes + 1`.
     row_start: Vec<usize>,
     /// `(neighbour_index, edge_weight)` pairs, sorted by source node.
@@ -71,6 +75,7 @@ impl Graph {
             total_weight,
             degree,
             self_loop: vec![0.0; n_nodes],
+            node_size: vec![1.0; n_nodes],
             row_start,
             neighbours,
         }
@@ -90,6 +95,12 @@ impl Graph {
         self
     }
 
+    /// Replaces the node sizes (used for aggregated supernode graphs).
+    pub(crate) fn with_node_sizes(mut self, sizes: Vec<f64>) -> Self {
+        self.node_size = sizes;
+        self
+    }
+
     /// Self-loop weight of node `v`.
     pub(crate) fn self_loop(&self, v: usize) -> f64 {
         self.self_loop[v]
@@ -101,7 +112,7 @@ impl Graph {
     }
 }
 
-/// Computes modularity Q for a partition.
+/// Computes modularity Q for a partition with contiguous community ids.
 ///
 /// `Q = (1/2m) × Σ_{ij} [A_ij − γ × k_i × k_j / (2m)] × δ(c_i, c_j)`
 pub fn modularity(graph: &Graph, partition: &[usize], resolution: f64) -> f64 {
@@ -132,4 +143,30 @@ pub fn modularity(graph: &Graph, partition: &[usize], resolution: f64) -> f64 {
         q += internal_weight[c] - resolution * sigma * sigma / (2.0 * two_m);
     }
     q / (two_m / 2.0)
+}
+
+/// Computes the Constant Potts Model quality for a partition with contiguous
+/// community ids: `H = Σ_c [e_c − γ × n_c (n_c − 1) / 2]`, where `e_c` is the
+/// edge weight inside community `c` and `n_c` the total node size in it.
+pub fn cpm(graph: &Graph, partition: &[usize], resolution: f64) -> f64 {
+    let n_communities = partition.iter().copied().max().map_or(0, |m| m + 1);
+    let mut internal_weight = vec![0.0f64; n_communities];
+    let mut size = vec![0.0f64; n_communities];
+
+    for v in 0..graph.n_nodes {
+        let cv = partition[v];
+        size[cv] += graph.node_size[v];
+        internal_weight[cv] += graph.self_loop[v];
+        for &(nb, w) in graph.neighbours(v) {
+            if partition[nb] == cv && nb > v {
+                internal_weight[cv] += w;
+            }
+        }
+    }
+
+    internal_weight
+        .iter()
+        .zip(&size)
+        .map(|(&e, &n)| (resolution * n).mul_add(-(n - 1.0) / 2.0, e))
+        .sum()
 }

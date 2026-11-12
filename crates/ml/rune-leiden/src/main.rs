@@ -1,4 +1,5 @@
-//! `rune-leiden` command-line tool: leiden community detection — find densely-connected clusters in weighted graphs.
+//! `rune-leiden` command-line tool: Leiden or Louvain community detection on a
+//! weighted edge list.
 
 // Binaries report results on stdout; the lint targets library code.
 #![allow(clippy::print_stdout)]
@@ -7,13 +8,13 @@ use std::io::{self, BufRead};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
-use rune_leiden::Leiden;
+use clap::{Parser, ValueEnum};
+use rune_leiden::{Leiden, Louvain, Quality};
 
 #[derive(Parser)]
 #[command(
     name = "rune-leiden",
-    about = "Leiden community detection on a weighted edge list"
+    about = "Leiden or Louvain community detection on a weighted edge list"
 )]
 struct Cli {
     /// Input file: one edge per line as `u v [weight]` (weight defaults to 1.0).
@@ -31,6 +32,26 @@ struct Cli {
     /// Maximum number of outer (aggregation) iterations.
     #[arg(long, default_value_t = 100)]
     max_iter: usize,
+
+    /// Algorithm to run.
+    #[arg(long, value_enum, default_value_t = AlgorithmArg::Leiden)]
+    algorithm: AlgorithmArg,
+
+    /// Objective to maximise. With `cpm`, the resolution is a density threshold.
+    #[arg(long, value_enum, default_value_t = QualityArg::Modularity)]
+    quality: QualityArg,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum AlgorithmArg {
+    Leiden,
+    Louvain,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum QualityArg {
+    Modularity,
+    Cpm,
 }
 
 fn main() -> ExitCode {
@@ -49,11 +70,31 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let result = Leiden::new()
-        .resolution(cli.resolution)
-        .max_iter(cli.max_iter)
-        .random_seed(cli.seed)
-        .fit(n_nodes, &edges);
+    let quality = match cli.quality {
+        QualityArg::Modularity => Quality::Modularity,
+        QualityArg::Cpm => Quality::Cpm,
+    };
+    let fitted = match cli.algorithm {
+        AlgorithmArg::Leiden => Leiden::new()
+            .resolution(cli.resolution)
+            .max_iter(cli.max_iter)
+            .random_seed(cli.seed)
+            .quality(quality)
+            .try_fit(n_nodes, &edges),
+        AlgorithmArg::Louvain => Louvain::new()
+            .resolution(cli.resolution)
+            .max_levels(cli.max_iter)
+            .random_seed(cli.seed)
+            .quality(quality)
+            .try_fit(n_nodes, &edges),
+    };
+    let result = match fitted {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     for community in &result.communities {
         println!("{community}");

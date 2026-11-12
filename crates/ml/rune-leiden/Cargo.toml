@@ -1,10 +1,10 @@
 [package]
 name = "rune-leiden"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Leiden community detection — find densely-connected clusters in weighted graphs"
+description = "Leiden and Louvain community detection — find densely-connected clusters in weighted graphs"
 license.workspace = true
 keywords = ["leiden", "louvain", "community-detection", "graph", "clustering"]
 categories = ["algorithms", "science", "command-line-utilities"]
@@ -21,7 +21,6 @@ required-features = ["cli"]
 name = "rune_leiden"
 path = "src/lib.rs"
 
-
 [features]
 cli = ["dep:clap"]
 
@@ -30,3 +29,6 @@ clap = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
