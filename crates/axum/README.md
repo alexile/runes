@@ -23,7 +23,7 @@ Axum and Tower middleware: auth, rate limiting, CSRF, security headers, request 
 | [`rune-axum-ratelimit`](rune-axum-ratelimit) | Rate limiter middleware for Axum — fixed-window or GCRA per client, pluggable store, spoof-resistant client IPs, IETF RateLimit headers |
 | [`rune-axum-redirect-https`](rune-axum-redirect-https) | Redirect HTTP requests to HTTPS — Tower middleware for Axum |
 | [`rune-axum-requestid`](rune-axum-requestid) | Request-id and W3C traceparent propagation layer for Axum — extensions, response header and tracing span |
-| [`rune-axum-sanitize`](rune-axum-sanitize) | Input sanitization middleware for Axum — strips HTML tags and null bytes from query params and request bodies |
+| [`rune-axum-sanitize`](rune-axum-sanitize) | Defence-in-depth input sanitization for Axum: tokenizer-based tag stripping, HTML escaping or allowlist cleaning of query, form and JSON string values |
 | [`rune-axum-signature`](rune-axum-signature) | Webhook signature verification layer and extractor for Axum: Standard Webhooks/Svix, Stripe, GitHub, Slack, Shopify and generic HMAC |
 | [`rune-axum-size`](rune-axum-size) | Request body size limiter — Tower middleware for Axum |
 | [`rune-axum-stack`](rune-axum-stack) | All-in-one middleware stack for Axum — security headers, CSRF, limits, timeouts, CORS, request ids, problem details and health probes |
