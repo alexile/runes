@@ -12,6 +12,8 @@
 //!   throttled refetch on unknown `kid`. Or bring your own [`KeySource`].
 //! - **Claims**: `exp` (required), `nbf`, `iat`, exact `iss`, one-of `aud`,
 //!   leeway, required claims, max age, max token length.
+//! - **Crypto**: `jsonwebtoken` with the pure-Rust `rust_crypto` backend
+//!   (default feature) or `aws_lc_rs`.
 //! - **Per route**: [`JwtLayer::require_scopes`], [`JwtLayer::require_roles`],
 //!   [`JwtLayer::optional`].
 //! - **Handlers**: [`Claims<T>`] (typed), [`VerifiedClaims`] (untyped), or
@@ -71,6 +73,8 @@
 //!   an RSA public key is never tried as an HMAC secret and `none` is never
 //!   accepted. A `crit` header is rejected.
 //! - With several keys, tokens must carry a `kid`.
+//! - `exp`, `nbf` and `iat` must be JSON numbers when present. A mistyped
+//!   date claim rejects the token instead of counting as absent.
 //! - JWKS documents are fetched over `https` only (plain `http` to loopback
 //!   for development), without following redirects, with a timeout and a
 //!   size cap. Symmetric keys in a remote JWKS are ignored. Header fields

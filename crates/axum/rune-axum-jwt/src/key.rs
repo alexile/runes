@@ -83,8 +83,10 @@ impl fmt::Debug for VerifyKey {
     }
 }
 
-const fn key_type(alg: Algorithm) -> &'static str {
-    match alg {
+/// The key type an algorithm needs. `None` for algorithms this crate does
+/// not know, which are then never accepted.
+const fn key_type(alg: Algorithm) -> Option<&'static str> {
+    Some(match alg {
         Algorithm::HS256 | Algorithm::HS384 | Algorithm::HS512 => "HMAC",
         Algorithm::RS256
         | Algorithm::RS384
@@ -94,17 +96,18 @@ const fn key_type(alg: Algorithm) -> &'static str {
         | Algorithm::PS512 => "RSA",
         Algorithm::ES256 | Algorithm::ES384 => "EC",
         Algorithm::EdDSA => "OKP",
-    }
+        _ => return None,
+    })
 }
 
 fn expect_type(alg: Algorithm, want: &'static str) -> Result<(), KeyError> {
-    if key_type(alg) == want {
-        Ok(())
-    } else {
-        Err(KeyError::AlgorithmMismatch {
+    match key_type(alg) {
+        Some(have) if have == want => Ok(()),
+        Some(_) => Err(KeyError::AlgorithmMismatch {
             alg,
             key_type: want,
-        })
+        }),
+        None => Err(KeyError::Unsupported(format!("algorithm {alg:?}"))),
     }
 }
 
@@ -226,12 +229,14 @@ impl VerifyKey {
                 declared.unwrap_or(Algorithm::EdDSA)
             }
             AlgorithmParameters::OctetKey(_) => declared.ok_or(KeyError::MissingAlgorithm)?,
+            _ => return Err(KeyError::Unsupported("key type".into())),
         };
         let want = match &jwk.algorithm {
             AlgorithmParameters::RSA(_) => "RSA",
             AlgorithmParameters::EllipticCurve(_) => "EC",
             AlgorithmParameters::OctetKeyPair(_) => "OKP",
             AlgorithmParameters::OctetKey(_) => "HMAC",
+            _ => return Err(KeyError::Unsupported("key type".into())),
         };
         expect_type(alg, want)?;
         if let AlgorithmParameters::EllipticCurve(params) = &jwk.algorithm {
@@ -295,7 +300,7 @@ impl VerifyKey {
     }
 }
 
-const fn signing_alg(alg: KeyAlgorithm) -> Result<Algorithm, KeyError> {
+fn signing_alg(alg: KeyAlgorithm) -> Result<Algorithm, KeyError> {
     Ok(match alg {
         KeyAlgorithm::HS256 => Algorithm::HS256,
         KeyAlgorithm::HS384 => Algorithm::HS384,
@@ -312,6 +317,7 @@ const fn signing_alg(alg: KeyAlgorithm) -> Result<Algorithm, KeyError> {
         KeyAlgorithm::RSA1_5 | KeyAlgorithm::RSA_OAEP | KeyAlgorithm::RSA_OAEP_256 => {
             return Err(KeyError::NotForSigning);
         }
+        other => return Err(KeyError::Unsupported(format!("JWK algorithm {other:?}"))),
     })
 }
 

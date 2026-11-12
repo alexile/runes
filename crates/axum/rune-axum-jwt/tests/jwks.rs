@@ -323,6 +323,8 @@ async fn bad_claims_are_rejected_without_detail() {
         json!({"sub": "a", "iss": "https://issuer.test", "aud": AUD, "exp": t + 60, "nbf": t + 60}),
         json!({"sub": "a", "iss": "https://issuer.test", "aud": AUD, "exp": t + 600, "iat": t + 120}),
         json!({"sub": "a", "iss": "https://issuer.test", "aud": AUD, "exp": t + 60, "iat": "yesterday"}),
+        json!({"sub": "a", "iss": "https://issuer.test", "aud": AUD, "exp": t + 60, "nbf": "99999999999"}),
+        json!({"sub": "a", "iss": "https://issuer.test", "aud": AUD, "exp": "99999999999"}),
         json!({"iss": "https://issuer.test", "aud": AUD, "exp": t + 60}),
     ];
     for c in &cases {

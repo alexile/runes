@@ -25,12 +25,30 @@ caches them, picks up key rotation, and checks the claims you ask for.
 
 ```toml
 [dependencies]
-rune-axum-jwt = "0.3"
+rune-axum-jwt = "0.4"
 serde = { version = "1", features = ["derive"] }
 ```
 
 The default `jwks` feature brings in reqwest and Tokio for fetching keys.
-With `default-features = false` you get static keys only.
+
+Signatures are checked by `jsonwebtoken` 11 with one of two backends:
+
+- `rust_crypto` (default): pure Rust (RustCrypto). It covers every
+  algorithm listed above. The crate only verifies with public keys, so the
+  `rsa` crate's timing side channel on private-key operations does not apply.
+- `aws_lc_rs`: aws-lc-rs, if you already ship it or need its FIPS build.
+  It needs a C toolchain.
+
+For static keys only, or the aws-lc backend:
+
+```toml
+rune-axum-jwt = { version = "0.4", default-features = false, features = ["rust_crypto"] }
+rune-axum-jwt = { version = "0.4", default-features = false, features = ["jwks", "aws_lc_rs"] }
+```
+
+The backend is a process-wide default. Building a `JwtConfig` installs the
+one picked here unless your application installed one first with
+`jsonwebtoken::crypto::CryptoProvider::install_default`.
 
 ## Usage
 
@@ -170,7 +188,21 @@ are single-flight. If a refresh fails, the old keys stay in use.
   decoding.
 - HMAC secrets should be at least as long as the hash output (32 bytes for
   HS256) and random.
-- Crypto is `jsonwebtoken` 9 on top of `ring`.
+- **Date claims are type-checked.** `exp`, `nbf` and `iat` must be JSON
+  numbers. A token with, say, `"nbf": "99999999999"` is rejected rather than
+  treated as having no `nbf`, which would skip the not-before check.
+
+## Migrating from 0.3
+
+- `jsonwebtoken` is now 11 (was 9). The re-exported `Algorithm` and `jwk`
+  types come from it: `Algorithm`, `KeyAlgorithm` and `EllipticCurve` are
+  `#[non_exhaustive]`, so `match`es on them need a wildcard arm.
+- The crypto backend is chosen with the `rust_crypto` (default) or
+  `aws_lc_rs` feature. With `default-features = false`, enable one of them
+  (or install your own `jsonwebtoken` provider), otherwise verification panics.
+- Tokens whose `exp`, `nbf` or `iat` is present with a non-number value
+  (a string, `null`, a negative number) are now rejected as
+  `JwtRejection::InvalidClaims`. 0.3 ignored a mistyped `nbf`.
 
 ## Migrating from 0.2
 

@@ -24,7 +24,9 @@ pub const DEFAULT_MAX_TOKEN_LEN: usize = 8 * 1024;
 /// or put it in Axum state for the [`Jwt<C>`](crate::Jwt) extractor.
 ///
 /// Always checked: signature with the key's pinned algorithm, `exp` (must be
-/// present), `nbf` and `iat` when present. Opt in to `iss`, `aud` and more.
+/// present), `nbf` and `iat` when present. `exp`, `nbf` and `iat` must be
+/// JSON numbers when present; any other type (a string, `null`) rejects the
+/// token instead of being treated as absent. Opt in to `iss`, `aud` and more.
 ///
 /// # Examples
 ///
@@ -79,6 +81,7 @@ impl JwtConfig {
     /// Like [`JwtConfig::new`], for an already shared source.
     #[must_use]
     pub fn from_source(keys: Arc<dyn KeySource>) -> Self {
+        install_crypto_provider();
         Self {
             inner: Arc::new(Inner {
                 keys,
@@ -260,7 +263,11 @@ impl JwtConfig {
             ));
         };
 
-        self.check_iat(map.get("iat"))?;
+        // A date claim of the wrong type must never read as "absent": a
+        // string `nbf` would otherwise skip the not-before check.
+        numeric_date(map, "exp")?;
+        numeric_date(map, "nbf")?;
+        self.check_iat(numeric_date(map, "iat")?)?;
         for name in &inner.required {
             if map.get(name).is_none_or(Value::is_null) {
                 return Err(JwtRejection::MissingClaim(name.clone()));
@@ -281,16 +288,14 @@ impl JwtConfig {
         ))
     }
 
-    fn check_iat(&self, iat: Option<&Value>) -> Result<(), JwtRejection> {
+    fn check_iat(&self, iat: Option<f64>) -> Result<(), JwtRejection> {
         let inner = &*self.inner;
         let iat = match iat {
-            None | Some(Value::Null) if inner.max_age.is_some() => {
+            None if inner.max_age.is_some() => {
                 return Err(JwtRejection::MissingClaim("iat".into()));
             }
-            None | Some(Value::Null) => return Ok(()),
-            Some(v) => v
-                .as_f64()
-                .ok_or_else(|| JwtRejection::InvalidClaims("iat is not a number".into()))?,
+            None => return Ok(()),
+            Some(iat) => iat,
         };
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -309,6 +314,38 @@ impl JwtConfig {
     }
 }
 
+/// Reads a `NumericDate` claim strictly: absent is `None`; anything present
+/// must be a finite, non-negative JSON number. `null`, strings, booleans and
+/// so on are rejected rather than treated as missing.
+fn numeric_date(
+    map: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Result<Option<f64>, JwtRejection> {
+    let Some(value) = map.get(name) else {
+        return Ok(None);
+    };
+    value
+        .as_f64()
+        .filter(|v| v.is_finite() && *v >= 0.0)
+        .map(Some)
+        .ok_or_else(|| JwtRejection::InvalidClaims(format!("{name} is not a NumericDate")))
+}
+
+/// Makes the crypto backend picked by this crate's features the process
+/// default, unless the application already installed one. Without this, a
+/// build where some other crate turns on a second `jsonwebtoken` backend
+/// would have no default and fail on the first verification.
+fn install_crypto_provider() {
+    #[cfg(feature = "rust_crypto")]
+    let _ = jsonwebtoken::crypto::CryptoProvider::install_default(
+        &jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER,
+    );
+    #[cfg(all(feature = "aws_lc_rs", not(feature = "rust_crypto")))]
+    let _ = jsonwebtoken::crypto::CryptoProvider::install_default(
+        &jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER,
+    );
+}
+
 fn map_error(err: &jsonwebtoken::errors::Error) -> JwtRejection {
     match err.kind() {
         ErrorKind::InvalidSignature => JwtRejection::InvalidSignature,
@@ -317,6 +354,9 @@ fn map_error(err: &jsonwebtoken::errors::Error) -> JwtRejection {
         ErrorKind::InvalidIssuer => JwtRejection::InvalidIssuer,
         ErrorKind::InvalidAudience => JwtRejection::InvalidAudience,
         ErrorKind::MissingRequiredClaim(claim) => JwtRejection::MissingClaim(claim.clone()),
+        ErrorKind::InvalidClaimFormat(claim) => {
+            JwtRejection::InvalidClaims(format!("{claim} has the wrong type"))
+        }
         ErrorKind::InvalidAlgorithm | ErrorKind::InvalidAlgorithmName => {
             JwtRejection::UnsupportedAlgorithm(String::new())
         }
@@ -352,4 +392,90 @@ fn scopes_of(map: &serde_json::Map<String, Value>) -> Vec<String> {
     scopes.sort_unstable();
     scopes.dedup();
     scopes
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use jsonwebtoken::{EncodingKey, Header, encode};
+    use serde_json::json;
+
+    const SECRET: &[u8] = b"a long, random shared secret for tests";
+
+    fn now() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
+    }
+
+    fn sign(claims: &Value) -> String {
+        encode(
+            &Header::default(),
+            claims,
+            &EncodingKey::from_secret(SECRET),
+        )
+        .expect("HS256 signing works")
+    }
+
+    async fn verify(claims: &Value) -> Result<VerifiedClaims, JwtRejection> {
+        JwtConfig::hs256(SECRET).verify(&sign(claims)).await
+    }
+
+    #[tokio::test]
+    async fn well_typed_dates_pass() {
+        let t = now();
+        let claims = json!({"sub": "a", "exp": t + 600, "nbf": t - 10, "iat": t});
+        assert!(verify(&claims).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn future_nbf_is_rejected() {
+        let claims = json!({"sub": "a", "exp": now() + 600, "nbf": 99_999_999_999_u64});
+        assert_eq!(
+            verify(&claims).await.unwrap_err(),
+            JwtRejection::NotYetValid
+        );
+    }
+
+    /// A far-future `nbf` sent as a string must not read as "no nbf" and
+    /// slip past the not-before check (the jsonwebtoken claim type confusion,
+    /// GHSA-h395-gr6q-cpjc). The same goes for every date claim and for any
+    /// non-number type.
+    #[tokio::test]
+    async fn mistyped_date_claims_are_rejected() {
+        let exp = now() + 600;
+        let cases = [
+            json!({"sub": "a", "exp": exp, "nbf": "99999999999"}),
+            json!({"sub": "a", "exp": exp, "nbf": null}),
+            json!({"sub": "a", "exp": exp, "nbf": true}),
+            json!({"sub": "a", "exp": exp, "nbf": [1]}),
+            json!({"sub": "a", "exp": exp, "nbf": {"t": 1}}),
+            json!({"sub": "a", "exp": exp, "nbf": -1}),
+            json!({"sub": "a", "exp": "never"}),
+            json!({"sub": "a", "exp": exp.to_string()}),
+            json!({"sub": "a", "exp": exp, "iat": "yesterday"}),
+            json!({"sub": "a", "exp": exp, "iat": null}),
+        ];
+        for claims in &cases {
+            let err = verify(claims).await.unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    JwtRejection::InvalidClaims(_) | JwtRejection::MissingClaim(_)
+                ),
+                "{claims} gave {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_date_is_strict() {
+        let map = |v: Value| json!({ "d": v }).as_object().cloned().unwrap_or_default();
+        assert_eq!(numeric_date(&map(json!(5)), "d"), Ok(Some(5.0)));
+        assert_eq!(numeric_date(&map(json!(1.5)), "d"), Ok(Some(1.5)));
+        assert_eq!(numeric_date(&serde_json::Map::new(), "d"), Ok(None));
+        for bad in [json!("5"), json!(null), json!(-1), json!(false), json!([])] {
+            assert!(numeric_date(&map(bad), "d").is_err());
+        }
+    }
 }

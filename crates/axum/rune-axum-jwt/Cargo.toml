@@ -1,6 +1,6 @@
 [package]
 name = "rune-axum-jwt"
-version = "0.3.0"
+version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -13,17 +13,25 @@ readme = "README.md"
 publish = true
 
 [features]
-default = ["jwks"]
+default = ["jwks", "rust_crypto"]
 ## `JwksSource`: fetch and cache keys from a JWKS URL or via OIDC discovery
 ## (reqwest + Tokio).
 jwks = ["dep:reqwest", "dep:tokio"]
+## Pure-Rust signature backend (RustCrypto: `rsa`, `p256`, `p384`,
+## `ed25519-dalek`, `hmac`). Covers every algorithm this crate accepts. Only
+## public-key verification is done with it, so the `rsa` crate's timing issue
+## with private-key operations does not apply.
+rust_crypto = ["jsonwebtoken/rust_crypto"]
+## aws-lc-rs signature backend instead (needs a C toolchain). Turn off default
+## features and enable this one to use it.
+aws_lc_rs = ["jsonwebtoken/aws_lc_rs"]
 
 [dependencies]
 axum.workspace = true
 http.workspace = true
-# 9.x verifies with ring (ISC/Apache-2.0). 10.x needs either aws-lc-rs or the
-# RustCrypto `rsa` crate (RUSTSEC-2023-0071), so we stay on 9 for now.
-jsonwebtoken = "9.3.1"
+# The signature backend is picked with this crate's `rust_crypto` (default) or
+# `aws_lc_rs` feature. `use_pem` is needed for the PEM key constructors.
+jsonwebtoken = { version = "11.1.0", default-features = false, features = ["use_pem"] }
 reqwest = { workspace = true, optional = true }
 rune-jwt.workspace = true
 serde.workspace = true
