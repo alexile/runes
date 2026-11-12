@@ -3248,14 +3248,15 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-llm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "futures",
  "rune-chain-core",
  "rune-chain-memory",
+ "rune-chain-output-parser",
  "rune-chain-prompt",
- "rune-tokenize",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-test",
