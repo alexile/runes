@@ -103,6 +103,8 @@ use rune_chain_splitter::{TextSplitter, RecursiveSplitter};
 ## Migrating from 0.2
 
 - Uses `rune-chain-core` 0.2, whose `LlmError`, `GenerateResult`, `TokenUsage` and `Message` changed; see its [migration notes](https://crates.io/crates/rune-chain-core).
+- Uses `rune-graph` 0.4, so `GraphView` now derefs to a 0.4 `Graph`; see its
+  [migration notes](https://crates.io/crates/rune-graph).
 - No behaviour change.
 
 ## License

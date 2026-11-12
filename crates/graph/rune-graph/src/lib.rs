@@ -1,31 +1,32 @@
-//! Embedded directed property graph — the `rune-graph` primitive.
+//! Embedded directed property graph.
 //!
-//! `rune-graph` is an in-memory property graph designed as a first-class data
-//! primitive for the `rune-*` ecosystem. Think SQLite for graphs: embed it in
-//! your binary and it just works — no server, no JVM, no configuration.
-//!
-//! Nodes and edges carry arbitrary key-value [`Value`] properties and string
-//! labels / relationship types. Forward *and* reverse adjacency lists are
-//! maintained so BFS, DFS, neighbor, and predecessor queries are all O(degree).
+//! `rune-graph` is an in-memory property graph you embed in your binary: no
+//! server, no configuration. Nodes carry a set of labels, edges carry one
+//! relationship label, and both carry key-value [`Value`] properties.
+//! Forward and reverse adjacency lists make neighbour, predecessor and
+//! traversal queries O(degree).
 //!
 //! # Features
 //!
-//! - [`Graph`] — directed property graph with full CRUD for nodes and edges
-//! - [`NodeId`] / [`EdgeId`] — stable integer handles, never reused
-//! - [`Value`] — property value type covering bool, int, float, string, list, null
-//! - [`NodeEntry`] / [`EdgeEntry`] — inspectable node and edge data
-//! - [`GraphError`] — typed errors for missing nodes / edges
-//! - [`props!`] macro — ergonomic property map construction
-//! - Traversal: BFS, DFS, `shortest_path` (unweighted), `has_path`
-//! - [`algo`] module: Dijkstra, connected components, topological sort (strict + cycle-tolerant), `PageRank`, degree
-//! - `persist` feature: `save` / `load` (bincode) + `to_json` / `from_json`
+//! - [`Graph`]: CRUD for nodes and edges, label lookups in O(matches)
+//! - Property indexes: [`Graph::create_index`] + [`Graph::nodes_by_property`],
+//!   kept in sync by every mutation
+//! - Lazy traversal: [`Graph::bfs_iter`] / [`Graph::dfs_iter`] with
+//!   [`Direction`], edge-label filter and depth limit
+//! - [`algo`]: Dijkstra, weighted and unweighted shortest paths, weakly and
+//!   strongly connected components, topological sort with cycle witness,
+//!   `PageRank`, degree and betweenness centrality, diameter, density
+//! - `persist` feature: versioned, checksummed, atomically written binary
+//!   snapshots with a load size limit; JSON; JSON Lines import/export
+//! - `wal` feature: write-ahead log with crash recovery
 //!
-//! # Quick Start
+//! # Quick start
 //!
 //! ```rust
-//! use rune_graph::{Graph, Value, algo, props};
+//! use rune_graph::{Direction, Graph, Value, algo, props};
 //!
 //! let mut g = Graph::new();
+//! g.create_index("Person", "name");
 //!
 //! let alice = g.add_node(&["Person"], props! { "name" => "Alice", "age" => 30_i64 });
 //! let bob   = g.add_node(&["Person"], props! { "name" => "Bob",   "age" => 25_i64 });
@@ -35,82 +36,107 @@
 //! g.add_edge(alice, corp, "WORKS_AT", props! { "w" => 1.0_f64 }).unwrap();
 //! g.add_edge(bob,   corp, "WORKS_AT", props! { "w" => 2.0_f64 }).unwrap();
 //!
-//! // Traversal
-//! let coworkers: Vec<_> = g.neighbors(alice).collect();
-//! assert_eq!(coworkers.len(), 2);
+//! // Indexed lookup
+//! let found: Vec<_> = g.nodes_by_property("Person", "name", &Value::from("Bob")).collect();
+//! assert_eq!(found, vec![bob]);
 //!
-//! // Label filter
-//! let people: Vec<_> = g.nodes_with_label("Person").collect();
-//! assert_eq!(people.len(), 2);
+//! // Who works at Acme? Walk WORKS_AT edges backwards, one hop.
+//! let staff: Vec<_> = g
+//!     .bfs_iter(corp, Direction::Incoming)
+//!     .edge_label("WORKS_AT")
+//!     .max_depth(1)
+//!     .skip(1)
+//!     .collect();
+//! assert_eq!(staff.len(), 2);
 //!
-//! // Dijkstra
+//! // Algorithms
 //! let dist = algo::dijkstra(&g, alice, "w");
 //! assert_eq!(dist[&corp], 1.0);
-//!
-//! // PageRank
-//! let scores = algo::page_rank(&g, 0.85, 50);
-//! assert!(scores[&corp] > scores[&alice]);
+//! assert!(algo::toposort(&g).is_ok());
 //! ```
 //!
-//! # Persistence (optional feature)
+//! # Persistence (`persist` feature)
 //!
-//! Enable the `persist` feature for save/load support:
-//!
-//! ```toml
-//! rune-graph = { version = "0.2", features = ["persist"] }
-//! ```
-//!
-//! ```rust,no_run
+//! ```rust
 //! # #[cfg(feature = "persist")]
 //! # {
-//! use rune_graph::{Graph, props};
+//! use rune_graph::{Graph, LoadOptions, props};
+//!
+//! let dir = std::env::temp_dir().join(format!("rune-graph-lib-doc-{}", std::process::id()));
+//! std::fs::create_dir_all(&dir).unwrap();
+//! let path = dir.join("cities.bin");
+//!
 //! let mut g = Graph::new();
 //! g.add_node(&["City"], props! { "name" => "Tokyo" });
-//! g.save("cities.bin").unwrap();
-//! let g2 = Graph::load("cities.bin").unwrap();
+//! g.save(&path).unwrap(); // temp file + fsync + rename
+//!
+//! let g2 = Graph::load_with(&path, &LoadOptions::default().max_bytes(16 << 20)).unwrap();
 //! assert_eq!(g2.node_count(), 1);
+//!
+//! // JSON Lines, one node or edge per line
+//! let mut out = Vec::new();
+//! g2.write_jsonl(&mut out).unwrap();
+//! assert_eq!(Graph::read_jsonl(out.as_slice()).unwrap().node_count(), 1);
+//! # std::fs::remove_dir_all(&dir).unwrap();
 //! # }
 //! ```
 //!
-//! # WAL — crash-safe writes (optional feature)
+//! Snapshots start with a header holding a magic number, a format version
+//! and a CRC-32 of the payload; see [`Graph::save`]. Snapshots and JSON from
+//! 0.3 still load.
 //!
-//! Enable the `wal` feature (implies `persist`) for write-ahead log support:
+//! ## JSON Lines
 //!
-//! ```toml
-//! rune-graph = { version = "0.3", features = ["wal"] }
+//! [`Graph::write_jsonl`] writes one object per line: index definitions,
+//! then nodes, then edges, each sorted by id. Property values are plain JSON.
+//!
+//! ```text
+//! {"key":"name","label":"Person","type":"index"}
+//! {"id":0,"labels":["Person"],"properties":{"age":30,"name":"Alice"},"type":"node"}
+//! {"id":0,"label":"KNOWS","properties":{},"source":0,"target":1,"type":"edge"}
 //! ```
 //!
-//! ```rust,no_run
-//! # #[cfg(feature = "wal")]
-//! # {
-//! use rune_graph::{props, Value};
-//! use rune_graph::wal::WalWriter;
+//! # Write-ahead log (`wal` feature)
 //!
-//! let mut w = WalWriter::create("graph.bin", "graph.wal").unwrap();
-//! let alice = w.add_node(&["Person"], props! { "name" => "Alice" }).unwrap();
-//! w.checkpoint().unwrap(); // compact WAL into snapshot
+//! [`wal::WalWriter`] logs each mutation before applying it and replays the
+//! log on open. See the [`wal`] module for the file format and durability
+//! guarantees.
 //!
-//! // After any crash, open() replays the WAL on top of the snapshot:
-//! // let w2 = WalWriter::open("graph.bin", "graph.wal").unwrap();
-//! # }
+//! # Thread safety
+//!
+//! [`Graph`] owns all its data and is `Send + Sync`. Any number of threads
+//! may read a shared `&Graph` (or `Arc<Graph>`) at once; traversal iterators
+//! only borrow it. For concurrent writers wrap it in `std::sync::RwLock`
+//! (or `tokio::sync::RwLock` in async code): every mutation takes `&mut self`,
+//! so the borrow checker guarantees indexes are never observed half-updated.
+//!
+//! ```rust
+//! use std::sync::{Arc, RwLock};
+//! use rune_graph::{Graph, props};
+//!
+//! let g = Arc::new(RwLock::new(Graph::new()));
+//! let writer = {
+//!     let g = Arc::clone(&g);
+//!     std::thread::spawn(move || {
+//!         g.write().unwrap().add_node(&["Job"], props! {});
+//!     })
+//! };
+//! writer.join().unwrap();
+//! assert_eq!(g.read().unwrap().node_count(), 1);
 //! ```
-//!
-//! # Roadmap
-//!
-//! | Phase | Description | Status |
-//! |-------|-------------|--------|
-//! | 1 | In-memory directed property graph | ✅ done |
-//! | 2 | Algorithms + snapshot persistence (bincode + JSON) | ✅ done |
-//! | 3 | Write-ahead log for crash recovery | ✅ done |
-//! | 4 | Page-backed on-disk storage | planned |
-//! | 5 | Query language (Cypher subset) | planned |
 
 /// Graph algorithms: traversal, shortest paths and components.
 pub mod algo;
+#[cfg(feature = "persist")]
+mod checksum;
 mod entry;
 mod error;
 mod graph;
 mod id;
+mod index;
+#[cfg(feature = "persist")]
+mod jsonl;
+mod traverse;
 mod value;
 
 #[cfg(feature = "persist")]
@@ -132,10 +158,14 @@ pub use entry::{EdgeEntry, NodeEntry};
 pub use error::GraphError;
 pub use graph::Graph;
 pub use id::{EdgeId, NodeId};
+pub use index::PropertyMatches;
+pub use traverse::{Bfs, Dfs, Direction};
 pub use value::Value;
 
 #[cfg(feature = "persist")]
-pub use persist::PersistError;
+pub use jsonl::JsonlOptions;
+#[cfg(feature = "persist")]
+pub use persist::{LoadOptions, PersistError};
 
 impl NodeId {
     /// Construct a `NodeId` from a raw integer. Useful for testing and
@@ -144,6 +174,16 @@ impl NodeId {
     pub const fn from(raw: u64) -> Self {
         Self(raw)
     }
+
+    /// The raw integer behind this id.
+    ///
+    /// ```rust
+    /// assert_eq!(rune_graph::NodeId::from(3).as_u64(), 3);
+    /// ```
+    #[must_use]
+    pub const fn as_u64(self) -> u64 {
+        self.0
+    }
 }
 
 impl EdgeId {
@@ -151,6 +191,12 @@ impl EdgeId {
     #[must_use]
     pub const fn from(raw: u64) -> Self {
         Self(raw)
+    }
+
+    /// The raw integer behind this id.
+    #[must_use]
+    pub const fn as_u64(self) -> u64 {
+        self.0
     }
 }
 

@@ -9,33 +9,50 @@
 //!
 //! Two files on disk:
 //!
-//! - **snapshot** (`*.bin`) — a full bincode graph snapshot, written by
-//!   [`WalWriter::checkpoint`].
-//! - **WAL** (`*.wal`) — an append-only log of `WalOp`s in a simple
-//!   length-prefixed bincode frame format (4-byte LE length + payload).
+//! - **snapshot** — a binary graph snapshot (see [`Graph::save`]), written
+//!   atomically by [`WalWriter::checkpoint`].
+//! - **WAL** — a 20-byte header (magic `RUNEGWAL`, `u32` version, `u64`
+//!   generation) followed by frames of `u32` length, `u32` CRC-32 and a
+//!   bincode-encoded operation.
+//!
+//! Both files carry a *generation* number. A checkpoint writes the snapshot
+//! with generation `g + 1` and then replaces the WAL with an empty one at
+//! `g + 1`. If a crash lands between those two steps, the old WAL (generation
+//! `g`) is recognised as already folded into the snapshot and skipped, so
+//! operations are never applied twice.
+//!
+//! # Durability
+//!
+//! Each frame is flushed to the operating system before the in-memory graph
+//! changes, which survives a process crash. To also survive power loss, call
+//! [`WalWriter::sync`] at commit points or enable
+//! [`WalWriter::set_sync_on_write`]. A torn or corrupt tail (bad length or
+//! checksum) is dropped on [`open`](WalWriter::open) and the file is truncated
+//! back to the last good frame.
 //!
 //! # Example
 //!
-//! ```rust,no_run
-//! # #[cfg(feature = "wal")]
-//! # {
+//! ```rust
 //! use rune_graph::{props, Value};
 //! use rune_graph::wal::WalWriter;
 //!
-//! // Create a new WAL-backed graph
-//! let mut w = WalWriter::create("graph.bin", "graph.wal").unwrap();
+//! let dir = std::env::temp_dir().join(format!("rune-graph-wal-doc-{}", std::process::id()));
+//! std::fs::create_dir_all(&dir).unwrap();
+//! let (snap, log) = (dir.join("graph.bin"), dir.join("graph.wal"));
+//!
+//! let mut w = WalWriter::create(&snap, &log).unwrap();
 //! let alice = w.add_node(&["Person"], props! { "name" => "Alice" }).unwrap();
 //! let bob   = w.add_node(&["Person"], props! { "name" => "Bob"   }).unwrap();
 //! w.add_edge(alice, bob, "KNOWS", props! {}).unwrap();
-//!
-//! // Compact WAL into snapshot, then continue writing
 //! w.checkpoint().unwrap();
 //! w.set_node_property(alice, "age", Value::Int(30)).unwrap();
+//! drop(w);
 //!
-//! // Later — or after a crash — open with full recovery:
-//! // let mut w2 = WalWriter::open("graph.bin", "graph.wal").unwrap();
-//! // assert_eq!(w2.graph().node_count(), 2);
-//! # }
+//! // Later, or after a crash:
+//! let w2 = WalWriter::open(&snap, &log).unwrap();
+//! assert_eq!(w2.graph().node_count(), 2);
+//! assert_eq!(w2.graph().node(alice).unwrap().get("age"), Some(&Value::Int(30)));
+//! # std::fs::remove_dir_all(&dir).unwrap();
 //! ```
 
 use std::collections::HashMap;
@@ -43,56 +60,29 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+use bincode::Options;
 use serde::{Deserialize, Serialize};
 
 use crate::GraphError;
+use crate::checksum::crc32;
+use crate::entry::{EdgeEntry, NodeEntry};
 use crate::graph::Graph;
 use crate::id::{EdgeId, NodeId};
-use crate::persist::PersistError;
+use crate::persist::{LoadOptions, PersistError, atomic_write};
 use crate::value::Value;
 
-// ── WAL frame helpers ─────────────────────────────────────────────────────────
+const WAL_MAGIC: &[u8; 8] = b"RUNEGWAL";
+const WAL_VERSION: u32 = 1;
+const WAL_HEADER_LEN: u64 = 20;
 
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "values are masked or range-limited first; truncation is the intended encoding"
-)]
-fn write_frame(writer: &mut BufWriter<File>, op: &WalOp) -> Result<(), WalError> {
-    let payload = bincode::serialize(op).map_err(|e| WalError::Encode(e.to_string()))?;
-    let len = payload.len() as u32;
-    writer.write_all(&len.to_le_bytes())?;
-    writer.write_all(&payload)?;
-    writer.flush()?;
-    Ok(())
-}
+/// Largest frame accepted on replay. Anything bigger is treated as a corrupt
+/// tail rather than allocated.
+pub const MAX_FRAME_BYTES: u32 = 64 << 20;
 
-fn read_frames(path: &Path) -> Result<Vec<WalOp>, WalError> {
-    let file = match File::open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(WalError::Io(e)),
-    };
-    let mut reader = BufReader::new(file);
-    let mut ops = Vec::new();
-    let mut len_buf = [0u8; 4];
-    loop {
-        match reader.read_exact(&mut len_buf) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(WalError::Io(e)),
-        }
-        let len = u32::from_le_bytes(len_buf) as usize;
-        let mut payload = vec![0u8; len];
-        match reader.read_exact(&mut payload) {
-            Ok(()) => {}
-            Err(_) => break, // truncated entry — stop here
-        }
-        match bincode::deserialize::<WalOp>(&payload) {
-            Ok(op) => ops.push(op),
-            Err(_) => break, // corrupt entry — stop
-        }
-    }
-    Ok(ops)
+fn opts() -> impl Options {
+    bincode::DefaultOptions::new()
+        .with_fixint_encoding()
+        .with_little_endian()
 }
 
 // ── WalOp ─────────────────────────────────────────────────────────────────────
@@ -127,33 +117,73 @@ pub(crate) enum WalOp {
         key: String,
         value: Value,
     },
+    RemoveNodeProp {
+        id: NodeId,
+        key: String,
+    },
+    RemoveEdgeProp {
+        id: EdgeId,
+        key: String,
+    },
+    AddNodeLabel {
+        id: NodeId,
+        label: String,
+    },
+    RemoveNodeLabel {
+        id: NodeId,
+        label: String,
+    },
+    CreateIndex {
+        label: String,
+        key: String,
+    },
+    DropIndex {
+        label: String,
+        key: String,
+    },
 }
 
 fn apply_op(graph: &mut Graph, op: WalOp) -> Result<(), GraphError> {
     match op {
         WalOp::AddNode { id, labels, props } => {
-            graph.restore_node(id, labels, props);
+            graph.insert_node_with_id(id, NodeEntry::from_parts(labels, props))?;
         }
-        WalOp::RemoveNode { id } => {
-            graph.remove_node(id)?;
-        }
+        WalOp::RemoveNode { id } => graph.remove_node(id)?,
         WalOp::AddEdge {
             id,
             source,
             target,
             label,
             props,
-        } => {
-            graph.restore_edge(id, source, target, label, props);
+        } => graph.insert_edge_with_id(
+            id,
+            EdgeEntry {
+                source,
+                target,
+                label,
+                properties: props,
+            },
+        )?,
+        WalOp::RemoveEdge { id } => graph.remove_edge(id)?,
+        WalOp::SetNodeProp { id, key, value } => graph.set_node_property(id, &key, value)?,
+        WalOp::SetEdgeProp { id, key, value } => graph.set_edge_property(id, &key, value)?,
+        WalOp::RemoveNodeProp { id, key } => {
+            graph.remove_node_property(id, &key)?;
         }
-        WalOp::RemoveEdge { id } => {
-            graph.remove_edge(id)?;
+        WalOp::RemoveEdgeProp { id, key } => {
+            graph.remove_edge_property(id, &key)?;
         }
-        WalOp::SetNodeProp { id, key, value } => {
-            graph.set_node_property(id, &key, value)?;
+        WalOp::AddNodeLabel { id, label } => {
+            graph.add_node_label(id, &label)?;
         }
-        WalOp::SetEdgeProp { id, key, value } => {
-            graph.set_edge_property(id, &key, value)?;
+        WalOp::RemoveNodeLabel { id, label } => {
+            graph.remove_node_label(id, &label)?;
+        }
+        WalOp::CreateIndex { label, key } => {
+            graph.create_index(&label, &key);
+        }
+        WalOp::DropIndex { label, key } => {
+            graph.drop_index(&label, &key);
         }
     }
     Ok(())
@@ -163,6 +193,7 @@ fn apply_op(graph: &mut Graph, op: WalOp) -> Result<(), GraphError> {
 
 /// Errors produced by [`WalWriter`] operations.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum WalError {
     /// An I/O error while reading or writing files.
     Io(std::io::Error),
@@ -170,8 +201,19 @@ pub enum WalError {
     Encode(String),
     /// Failed to save or load a snapshot.
     Persist(PersistError),
-    /// A replayed WAL operation was invalid (e.g. referenced a missing node).
+    /// A replayed WAL operation was invalid (e.g. referenced a missing node),
+    /// or a mutation was rejected before being logged.
     Apply(GraphError),
+    /// The WAL is newer than the snapshot next to it, so the snapshot was
+    /// replaced or rolled back behind the log's back. Nothing is replayed.
+    GenerationMismatch {
+        /// Generation recorded in the snapshot.
+        snapshot: u64,
+        /// Generation recorded in the WAL header.
+        wal: u64,
+    },
+    /// The WAL header names a format version this crate does not know.
+    UnsupportedVersion(u32),
 }
 
 impl std::fmt::Display for WalError {
@@ -181,6 +223,11 @@ impl std::fmt::Display for WalError {
             Self::Encode(e) => write!(f, "WAL encode error: {e}"),
             Self::Persist(e) => write!(f, "WAL snapshot error: {e}"),
             Self::Apply(e) => write!(f, "WAL replay error: {e}"),
+            Self::GenerationMismatch { snapshot, wal } => write!(
+                f,
+                "WAL generation {wal} is ahead of snapshot generation {snapshot}"
+            ),
+            Self::UnsupportedVersion(v) => write!(f, "unsupported WAL format version {v}"),
         }
     }
 }
@@ -191,7 +238,7 @@ impl std::error::Error for WalError {
             Self::Io(e) => Some(e),
             Self::Persist(e) => Some(e),
             Self::Apply(e) => Some(e),
-            Self::Encode(_) => None,
+            _ => None,
         }
     }
 }
@@ -208,109 +255,283 @@ impl From<PersistError> for WalError {
     }
 }
 
+// ── Frame reading ─────────────────────────────────────────────────────────────
+
+enum Header {
+    Missing,
+    Legacy,
+    V1 { generation: u64 },
+}
+
+fn read_header(reader: &mut impl Read) -> Result<(Header, Vec<u8>), WalError> {
+    let mut head = Vec::with_capacity(20);
+    reader.take(WAL_HEADER_LEN).read_to_end(&mut head)?;
+    if head.starts_with(WAL_MAGIC) {
+        let version = head
+            .get(8..12)
+            .and_then(|b| b.try_into().ok())
+            .map(u32::from_le_bytes);
+        let generation = head
+            .get(12..20)
+            .and_then(|b| b.try_into().ok())
+            .map(u64::from_le_bytes);
+        return match (version, generation) {
+            (Some(WAL_VERSION), Some(generation)) => Ok((Header::V1 { generation }, Vec::new())),
+            (Some(v), Some(_)) => Err(WalError::UnsupportedVersion(v)),
+            _ => Ok((Header::Missing, Vec::new())),
+        };
+    }
+    if head.is_empty() {
+        return Ok((Header::Missing, head));
+    }
+    Ok((Header::Legacy, head))
+}
+
+/// Read the next frame. `Ok(None)` means end of log or a bad tail.
+fn next_frame(reader: &mut impl Read, checksummed: bool) -> Result<Option<(WalOp, u64)>, WalError> {
+    let mut len_buf = [0u8; 4];
+    if !read_full(reader, &mut len_buf)? {
+        return Ok(None);
+    }
+    let len = u32::from_le_bytes(len_buf);
+    if len > MAX_FRAME_BYTES {
+        return Ok(None);
+    }
+    let mut crc_buf = [0u8; 4];
+    if checksummed && !read_full(reader, &mut crc_buf)? {
+        return Ok(None);
+    }
+    let mut payload = Vec::new();
+    reader.take(u64::from(len)).read_to_end(&mut payload)?;
+    if payload.len() != len as usize {
+        return Ok(None);
+    }
+    if checksummed && crc32(&payload) != u32::from_le_bytes(crc_buf) {
+        return Ok(None);
+    }
+    let decoded = if checksummed {
+        opts().with_limit(u64::from(len)).deserialize(&payload)
+    } else {
+        bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .allow_trailing_bytes()
+            .with_limit(u64::from(len))
+            .deserialize(&payload)
+    };
+    let frame_len = 4 + u64::from(len) + if checksummed { 4 } else { 0 };
+    Ok(decoded.ok().map(|op| (op, frame_len)))
+}
+
+/// Fill `buf` completely. `Ok(false)` on a clean or partial EOF.
+fn read_full(reader: &mut impl Read, buf: &mut [u8]) -> Result<bool, WalError> {
+    match reader.read_exact(buf) {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(e) => Err(WalError::Io(e)),
+    }
+}
+
 // ── WalWriter ─────────────────────────────────────────────────────────────────
 
 /// A [`Graph`] with crash-safe persistence via a write-ahead log.
 ///
-/// Every mutation is written to the WAL file and flushed *before* being applied
-/// to the in-memory graph. On the next call to [`open`][WalWriter::open] the WAL
-/// is replayed on top of the snapshot, recovering any operations that completed
-/// before the crash.
+/// Every mutation is validated, written to the WAL and flushed *before*
+/// being applied to the in-memory graph. On the next call to
+/// [`open`][WalWriter::open] the WAL is replayed on top of the snapshot.
 ///
-/// Use [`checkpoint`][WalWriter::checkpoint] periodically to compact the WAL
+/// Use [`checkpoint`][WalWriter::checkpoint] periodically to fold the WAL
 /// into a new snapshot, keeping the WAL file small.
 ///
-/// # Example
-///
-/// ```rust,no_run
-/// # #[cfg(feature = "wal")]
-/// # {
-/// use rune_graph::{props, Value};
-/// use rune_graph::wal::WalWriter;
-///
-/// let mut w = WalWriter::create("g.bin", "g.wal").unwrap();
-/// let a = w.add_node(&["A"], props! {}).unwrap();
-/// w.checkpoint().unwrap();
-/// let b = w.add_node(&["B"], props! {}).unwrap();
-/// w.add_edge(a, b, "E", props! {}).unwrap();
-///
-/// // After a crash, open recovers everything:
-/// // let w2 = WalWriter::open("g.bin", "g.wal").unwrap();
-/// // assert_eq!(w2.graph().node_count(), 2);
-/// # }
-/// ```
+/// `WalWriter` is `Send` but not meant to be shared: wrap it in a `Mutex`
+/// if several threads write.
 pub struct WalWriter {
     graph: Graph,
     writer: BufWriter<File>,
     snapshot_path: PathBuf,
     wal_path: PathBuf,
+    generation: u64,
+    sync_on_write: bool,
+}
+
+impl std::fmt::Debug for WalWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WalWriter")
+            .field("snapshot_path", &self.snapshot_path)
+            .field("wal_path", &self.wal_path)
+            .field("generation", &self.generation)
+            .field("nodes", &self.graph.node_count())
+            .field("edges", &self.graph.edge_count())
+            .finish_non_exhaustive()
+    }
+}
+
+fn write_wal_header(path: &Path, generation: u64) -> Result<(), WalError> {
+    atomic_write(path, |file| {
+        file.write_all(WAL_MAGIC)?;
+        file.write_all(&WAL_VERSION.to_le_bytes())?;
+        file.write_all(&generation.to_le_bytes())?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn open_append(path: &Path) -> Result<BufWriter<File>, WalError> {
+    let file = OpenOptions::new().append(true).open(path)?;
+    Ok(BufWriter::new(file))
 }
 
 impl WalWriter {
-    /// Create a new WAL-backed graph with empty state.
+    /// Start a new, empty WAL-backed graph.
     ///
-    /// Neither file needs to exist. If `snapshot_path` already exists it is
-    /// overwritten on the first [`checkpoint`][WalWriter::checkpoint].
+    /// Writes an empty snapshot and an empty WAL right away, replacing
+    /// whatever was at either path.
     ///
     /// # Errors
     ///
-    /// Returns [`WalError`] if the WAL file cannot be created.
+    /// Returns [`WalError`] if either file cannot be written.
     pub fn create(
         snapshot_path: impl AsRef<Path>,
         wal_path: impl AsRef<Path>,
     ) -> Result<Self, WalError> {
         let snapshot_path = snapshot_path.as_ref().to_path_buf();
         let wal_path = wal_path.as_ref().to_path_buf();
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&wal_path)?;
+        let graph = Graph::new();
+        graph.save_snapshot(&snapshot_path, 0)?;
+        write_wal_header(&wal_path, 0)?;
         Ok(Self {
-            graph: Graph::new(),
-            writer: BufWriter::new(file),
+            writer: open_append(&wal_path)?,
+            graph,
             snapshot_path,
             wal_path,
+            generation: 0,
+            sync_on_write: false,
         })
     }
 
-    /// Open an existing WAL-backed graph, replaying any pending WAL entries.
+    /// Open an existing WAL-backed graph, replaying pending WAL entries.
     ///
-    /// If the snapshot file does not exist an empty graph is used as the base.
-    /// If the WAL file does not exist the snapshot is loaded as-is.
-    /// Truncated or corrupt WAL entries at the tail are silently ignored —
-    /// only fully flushed entries are replayed.
+    /// If the snapshot does not exist an empty graph is used as the base; if
+    /// the WAL does not exist the snapshot is loaded as is. A truncated or
+    /// corrupt tail is dropped and cut off the file. WAL files written by
+    /// rune-graph 0.3 are replayed and then checkpointed into the new format.
     ///
     /// # Errors
     ///
-    /// Returns [`WalError`] on I/O failure, snapshot decode failure, or if a
-    /// replayed WAL entry references a node or edge that does not exist.
+    /// Returns [`WalError`] on I/O failure, snapshot decode failure, a
+    /// generation mismatch, or if a replayed entry is inconsistent with the
+    /// graph (for example removes a node that does not exist).
     pub fn open(
         snapshot_path: impl AsRef<Path>,
         wal_path: impl AsRef<Path>,
     ) -> Result<Self, WalError> {
+        Self::open_with(snapshot_path, wal_path, &LoadOptions::default())
+    }
+
+    /// Like [`open`](Self::open), with explicit snapshot [`LoadOptions`].
+    ///
+    /// # Errors
+    ///
+    /// See [`open`](Self::open).
+    pub fn open_with(
+        snapshot_path: impl AsRef<Path>,
+        wal_path: impl AsRef<Path>,
+        load: &LoadOptions,
+    ) -> Result<Self, WalError> {
         let snapshot_path = snapshot_path.as_ref().to_path_buf();
         let wal_path = wal_path.as_ref().to_path_buf();
 
-        let mut graph = if snapshot_path.exists() {
-            Graph::load(&snapshot_path)?
+        let (mut graph, snap_gen) = if snapshot_path.exists() {
+            let (g, generation) = Graph::load_snapshot(&snapshot_path, *load)?;
+            (g, Some(generation))
         } else {
-            Graph::new()
+            (Graph::new(), None)
         };
 
-        for op in read_frames(&wal_path)? {
-            apply_op(&mut graph, op).map_err(WalError::Apply)?;
+        let file = match File::open(&wal_path) {
+            Ok(f) => Some(f),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        let Some(file) = file else {
+            let generation = snap_gen.unwrap_or(0);
+            return Self::fresh(graph, snapshot_path, wal_path, generation, false);
+        };
+
+        let mut reader = BufReader::new(file);
+        let (header, prefix) = read_header(&mut reader)?;
+        match header {
+            Header::Missing => {
+                let generation = snap_gen.unwrap_or(0);
+                Self::fresh(graph, snapshot_path, wal_path, generation, false)
+            }
+            Header::Legacy => {
+                let mut chained = prefix.as_slice().chain(reader);
+                while let Some((op, _)) = next_frame(&mut chained, false)? {
+                    apply_op(&mut graph, op).map_err(WalError::Apply)?;
+                }
+                // Fold the old-format log into a new snapshot right away.
+                let generation = snap_gen.unwrap_or(0) + 1;
+                Self::fresh(graph, snapshot_path, wal_path, generation, true)
+            }
+            Header::V1 {
+                generation: wal_gen,
+            } => {
+                match snap_gen {
+                    Some(s) if wal_gen < s => {
+                        // Crash after the snapshot was written but before the
+                        // WAL was reset: the log is already in the snapshot.
+                        return Self::fresh(graph, snapshot_path, wal_path, s, false);
+                    }
+                    Some(s) if wal_gen > s => {
+                        return Err(WalError::GenerationMismatch {
+                            snapshot: s,
+                            wal: wal_gen,
+                        });
+                    }
+                    _ => {}
+                }
+                let mut good = WAL_HEADER_LEN;
+                while let Some((op, len)) = next_frame(&mut reader, true)? {
+                    apply_op(&mut graph, op).map_err(WalError::Apply)?;
+                    good += len;
+                }
+                drop(reader);
+                let file = OpenOptions::new().write(true).open(&wal_path)?;
+                if file.metadata()?.len() > good {
+                    file.set_len(good)?;
+                    file.sync_all()?;
+                }
+                drop(file);
+                Ok(Self {
+                    writer: open_append(&wal_path)?,
+                    graph,
+                    snapshot_path,
+                    wal_path,
+                    generation: wal_gen,
+                    sync_on_write: false,
+                })
+            }
         }
+    }
 
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&wal_path)?;
-
+    fn fresh(
+        graph: Graph,
+        snapshot_path: PathBuf,
+        wal_path: PathBuf,
+        generation: u64,
+        write_snapshot: bool,
+    ) -> Result<Self, WalError> {
+        if write_snapshot || !snapshot_path.exists() {
+            graph.save_snapshot(&snapshot_path, generation)?;
+        }
+        write_wal_header(&wal_path, generation)?;
         Ok(Self {
+            writer: open_append(&wal_path)?,
             graph,
-            writer: BufWriter::new(file),
             snapshot_path,
             wal_path,
+            generation,
+            sync_on_write: false,
         })
     }
 
@@ -320,25 +541,91 @@ impl WalWriter {
         &self.graph
     }
 
-    /// Flush in-memory state to a new snapshot and truncate the WAL.
-    ///
-    /// After a checkpoint the WAL file is empty and the snapshot contains the
-    /// complete graph state.
+    /// Consume the writer and return the in-memory graph. Pending frames are
+    /// already flushed; nothing else is written.
+    #[must_use]
+    pub fn into_graph(self) -> Graph {
+        self.graph
+    }
+
+    /// When `true`, every frame is synced to disk (`fdatasync`) before the
+    /// mutation returns. Slower, but survives power loss as well as crashes.
+    pub const fn set_sync_on_write(&mut self, on: bool) {
+        self.sync_on_write = on;
+    }
+
+    /// Sync all logged frames to stable storage.
     ///
     /// # Errors
     ///
-    /// Returns [`WalError`] if the snapshot cannot be written or the WAL
-    /// file cannot be truncated.
-    pub fn checkpoint(&mut self) -> Result<(), WalError> {
-        self.graph.save(&self.snapshot_path)?;
-        // Truncate WAL by reopening the file with truncation.
-        let file = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&self.wal_path)?;
-        self.writer = BufWriter::new(file);
+    /// Returns [`WalError::Io`] if flushing or syncing fails.
+    pub fn sync(&mut self) -> Result<(), WalError> {
+        self.writer.flush()?;
+        self.writer.get_ref().sync_data()?;
         Ok(())
+    }
+
+    /// Write the graph to a new snapshot and reset the WAL.
+    ///
+    /// The snapshot is replaced atomically, then the WAL is replaced by an
+    /// empty one; a crash at any point leaves a state that
+    /// [`open`](Self::open) recovers without loss or double application.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError`] if either file cannot be written.
+    pub fn checkpoint(&mut self) -> Result<(), WalError> {
+        self.writer.flush()?;
+        let next = self.generation + 1;
+        self.graph.save_snapshot(&self.snapshot_path, next)?;
+        write_wal_header(&self.wal_path, next)?;
+        self.writer = open_append(&self.wal_path)?;
+        self.generation = next;
+        Ok(())
+    }
+
+    fn log(&mut self, op: &WalOp) -> Result<(), WalError> {
+        let payload = opts()
+            .serialize(op)
+            .map_err(|e| WalError::Encode(e.to_string()))?;
+        let len = u32::try_from(payload.len())
+            .ok()
+            .filter(|&l| l <= MAX_FRAME_BYTES)
+            .ok_or_else(|| {
+                WalError::Encode(format!(
+                    "operation of {} bytes exceeds the {MAX_FRAME_BYTES} byte frame limit",
+                    payload.len()
+                ))
+            })?;
+        self.writer.write_all(&len.to_le_bytes())?;
+        self.writer.write_all(&crc32(&payload).to_le_bytes())?;
+        self.writer.write_all(&payload)?;
+        self.writer.flush()?;
+        if self.sync_on_write {
+            self.writer.get_ref().sync_data()?;
+        }
+        Ok(())
+    }
+
+    fn need_node(&self, id: NodeId) -> Result<(), WalError> {
+        if self.graph.contains_node(id) {
+            Ok(())
+        } else {
+            Err(WalError::Apply(GraphError::NodeNotFound(id)))
+        }
+    }
+
+    fn need_edge(&self, id: EdgeId) -> Result<(), WalError> {
+        if self.graph.contains_edge(id) {
+            Ok(())
+        } else {
+            Err(WalError::Apply(GraphError::EdgeNotFound(id)))
+        }
+    }
+
+    fn log_and_apply(&mut self, op: WalOp) -> Result<(), WalError> {
+        self.log(&op)?;
+        apply_op(&mut self.graph, op).map_err(WalError::Apply)
     }
 
     // ── Mutations ─────────────────────────────────────────────────────────────
@@ -354,19 +641,8 @@ impl WalWriter {
         props: HashMap<String, Value>,
     ) -> Result<NodeId, WalError> {
         let id = self.graph.next_node_id();
-        let labels_vec: Vec<String> = labels
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect();
-        write_frame(
-            &mut self.writer,
-            &WalOp::AddNode {
-                id,
-                labels: labels_vec.clone(),
-                props: props.clone(),
-            },
-        )?;
-        self.graph.restore_node(id, labels_vec, props);
+        let labels = labels.iter().map(ToString::to_string).collect();
+        self.log_and_apply(WalOp::AddNode { id, labels, props })?;
         Ok(id)
     }
 
@@ -377,11 +653,8 @@ impl WalWriter {
     /// Returns [`WalError::Apply`] if the node does not exist, or
     /// [`WalError::Io`] / [`WalError::Encode`] on WAL write failure.
     pub fn remove_node(&mut self, id: NodeId) -> Result<(), WalError> {
-        if !self.graph.contains_node(id) {
-            return Err(WalError::Apply(GraphError::NodeNotFound(id)));
-        }
-        write_frame(&mut self.writer, &WalOp::RemoveNode { id })?;
-        self.graph.remove_node(id).map_err(WalError::Apply)
+        self.need_node(id)?;
+        self.log_and_apply(WalOp::RemoveNode { id })
     }
 
     /// Add an edge — writes to WAL before updating the in-memory graph.
@@ -396,25 +669,16 @@ impl WalWriter {
         label: &str,
         props: HashMap<String, Value>,
     ) -> Result<EdgeId, WalError> {
-        if !self.graph.contains_node(source) {
-            return Err(WalError::Apply(GraphError::NodeNotFound(source)));
-        }
-        if !self.graph.contains_node(target) {
-            return Err(WalError::Apply(GraphError::NodeNotFound(target)));
-        }
+        self.need_node(source)?;
+        self.need_node(target)?;
         let id = self.graph.next_edge_id();
-        write_frame(
-            &mut self.writer,
-            &WalOp::AddEdge {
-                id,
-                source,
-                target,
-                label: label.to_string(),
-                props: props.clone(),
-            },
-        )?;
-        self.graph
-            .restore_edge(id, source, target, label.to_string(), props);
+        self.log_and_apply(WalOp::AddEdge {
+            id,
+            source,
+            target,
+            label: label.to_string(),
+            props,
+        })?;
         Ok(id)
     }
 
@@ -424,11 +688,8 @@ impl WalWriter {
     ///
     /// Returns [`WalError::Apply`] if the edge does not exist.
     pub fn remove_edge(&mut self, id: EdgeId) -> Result<(), WalError> {
-        if !self.graph.contains_edge(id) {
-            return Err(WalError::Apply(GraphError::EdgeNotFound(id)));
-        }
-        write_frame(&mut self.writer, &WalOp::RemoveEdge { id })?;
-        self.graph.remove_edge(id).map_err(WalError::Apply)
+        self.need_edge(id)?;
+        self.log_and_apply(WalOp::RemoveEdge { id })
     }
 
     /// Set or overwrite a node property — writes to WAL first.
@@ -442,20 +703,12 @@ impl WalWriter {
         key: &str,
         value: Value,
     ) -> Result<(), WalError> {
-        if !self.graph.contains_node(id) {
-            return Err(WalError::Apply(GraphError::NodeNotFound(id)));
-        }
-        write_frame(
-            &mut self.writer,
-            &WalOp::SetNodeProp {
-                id,
-                key: key.to_string(),
-                value: value.clone(),
-            },
-        )?;
-        self.graph
-            .set_node_property(id, key, value)
-            .map_err(WalError::Apply)
+        self.need_node(id)?;
+        self.log_and_apply(WalOp::SetNodeProp {
+            id,
+            key: key.to_string(),
+            value,
+        })
     }
 
     /// Set or overwrite an edge property — writes to WAL first.
@@ -469,19 +722,121 @@ impl WalWriter {
         key: &str,
         value: Value,
     ) -> Result<(), WalError> {
-        if !self.graph.contains_edge(id) {
-            return Err(WalError::Apply(GraphError::EdgeNotFound(id)));
-        }
-        write_frame(
-            &mut self.writer,
-            &WalOp::SetEdgeProp {
+        self.need_edge(id)?;
+        self.log_and_apply(WalOp::SetEdgeProp {
+            id,
+            key: key.to_string(),
+            value,
+        })
+    }
+
+    /// Remove a node property — writes to WAL first. Returns the old value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Apply`] if the node does not exist.
+    pub fn remove_node_property(
+        &mut self,
+        id: NodeId,
+        key: &str,
+    ) -> Result<Option<Value>, WalError> {
+        self.need_node(id)?;
+        let old = self.graph.node(id).and_then(|n| n.get(key)).cloned();
+        if old.is_some() {
+            self.log_and_apply(WalOp::RemoveNodeProp {
                 id,
                 key: key.to_string(),
-                value: value.clone(),
-            },
-        )?;
-        self.graph
-            .set_edge_property(id, key, value)
-            .map_err(WalError::Apply)
+            })?;
+        }
+        Ok(old)
+    }
+
+    /// Remove an edge property — writes to WAL first. Returns the old value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Apply`] if the edge does not exist.
+    pub fn remove_edge_property(
+        &mut self,
+        id: EdgeId,
+        key: &str,
+    ) -> Result<Option<Value>, WalError> {
+        self.need_edge(id)?;
+        let old = self.graph.edge(id).and_then(|e| e.get(key)).cloned();
+        if old.is_some() {
+            self.log_and_apply(WalOp::RemoveEdgeProp {
+                id,
+                key: key.to_string(),
+            })?;
+        }
+        Ok(old)
+    }
+
+    /// Add a label to a node — writes to WAL first. Returns `true` if added.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Apply`] if the node does not exist.
+    pub fn add_node_label(&mut self, id: NodeId, label: &str) -> Result<bool, WalError> {
+        self.need_node(id)?;
+        if self.graph.node(id).is_some_and(|n| n.has_label(label)) {
+            return Ok(false);
+        }
+        self.log_and_apply(WalOp::AddNodeLabel {
+            id,
+            label: label.to_string(),
+        })?;
+        Ok(true)
+    }
+
+    /// Remove a label from a node — writes to WAL first. Returns `true` if removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError::Apply`] if the node does not exist.
+    pub fn remove_node_label(&mut self, id: NodeId, label: &str) -> Result<bool, WalError> {
+        self.need_node(id)?;
+        if !self.graph.node(id).is_some_and(|n| n.has_label(label)) {
+            return Ok(false);
+        }
+        self.log_and_apply(WalOp::RemoveNodeLabel {
+            id,
+            label: label.to_string(),
+        })?;
+        Ok(true)
+    }
+
+    /// Create a property index (see [`Graph::create_index`]) — writes to WAL
+    /// first. Returns `false` if it already existed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError`] if the WAL write fails.
+    pub fn create_index(&mut self, label: &str, key: &str) -> Result<bool, WalError> {
+        if self.graph.has_index(label, key) {
+            return Ok(false);
+        }
+        self.log_and_apply(WalOp::CreateIndex {
+            label: label.to_string(),
+            key: key.to_string(),
+        })?;
+        Ok(true)
+    }
+
+    /// Drop a property index — writes to WAL first. Returns `false` if it
+    /// did not exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WalError`] if the WAL write fails.
+    pub fn drop_index(&mut self, label: &str, key: &str) -> Result<bool, WalError> {
+        if !self.graph.has_index(label, key) {
+            return Ok(false);
+        }
+        self.log_and_apply(WalOp::DropIndex {
+            label: label.to_string(),
+            key: key.to_string(),
+        })?;
+        Ok(true)
     }
 }

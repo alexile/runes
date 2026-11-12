@@ -292,3 +292,300 @@ proptest! {
         }
     }
 }
+
+proptest! {
+    #[test]
+    fn strong_components_match_mutual_reachability(s in spec()) {
+        let (g, ids) = build(&s);
+        let idx = index_of(&ids);
+        let d = floyd(&s, true);
+        let comps = algo::strongly_connected_components(&g);
+        prop_assert!(comps.windows(2).all(|w| w[0].len() >= w[1].len()));
+        prop_assert_eq!(comps.iter().map(Vec::len).sum::<usize>(), s.n);
+        let comp_of: HashMap<usize, usize> = comps
+            .iter()
+            .enumerate()
+            .flat_map(|(c, nodes)| {
+                let idx = &idx;
+                nodes.iter().map(move |n| (idx[n], c))
+            })
+            .collect();
+        for a in 0..s.n {
+            for b in 0..s.n {
+                let mutual = d[a][b] != INF && d[b][a] != INF;
+                prop_assert_eq!(comp_of[&a] == comp_of[&b], mutual, "{} {}", a, b);
+            }
+        }
+    }
+
+    #[test]
+    fn toposort_orders_edges_or_returns_a_real_cycle(s in spec()) {
+        let (g, ids) = build(&s);
+        let idx = index_of(&ids);
+        match algo::toposort(&g) {
+            Ok(order) => {
+                prop_assert!(is_acyclic(&s));
+                let pos: HashMap<NodeId, usize> =
+                    order.iter().enumerate().map(|(p, &id)| (id, p)).collect();
+                prop_assert_eq!(pos.len(), s.n);
+                for &(u, v, _) in &s.edges {
+                    prop_assert!(pos[&ids[u]] < pos[&ids[v]]);
+                }
+                prop_assert!(!algo::has_cycle(&g));
+            }
+            Err(cycle) => {
+                prop_assert!(!is_acyclic(&s));
+                prop_assert!(algo::has_cycle(&g));
+                let nodes = cycle.nodes();
+                prop_assert!(!nodes.is_empty());
+                let distinct: HashSet<_> = nodes.iter().collect();
+                prop_assert_eq!(distinct.len(), nodes.len());
+                for i in 0..nodes.len() {
+                    let (u, v) = (nodes[i], nodes[(i + 1) % nodes.len()]);
+                    prop_assert!(
+                        s.edges.iter().any(|e| e.0 == idx[&u] && e.1 == idx[&v]),
+                        "{u} -> {v} is not an edge"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lazy_traversals_respect_depth(s in spec(), src in 0usize..8, depth in 0usize..4) {
+        use rune_graph::Direction;
+        let (g, ids) = build(&s);
+        let src = src % s.n;
+        let d = floyd(&s, true);
+        let got: HashSet<NodeId> = g.bfs_iter(ids[src], Direction::Outgoing).max_depth(depth).collect();
+        let want: HashSet<NodeId> = (0..s.n)
+            .filter(|&t| d[src][t] != INF && d[src][t] <= depth as u64)
+            .map(|t| ids[t])
+            .collect();
+        prop_assert_eq!(got, want);
+        // Walking incoming edges finds exactly the nodes that reach `src`.
+        let back: HashSet<NodeId> = g.dfs_iter(ids[src], Direction::Incoming).collect();
+        let reach: HashSet<NodeId> = (0..s.n).filter(|&t| d[t][src] != INF).map(|t| ids[t]).collect();
+        prop_assert_eq!(back, reach);
+    }
+}
+
+// ── Mutation invariants ─────────────────────────────────────────────────────
+
+use rune_graph::Value;
+
+const LABELS: [&str; 3] = ["A", "B", "C"];
+const KEYS: [&str; 2] = ["k", "j"];
+
+#[derive(Debug, Clone)]
+enum Op {
+    AddNode(usize, Option<i64>),
+    AddEdge(usize, usize),
+    RemoveNode(usize),
+    RemoveEdge(usize),
+    SetProp(usize, usize, i64),
+    SetFloat(usize, usize, bool),
+    RemoveProp(usize, usize),
+    AddLabel(usize, usize),
+    RemoveLabel(usize, usize),
+    CreateIndex(usize, usize),
+    DropIndex(usize, usize),
+    Clear,
+}
+
+fn op() -> impl Strategy<Value = Op> {
+    prop_oneof![
+        4 => (0usize..3, prop::option::of(0i64..3)).prop_map(|(l, v)| Op::AddNode(l, v)),
+        3 => (0usize..64, 0usize..64).prop_map(|(a, b)| Op::AddEdge(a, b)),
+        2 => (0usize..64).prop_map(Op::RemoveNode),
+        1 => (0usize..64).prop_map(Op::RemoveEdge),
+        3 => (0usize..64, 0usize..2, 0i64..3).prop_map(|(n, k, v)| Op::SetProp(n, k, v)),
+        1 => (0usize..64, 0usize..2, any::<bool>()).prop_map(|(n, k, neg)| Op::SetFloat(n, k, neg)),
+        1 => (0usize..64, 0usize..2).prop_map(|(n, k)| Op::RemoveProp(n, k)),
+        2 => (0usize..64, 0usize..3).prop_map(|(n, l)| Op::AddLabel(n, l)),
+        2 => (0usize..64, 0usize..3).prop_map(|(n, l)| Op::RemoveLabel(n, l)),
+        2 => (0usize..3, 0usize..2).prop_map(|(l, k)| Op::CreateIndex(l, k)),
+        1 => (0usize..3, 0usize..2).prop_map(|(l, k)| Op::DropIndex(l, k)),
+        1 => Just(Op::Clear),
+    ]
+}
+
+fn pick<T: Copy>(items: &[T], i: usize) -> Option<T> {
+    (!items.is_empty()).then(|| items[i % items.len()])
+}
+
+fn run(ops: &[Op]) -> Graph {
+    let mut g = Graph::new();
+    for op in ops {
+        let nodes: Vec<NodeId> = {
+            let mut v: Vec<_> = g.nodes().map(|(id, _)| id).collect();
+            v.sort_unstable();
+            v
+        };
+        let edges: Vec<rune_graph::EdgeId> = {
+            let mut v: Vec<_> = g.edges().map(|(id, _)| id).collect();
+            v.sort_unstable();
+            v
+        };
+        match *op {
+            Op::AddNode(l, v) => {
+                let p = v.map_or_else(|| props! {}, |v| props! { "k" => v });
+                g.add_node(&[LABELS[l]], p);
+            }
+            Op::AddEdge(a, b) => {
+                if let (Some(a), Some(b)) = (pick(&nodes, a), pick(&nodes, b)) {
+                    g.add_edge(a, b, "E", props! {}).unwrap();
+                }
+            }
+            Op::RemoveNode(n) => {
+                if let Some(n) = pick(&nodes, n) {
+                    g.remove_node(n).unwrap();
+                }
+            }
+            Op::RemoveEdge(e) => {
+                if let Some(e) = pick(&edges, e) {
+                    g.remove_edge(e).unwrap();
+                }
+            }
+            Op::SetProp(n, k, v) => {
+                if let Some(n) = pick(&nodes, n) {
+                    g.set_node_property(n, KEYS[k], Value::Int(v)).unwrap();
+                }
+            }
+            Op::SetFloat(n, k, neg) => {
+                if let Some(n) = pick(&nodes, n) {
+                    let x = if neg { -0.0 } else { 0.0 };
+                    g.set_node_property(n, KEYS[k], Value::Float(x)).unwrap();
+                }
+            }
+            Op::RemoveProp(n, k) => {
+                if let Some(n) = pick(&nodes, n) {
+                    g.remove_node_property(n, KEYS[k]).unwrap();
+                }
+            }
+            Op::AddLabel(n, l) => {
+                if let Some(n) = pick(&nodes, n) {
+                    g.add_node_label(n, LABELS[l]).unwrap();
+                }
+            }
+            Op::RemoveLabel(n, l) => {
+                if let Some(n) = pick(&nodes, n) {
+                    g.remove_node_label(n, LABELS[l]).unwrap();
+                }
+            }
+            Op::CreateIndex(l, k) => {
+                g.create_index(LABELS[l], KEYS[k]);
+            }
+            Op::DropIndex(l, k) => {
+                g.drop_index(LABELS[l], KEYS[k]);
+            }
+            Op::Clear => g.clear(),
+        }
+    }
+    g
+}
+
+fn sorted(it: impl Iterator<Item = NodeId>) -> Vec<NodeId> {
+    let mut v: Vec<_> = it.collect();
+    v.sort_unstable();
+    v
+}
+
+fn check_invariants(g: &Graph) -> Result<(), TestCaseError> {
+    // Adjacency and edge table agree; no edge points at a removed node.
+    for (eid, e) in g.edges() {
+        prop_assert!(g.contains_node(e.source()) && g.contains_node(e.target()));
+        prop_assert!(g.outgoing_edges(e.source()).any(|x| x == eid));
+        prop_assert!(g.incoming_edges(e.target()).any(|x| x == eid));
+    }
+    let adjacency: usize = g.nodes().map(|(n, _)| g.outgoing_edges(n).count()).sum();
+    prop_assert_eq!(adjacency, g.edge_count());
+    let in_adjacency: usize = g.nodes().map(|(n, _)| g.incoming_edges(n).count()).sum();
+    prop_assert_eq!(in_adjacency, g.edge_count());
+
+    // Label index matches a scan.
+    for label in LABELS {
+        let scan = sorted(g.find_nodes(|n| n.has_label(label)));
+        prop_assert_eq!(sorted(g.nodes_with_label(label)), scan);
+    }
+    prop_assert_eq!(g.edges_with_label("E").count(), g.edge_count());
+
+    // Property lookups (indexed or not) match a scan.
+    let probes = [
+        Value::Int(0),
+        Value::Int(1),
+        Value::Int(2),
+        Value::Float(0.0),
+        Value::Float(-0.0),
+        Value::Null,
+    ];
+    for label in LABELS {
+        for key in KEYS {
+            for v in &probes {
+                let scan = sorted(g.find_nodes(|n| n.has_label(label) && n.get(key) == Some(v)));
+                let got = sorted(g.nodes_by_property(label, key, v));
+                prop_assert_eq!(got, scan, "{}.{} = {:?}", label, key, v);
+            }
+        }
+    }
+    Ok(())
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    #[test]
+    fn indexes_and_adjacency_stay_consistent(ops in prop::collection::vec(op(), 0..60)) {
+        let g = run(&ops);
+        check_invariants(&g)?;
+    }
+
+    #[test]
+    fn removing_a_node_removes_exactly_its_edges(ops in prop::collection::vec(op(), 0..40), pick_n in 0usize..64) {
+        let mut g = run(&ops);
+        let nodes = sorted(g.nodes().map(|(id, _)| id));
+        let Some(victim) = pick(&nodes, pick_n) else { return Ok(()) };
+        let before = g.edge_count();
+        let incident: HashSet<_> = g.outgoing_edges(victim).chain(g.incoming_edges(victim)).collect();
+        g.remove_node(victim).unwrap();
+        prop_assert!(!g.contains_node(victim));
+        prop_assert_eq!(g.edge_count(), before - incident.len());
+        for e in incident {
+            prop_assert!(!g.contains_edge(e));
+        }
+        prop_assert!(g.edges().all(|(_, e)| e.source() != victim && e.target() != victim));
+        check_invariants(&g)?;
+    }
+}
+
+#[cfg(feature = "persist")]
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
+    #[test]
+    fn snapshots_and_jsonl_round_trip(ops in prop::collection::vec(op(), 0..60)) {
+        let g = run(&ops);
+        let canon = g.to_json().unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("g.bin");
+        g.save(&path).unwrap();
+        let loaded = Graph::load(&path).unwrap();
+        prop_assert_eq!(&loaded.to_json().unwrap(), &canon);
+        check_invariants(&loaded)?;
+
+        let from_json = Graph::from_json(&canon).unwrap();
+        prop_assert_eq!(&from_json.to_json().unwrap(), &canon);
+
+        let mut lines = Vec::new();
+        g.write_jsonl(&mut lines).unwrap();
+        let from_lines = Graph::read_jsonl(lines.as_slice()).unwrap();
+        check_invariants(&from_lines)?;
+        // JSON Lines does not carry the id counters, so compare content only.
+        prop_assert_eq!(from_lines.node_count(), g.node_count());
+        prop_assert_eq!(from_lines.edge_count(), g.edge_count());
+        let mut again = Vec::new();
+        from_lines.write_jsonl(&mut again).unwrap();
+        prop_assert_eq!(again, lines);
+    }
+}

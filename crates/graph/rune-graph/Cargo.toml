@@ -1,10 +1,10 @@
 [package]
 name = "rune-graph"
-version = "0.3.1"
+version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Embedded directed property graph: nodes, edges, labels, key-value properties, traversal, algorithms, and optional snapshot persistence"
+description = "Embedded directed property graph: labels, key-value properties, property indexes, lazy traversal, algorithms, and safe snapshot persistence with an optional WAL"
 license.workspace = true
 keywords = ["graph", "database", "property-graph", "embedded", "knowledge-graph"]
 categories = ["data-structures", "database-implementations"]

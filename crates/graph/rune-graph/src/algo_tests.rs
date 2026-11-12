@@ -553,3 +553,93 @@ fn betweenness_empty_and_tiny_graphs() {
     assert_eq!(bc.len(), 2);
     assert!(bc.values().all(|v| *v == 0.0));
 }
+
+// ── Components, cycles, centrality ───────────────────────────────────────────
+
+#[test]
+fn scc_known_example() {
+    // a ⇄ b → c ⇄ d, e isolated
+    let mut g = Graph::new();
+    let [a, b, c, d, e] = [(); 5].map(|()| g.add_node(&[], props! {}));
+    for (u, v) in [(a, b), (b, a), (b, c), (c, d), (d, c)] {
+        g.add_edge(u, v, "E", props! {}).unwrap();
+    }
+    let mut comps = algo::strongly_connected_components(&g);
+    for c in &mut comps {
+        c.sort_unstable();
+    }
+    comps.sort();
+    assert_eq!(comps, vec![vec![a, b], vec![c, d], vec![e]]);
+}
+
+#[test]
+fn scc_handles_long_chains_without_recursion() {
+    let mut g = Graph::new();
+    let first = g.add_node(&[], props! {});
+    let mut prev = first;
+    for _ in 0..50_000 {
+        let n = g.add_node(&[], props! {});
+        g.add_edge(prev, n, "E", props! {}).unwrap();
+        prev = n;
+    }
+    g.add_edge(prev, first, "E", props! {}).unwrap();
+    let comps = algo::strongly_connected_components(&g);
+    assert_eq!(comps.len(), 1);
+    assert_eq!(comps[0].len(), 50_001);
+}
+
+#[test]
+fn toposort_is_deterministic_and_cycle_is_ordered() {
+    let mut g = Graph::new();
+    let [a, b, c, d] = [(); 4].map(|()| g.add_node(&[], props! {}));
+    g.add_edge(a, c, "E", props! {}).unwrap();
+    g.add_edge(b, c, "E", props! {}).unwrap();
+    assert_eq!(algo::toposort(&g).unwrap(), vec![a, b, d, c]);
+
+    g.add_edge(c, d, "E", props! {}).unwrap();
+    g.add_edge(d, b, "E", props! {}).unwrap();
+    let cycle = algo::toposort(&g).unwrap_err();
+    let nodes = cycle.nodes().to_vec();
+    assert_eq!(nodes.len(), 3);
+    let start = nodes.iter().position(|&n| n == b).unwrap();
+    let rotated: Vec<_> = nodes[start..]
+        .iter()
+        .chain(&nodes[..start])
+        .copied()
+        .collect();
+    assert_eq!(rotated, vec![b, c, d]);
+    assert!(cycle.to_string().starts_with("graph has a cycle"));
+    assert_eq!(algo::find_cycle(&g).map(|c| c.len()), Some(3));
+}
+
+#[test]
+fn degree_centrality_values() {
+    use crate::Direction;
+    let mut g = Graph::new();
+    let [a, b, c] = [(); 3].map(|()| g.add_node(&[], props! {}));
+    g.add_edge(a, b, "E", props! {}).unwrap();
+    g.add_edge(a, c, "E", props! {}).unwrap();
+    let out = algo::degree_centrality(&g, Direction::Outgoing);
+    assert!((out[&a] - 1.0).abs() < 1e-12);
+    assert!(out[&b].abs() < 1e-12);
+    let both = algo::degree_centrality(&g, Direction::Both);
+    assert!((both[&b] - 0.5).abs() < 1e-12);
+
+    let mut single = Graph::new();
+    let only = single.add_node(&[], props! {});
+    assert!(algo::degree_centrality(&single, Direction::Both)[&only].abs() < 1e-12);
+}
+
+#[test]
+fn page_rank_known_values_with_dangling_node() {
+    // a → b with b dangling, damping 0.5. b's rank is spread over both nodes:
+    let mut g = Graph::new();
+    let a = g.add_node(&[], props! {});
+    let b = g.add_node(&[], props! {});
+    g.add_edge(a, b, "E", props! {}).unwrap();
+    let pr = algo::page_rank(&g, 0.5, 200);
+    // r_a = 0.25 + 0.25*r_b ; r_b = 0.25 + 0.25*r_b + 0.5*r_a
+    // → r_a = 0.4, r_b = 0.6
+    assert!((pr[&a] - 0.4).abs() < 1e-9, "{}", pr[&a]);
+    assert!((pr[&b] - 0.6).abs() < 1e-9, "{}", pr[&b]);
+}

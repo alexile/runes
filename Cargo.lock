@@ -3546,7 +3546,7 @@ dependencies = [
 
 [[package]]
 name = "rune-graph"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "bincode",
  "proptest",
@@ -3557,7 +3557,7 @@ dependencies = [
 
 [[package]]
 name = "rune-graph-gremlin"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "rune-graph",
@@ -3565,7 +3565,7 @@ dependencies = [
 
 [[package]]
 name = "rune-graph-match"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "rune-graph",

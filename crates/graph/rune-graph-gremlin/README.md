@@ -19,8 +19,8 @@ a terminal step — the pipeline is fully lazy.
 
 ```toml
 [dependencies]
-rune-graph-gremlin = "0.1"
-rune-graph         = "0.2"
+rune-graph-gremlin = "0.3"
+rune-graph         = "0.4"
 ```
 
 ## Usage
@@ -109,6 +109,12 @@ P::gte(v)     // >= v
 P::within(vs) // in set vs
 P::without(vs)// not in set vs
 ```
+
+## Migrating from 0.2
+
+- Built on `rune-graph` 0.4, which is a breaking release; upgrade both together. The
+  traversal API of this crate is unchanged. See the
+  [rune-graph migration notes](https://crates.io/crates/rune-graph).
 
 ## License
 

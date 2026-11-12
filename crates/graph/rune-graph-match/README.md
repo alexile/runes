@@ -18,8 +18,8 @@ Chain multiple patterns together with [`chain`] to find multi-hop paths without 
 
 ```toml
 [dependencies]
-rune-graph-match = "0.1"
-rune-graph       = "0.2"
+rune-graph-match = "0.3"
+rune-graph       = "0.4"
 ```
 
 ## Usage
@@ -88,6 +88,12 @@ let p2 = Pattern { from: NodeFilter::Any, rel: RelFilter::Label("step".into()), 
 let chains = chain(&g, &[p1, p2]);
 assert_eq!(chains[0], vec![a, b, c]);
 ```
+
+## Migrating from 0.2
+
+- Built on `rune-graph` 0.4, which is a breaking release; upgrade both together. The
+  traversal API of this crate is unchanged. See the
+  [rune-graph migration notes](https://crates.io/crates/rune-graph).
 
 ## License
 

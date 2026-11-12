@@ -52,7 +52,7 @@ fn remove_nonexistent_node_returns_error() {
 fn node_mut_can_update_property() {
     let mut g = Graph::new();
     let id = g.add_node(&[], props! { "x" => 1_i64 });
-    g.node_mut(id).unwrap().set("x", Value::Int(42));
+    g.update_node(id, |n| n.set("x", Value::Int(42))).unwrap();
     assert_eq!(g.node(id).unwrap().get("x"), Some(&Value::Int(42)));
 }
 
@@ -60,7 +60,7 @@ fn node_mut_can_update_property() {
 fn add_label_to_existing_node() {
     let mut g = Graph::new();
     let id = g.add_node(&["A"], props! {});
-    g.node_mut(id).unwrap().add_label("B");
+    g.add_node_label(id, "B").unwrap();
     assert!(g.node(id).unwrap().has_label("B"));
 }
 
@@ -366,4 +366,161 @@ fn match_triples_wildcards() {
         vec![(alice, "KNOWS", bob)]
     );
     assert_eq!(g.match_triples(Some(corp), None, None), vec![]);
+}
+
+// ── Indexes ───────────────────────────────────────────────────────────────────
+
+#[test]
+fn graph_is_send_and_sync() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Graph>();
+    assert_send_sync::<crate::Bfs<'static>>();
+    assert_send_sync::<crate::PropertyMatches<'static>>();
+}
+
+#[test]
+fn index_created_before_and_after_data_agree() {
+    let (mut g, alice, _, _) = people_graph();
+    let scan: Vec<_> = g
+        .nodes_by_property("Person", "name", &"Alice".into())
+        .collect();
+    assert!(g.create_index("Person", "name"));
+    assert!(!g.create_index("Person", "name"));
+    let indexed: Vec<_> = g
+        .nodes_by_property("Person", "name", &"Alice".into())
+        .collect();
+    assert_eq!(scan, vec![alice]);
+    assert_eq!(indexed, vec![alice]);
+}
+
+#[test]
+fn index_follows_property_and_label_changes() {
+    let mut g = Graph::new();
+    g.create_index("User", "email");
+    let u = g.add_node(&["User"], props! { "email" => "a@x" });
+    let lookup = |g: &Graph, e: &str| g.nodes_by_property("User", "email", &e.into()).count();
+
+    g.set_node_property(u, "email", "b@x".into()).unwrap();
+    assert_eq!(lookup(&g, "a@x"), 0);
+    assert_eq!(lookup(&g, "b@x"), 1);
+
+    g.remove_node_label(u, "User").unwrap();
+    assert_eq!(lookup(&g, "b@x"), 0);
+    g.add_node_label(u, "User").unwrap();
+    assert_eq!(lookup(&g, "b@x"), 1);
+
+    g.remove_node_property(u, "email").unwrap();
+    assert_eq!(lookup(&g, "b@x"), 0);
+
+    g.set_node_property(u, "email", "c@x".into()).unwrap();
+    g.remove_node(u).unwrap();
+    assert_eq!(lookup(&g, "c@x"), 0);
+}
+
+#[test]
+fn index_value_semantics_match_value_eq() {
+    let mut g = Graph::new();
+    g.create_index("N", "v");
+    let int = g.add_node(&["N"], props! { "v" => 1_i64 });
+    let zero = g.add_node(&["N"], props! { "v" => -0.0_f64 });
+    g.add_node(&["N"], props! { "v" => f64::NAN });
+    let hits = |v: Value| g.nodes_by_property("N", "v", &v).collect::<Vec<_>>();
+    assert_eq!(hits(Value::Int(1)), vec![int]);
+    assert_eq!(hits(Value::Float(1.0)), vec![]);
+    assert_eq!(hits(Value::Float(0.0)), vec![zero]);
+    assert_eq!(hits(Value::Float(f64::NAN)), vec![]);
+}
+
+#[test]
+fn clear_keeps_index_definitions() {
+    let mut g = Graph::new();
+    g.create_index("A", "k");
+    g.add_node(&["A"], props! { "k" => 1_i64 });
+    g.clear();
+    assert!(g.has_index("A", "k"));
+    assert_eq!(g.nodes_with_label("A").count(), 0);
+    let n = g.add_node(&["A"], props! { "k" => 1_i64 });
+    assert_eq!(
+        g.nodes_by_property("A", "k", &Value::Int(1))
+            .collect::<Vec<_>>(),
+        vec![n]
+    );
+}
+
+#[test]
+fn duplicate_labels_are_collapsed() {
+    let mut g = Graph::new();
+    let n = g.add_node(&["A", "A"], props! {});
+    assert_eq!(g.node(n).unwrap().labels(), ["A".to_string()]);
+    g.remove_node_label(n, "A").unwrap();
+    assert_eq!(g.nodes_with_label("A").count(), 0);
+}
+
+#[test]
+fn update_node_errors_on_missing_node() {
+    let mut g = Graph::new();
+    let missing = crate::NodeId::from(5);
+    assert_eq!(
+        g.update_node(missing, |_| ()),
+        Err(GraphError::NodeNotFound(missing))
+    );
+}
+
+#[test]
+fn edge_label_index_tracks_removal() {
+    let (mut g, alice, bob, _) = people_graph();
+    assert_eq!(g.edges_with_label("KNOWS").count(), 1);
+    g.remove_node(bob).unwrap();
+    assert_eq!(g.edges_with_label("KNOWS").count(), 0);
+    assert_eq!(g.edges_with_label("WORKS_AT").count(), 1);
+    assert_eq!(g.match_triples(Some(alice), None, None).len(), 1);
+}
+
+// ── Directed traversal ────────────────────────────────────────────────────────
+
+#[test]
+fn bfs_iter_filters_by_edge_label_and_direction() {
+    use crate::Direction;
+    let (g, alice, bob, corp) = people_graph();
+    let via_knows: Vec<_> = g
+        .bfs_iter(alice, Direction::Outgoing)
+        .edge_label("KNOWS")
+        .collect();
+    assert_eq!(via_knows, vec![alice, bob]);
+    let mut staff: Vec<_> = g
+        .bfs_iter(corp, Direction::Incoming)
+        .edge_label("WORKS_AT")
+        .collect();
+    staff.sort_unstable();
+    assert_eq!(staff, vec![alice, bob, corp]);
+    let both = g.bfs_iter(bob, Direction::Both).count();
+    assert_eq!(both, 3);
+}
+
+#[test]
+fn bfs_iter_is_lazy() {
+    use crate::Direction;
+    let mut g = Graph::new();
+    let mut prev = g.add_node(&[], props! {});
+    let first = prev;
+    for _ in 0..1000 {
+        let n = g.add_node(&[], props! {});
+        g.add_edge(prev, n, "E", props! {}).unwrap();
+        prev = n;
+    }
+    let mut it = g.bfs_iter(first, Direction::Outgoing);
+    assert_eq!(it.next(), Some(first));
+    assert_eq!(it.take(3).count(), 3);
+}
+
+#[test]
+fn edges_directed_both_reports_self_loop_twice() {
+    use crate::Direction;
+    let mut g = Graph::new();
+    let a = g.add_node(&[], props! {});
+    let e = g.add_edge(a, a, "L", props! {}).unwrap();
+    assert_eq!(
+        g.edges_directed(a, Direction::Both).collect::<Vec<_>>(),
+        vec![(e, a), (e, a)]
+    );
 }

@@ -5,6 +5,10 @@ use crate::value::Value;
 
 /// A node stored in the graph: a set of labels and a property map.
 ///
+/// Mutable access is only available through
+/// [`Graph::update_node`](crate::Graph::update_node), which keeps the label
+/// and property indexes in sync with your changes.
+///
 /// # Example
 ///
 /// ```rust
@@ -25,13 +29,28 @@ pub struct NodeEntry {
 
 impl NodeEntry {
     pub(crate) fn new(labels: &[&str], properties: HashMap<String, Value>) -> Self {
-        Self {
+        let mut entry = Self {
             labels: labels
                 .iter()
                 .map(std::string::ToString::to_string)
                 .collect(),
             properties,
-        }
+        };
+        entry.dedup_labels();
+        entry
+    }
+
+    #[cfg(feature = "persist")]
+    pub(crate) fn from_parts(labels: Vec<String>, properties: HashMap<String, Value>) -> Self {
+        let mut entry = Self { labels, properties };
+        entry.dedup_labels();
+        entry
+    }
+
+    /// Drop repeated labels, keeping the first occurrence.
+    pub(crate) fn dedup_labels(&mut self) {
+        let mut seen = std::collections::HashSet::new();
+        self.labels.retain(|l| seen.insert(l.clone()));
     }
 
     /// The labels attached to this node.
@@ -63,12 +82,24 @@ impl NodeEntry {
         self.properties.insert(key.into(), value);
     }
 
+    /// Remove a property, returning its old value.
+    pub fn remove(&mut self, key: &str) -> Option<Value> {
+        self.properties.remove(key)
+    }
+
     /// Add a label if not already present.
     pub fn add_label(&mut self, label: impl Into<String>) {
         let label = label.into();
         if !self.labels.contains(&label) {
             self.labels.push(label);
         }
+    }
+
+    /// Remove a label. Returns `true` if it was present.
+    pub fn remove_label(&mut self, label: &str) -> bool {
+        let before = self.labels.len();
+        self.labels.retain(|l| l != label);
+        self.labels.len() != before
     }
 }
 
@@ -146,5 +177,10 @@ impl EdgeEntry {
     /// Insert or overwrite a property.
     pub fn set(&mut self, key: impl Into<String>, value: Value) {
         self.properties.insert(key.into(), value);
+    }
+
+    /// Remove a property, returning its old value.
+    pub fn remove(&mut self, key: &str) -> Option<Value> {
+        self.properties.remove(key)
     }
 }

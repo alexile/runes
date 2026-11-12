@@ -3,7 +3,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 use crate::graph::Graph;
 use crate::id::NodeId;
-use crate::value::Value;
+use crate::traverse::Direction;
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
@@ -30,19 +30,11 @@ impl Ord for OrdF64 {
     }
 }
 
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "counts and indices stay far below 2^52, so the f64 conversion is exact"
-)]
 fn edge_weight(graph: &Graph, eid: crate::id::EdgeId, weight_key: &str) -> f64 {
     graph
         .edge(eid)
         .and_then(|e| e.get(weight_key))
-        .and_then(|v| match v {
-            Value::Float(f) => Some(*f),
-            Value::Int(n) => Some(*n as f64),
-            _ => None,
-        })
+        .and_then(crate::Value::as_f64)
         .unwrap_or(1.0)
 }
 
@@ -263,37 +255,329 @@ pub fn weakly_connected_components(graph: &Graph) -> Vec<Vec<NodeId>> {
 /// ```
 #[must_use]
 pub fn topological_sort(graph: &Graph) -> Option<Vec<NodeId>> {
-    let mut in_degree: HashMap<NodeId, usize> = HashMap::new();
-    for (node, _) in graph.nodes() {
-        in_degree.entry(node).or_insert(0);
-        for neighbor in graph.neighbors(node) {
-            *in_degree.entry(neighbor).or_insert(0) += 1;
-        }
-    }
+    toposort(graph).ok()
+}
 
-    let mut queue: VecDeque<NodeId> = in_degree
+/// A directed cycle found by [`toposort`] or [`find_cycle`].
+///
+/// [`nodes`](Self::nodes) lists the cycle in edge order: each node has an
+/// edge to the next, and the last has an edge back to the first. A self-loop
+/// is a cycle of one node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cycle {
+    nodes: Vec<NodeId>,
+}
+
+impl Cycle {
+    /// The nodes on the cycle, in edge order.
+    #[must_use]
+    pub fn nodes(&self) -> &[NodeId] {
+        &self.nodes
+    }
+}
+
+impl std::fmt::Display for Cycle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("graph has a cycle: ")?;
+        for n in &self.nodes {
+            write!(f, "{n} -> ")?;
+        }
+        self.nodes
+            .first()
+            .map_or(Ok(()), |first| write!(f, "{first}"))
+    }
+}
+
+impl std::error::Error for Cycle {}
+
+/// Kahn's algorithm. Returns the emitted order and the in-degree left over
+/// for nodes stuck behind a cycle.
+fn kahn(graph: &Graph) -> (Vec<NodeId>, HashMap<NodeId, usize>) {
+    let mut in_degree: HashMap<NodeId, usize> = graph
+        .nodes()
+        .map(|(id, _)| (id, graph.incoming_edges(id).count()))
+        .collect();
+    let mut seeds: Vec<NodeId> = in_degree
         .iter()
-        .filter(|&(_, deg)| *deg == 0)
+        .filter(|&(_, d)| *d == 0)
         .map(|(&n, _)| n)
         .collect();
-
-    let mut order = Vec::new();
+    seeds.sort_unstable();
+    let mut queue = VecDeque::from(seeds);
+    let mut order = Vec::with_capacity(in_degree.len());
     while let Some(node) = queue.pop_front() {
         order.push(node);
-        for neighbor in graph.neighbors(node) {
-            let deg = in_degree.entry(neighbor).or_insert(0);
-            *deg -= 1;
-            if *deg == 0 {
-                queue.push_back(neighbor);
+        for next in graph.neighbors(node) {
+            if let Some(d) = in_degree.get_mut(&next) {
+                *d = d.saturating_sub(1);
+                if *d == 0 {
+                    queue.push_back(next);
+                }
             }
         }
     }
+    in_degree.retain(|_, d| *d > 0);
+    (order, in_degree)
+}
 
-    if order.len() == graph.node_count() {
-        Some(order)
-    } else {
-        None // cycle detected
+/// Topological sort that reports a concrete cycle when there is one.
+///
+/// Nodes with no incoming edges come first; ties start in ascending id order.
+/// Runs in O(V + E).
+///
+/// # Errors
+///
+/// Returns a [`Cycle`] witness if the graph is not a DAG.
+///
+/// # Example
+///
+/// ```rust
+/// use rune_graph::{Graph, algo, props};
+///
+/// let mut g = Graph::new();
+/// let a = g.add_node(&[], props! {});
+/// let b = g.add_node(&[], props! {});
+/// let c = g.add_node(&[], props! {});
+/// g.add_edge(a, b, "DEP", props! {}).unwrap();
+/// g.add_edge(b, c, "DEP", props! {}).unwrap();
+/// assert_eq!(algo::toposort(&g).unwrap(), vec![a, b, c]);
+///
+/// g.add_edge(c, b, "DEP", props! {}).unwrap();
+/// let cycle = algo::toposort(&g).unwrap_err();
+/// assert_eq!(cycle.nodes().len(), 2);
+/// ```
+pub fn toposort(graph: &Graph) -> Result<Vec<NodeId>, Cycle> {
+    let (order, stuck) = kahn(graph);
+    if stuck.is_empty() {
+        return Ok(order);
     }
+    // Every stuck node has a stuck predecessor, so walking predecessors
+    // through stuck nodes must eventually repeat a node.
+    let Some(mut cur) = stuck.keys().min().copied() else {
+        return Ok(order);
+    };
+    let mut path: Vec<NodeId> = Vec::new();
+    let mut pos: HashMap<NodeId, usize> = HashMap::new();
+    loop {
+        if let Some(&i) = pos.get(&cur) {
+            let mut nodes = path.split_off(i);
+            nodes.reverse();
+            return Err(Cycle { nodes });
+        }
+        pos.insert(cur, path.len());
+        path.push(cur);
+        match graph.predecessors(cur).find(|p| stuck.contains_key(p)) {
+            Some(p) => cur = p,
+            // Unreachable for a consistent graph; fall back to the stuck set.
+            None => {
+                return Err(Cycle { nodes: path });
+            }
+        }
+    }
+}
+
+/// Return some directed cycle, or `None` if the graph is acyclic.
+///
+/// ```rust
+/// use rune_graph::{Graph, algo, props};
+///
+/// let mut g = Graph::new();
+/// let a = g.add_node(&[], props! {});
+/// g.add_edge(a, a, "SELF", props! {}).unwrap();
+/// assert_eq!(algo::find_cycle(&g), Some(vec![a]));
+/// ```
+#[must_use]
+pub fn find_cycle(graph: &Graph) -> Option<Vec<NodeId>> {
+    toposort(graph).err().map(|c| c.nodes)
+}
+
+/// `true` if the graph contains a directed cycle (including self-loops).
+///
+/// ```rust
+/// use rune_graph::{Graph, algo, props};
+///
+/// let mut g = Graph::new();
+/// let a = g.add_node(&[], props! {});
+/// let b = g.add_node(&[], props! {});
+/// g.add_edge(a, b, "E", props! {}).unwrap();
+/// assert!(!algo::has_cycle(&g));
+/// g.add_edge(b, a, "E", props! {}).unwrap();
+/// assert!(algo::has_cycle(&g));
+/// ```
+#[must_use]
+pub fn has_cycle(graph: &Graph) -> bool {
+    !kahn(graph).1.is_empty()
+}
+
+/// Partition the graph into strongly connected components (Tarjan's
+/// algorithm, iterative so deep graphs cannot overflow the stack).
+///
+/// Two nodes share a component when each is reachable from the other.
+/// Components with more nodes appear first. Runs in O(V + E).
+///
+/// # Example
+///
+/// ```rust
+/// use rune_graph::{Graph, algo, props};
+///
+/// let mut g = Graph::new();
+/// let a = g.add_node(&[], props! {});
+/// let b = g.add_node(&[], props! {});
+/// let c = g.add_node(&[], props! {});
+/// g.add_edge(a, b, "E", props! {}).unwrap();
+/// g.add_edge(b, a, "E", props! {}).unwrap();
+/// g.add_edge(b, c, "E", props! {}).unwrap();
+///
+/// let comps = algo::strongly_connected_components(&g);
+/// assert_eq!(comps.len(), 2);
+/// assert_eq!(comps[0].len(), 2); // {a, b}
+/// assert_eq!(comps[1], vec![c]);
+/// ```
+#[must_use]
+pub fn strongly_connected_components(graph: &Graph) -> Vec<Vec<NodeId>> {
+    struct Frame {
+        node: NodeId,
+        succ: Vec<NodeId>,
+        next: usize,
+    }
+    let mut index: HashMap<NodeId, usize> = HashMap::new();
+    let mut low: HashMap<NodeId, usize> = HashMap::new();
+    let mut on_stack: HashSet<NodeId> = HashSet::new();
+    let mut stack: Vec<NodeId> = Vec::new();
+    let mut components: Vec<Vec<NodeId>> = Vec::new();
+    let mut counter = 0usize;
+
+    let mut roots: Vec<NodeId> = graph.nodes().map(|(id, _)| id).collect();
+    roots.sort_unstable();
+    for root in roots {
+        if index.contains_key(&root) {
+            continue;
+        }
+        index.insert(root, counter);
+        low.insert(root, counter);
+        counter += 1;
+        stack.push(root);
+        on_stack.insert(root);
+        let mut calls = vec![Frame {
+            node: root,
+            succ: graph.neighbors(root).collect(),
+            next: 0,
+        }];
+        while let Some(frame) = calls.last_mut() {
+            let v = frame.node;
+            if let Some(&w) = frame.succ.get(frame.next) {
+                frame.next += 1;
+                if let Some(&iw) = index.get(&w) {
+                    if on_stack.contains(&w) {
+                        let lv = low.get(&v).copied().unwrap_or(iw);
+                        low.insert(v, lv.min(iw));
+                    }
+                } else {
+                    index.insert(w, counter);
+                    low.insert(w, counter);
+                    counter += 1;
+                    stack.push(w);
+                    on_stack.insert(w);
+                    calls.push(Frame {
+                        node: w,
+                        succ: graph.neighbors(w).collect(),
+                        next: 0,
+                    });
+                }
+                continue;
+            }
+            calls.pop();
+            let lv = low.get(&v).copied().unwrap_or(0);
+            if let Some(parent) = calls.last() {
+                let lp = low.get(&parent.node).copied().unwrap_or(lv);
+                low.insert(parent.node, lp.min(lv));
+            }
+            if index.get(&v) == Some(&lv) {
+                let mut comp = Vec::new();
+                while let Some(w) = stack.pop() {
+                    on_stack.remove(&w);
+                    comp.push(w);
+                    if w == v {
+                        break;
+                    }
+                }
+                components.push(comp);
+            }
+        }
+    }
+    components.sort_by_key(|c| Reverse(c.len()));
+    components
+}
+
+/// Degree centrality: each node's degree divided by `n - 1`, the largest
+/// possible degree without parallel edges. Parallel edges and self-loops are
+/// counted, so scores can exceed `1.0` in multigraphs.
+///
+/// `direction` picks in-degree, out-degree or total degree. Every node scores
+/// `0.0` in a graph with fewer than two nodes.
+///
+/// # Example
+///
+/// ```rust
+/// use rune_graph::{Direction, Graph, algo, props};
+///
+/// let mut g = Graph::new();
+/// let hub = g.add_node(&[], props! {});
+/// let a = g.add_node(&[], props! {});
+/// let b = g.add_node(&[], props! {});
+/// g.add_edge(a, hub, "E", props! {}).unwrap();
+/// g.add_edge(b, hub, "E", props! {}).unwrap();
+///
+/// let c = algo::degree_centrality(&g, Direction::Incoming);
+/// assert_eq!(c[&hub], 1.0);
+/// assert_eq!(c[&a], 0.0);
+/// ```
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "counts and indices stay far below 2^52, so the f64 conversion is exact"
+)]
+#[must_use]
+pub fn degree_centrality(graph: &Graph, direction: Direction) -> HashMap<NodeId, f64> {
+    let n = graph.node_count();
+    graph
+        .nodes()
+        .map(|(id, _)| {
+            let score = if n < 2 {
+                0.0
+            } else {
+                graph.edges_directed(id, direction).count() as f64 / (n - 1) as f64
+            };
+            (id, score)
+        })
+        .collect()
+}
+
+/// Hop distances from `start` to every node reachable in `direction`.
+///
+/// Returns an empty map if `start` is not in the graph.
+///
+/// ```rust
+/// use rune_graph::{Direction, Graph, algo, props};
+///
+/// let mut g = Graph::new();
+/// let a = g.add_node(&[], props! {});
+/// let b = g.add_node(&[], props! {});
+/// g.add_edge(a, b, "E", props! {}).unwrap();
+/// let d = algo::unweighted_distances(&g, b, Direction::Incoming);
+/// assert_eq!(d[&a], 1);
+/// ```
+#[must_use]
+pub fn unweighted_distances(
+    graph: &Graph,
+    start: NodeId,
+    direction: Direction,
+) -> HashMap<NodeId, usize> {
+    let mut it = graph.bfs_iter(start, direction);
+    let mut out = HashMap::new();
+    while let Some((n, d)) = it.next_with_depth() {
+        out.insert(n, d);
+    }
+    out
 }
 
 /// Compute `PageRank` scores for all nodes.
@@ -331,27 +615,32 @@ pub fn page_rank(graph: &Graph, damping: f64, iterations: usize) -> HashMap<Node
         return HashMap::new();
     }
 
-    let mut rank: HashMap<NodeId, f64> = nodes.iter().map(|&id| (id, 1.0 / n as f64)).collect();
+    let nf = n as f64;
+    let out_deg: HashMap<NodeId, usize> = nodes
+        .iter()
+        .map(|&id| (id, graph.outgoing_edges(id).count()))
+        .collect();
+    let mut rank: HashMap<NodeId, f64> = nodes.iter().map(|&id| (id, 1.0 / nf)).collect();
 
     for _ in 0..iterations {
-        let mut new_rank: HashMap<NodeId, f64> = nodes
+        // Rank held by dangling nodes is spread evenly over every node; sum it
+        // once instead of looping over all nodes per dangling node.
+        let dangling: f64 = nodes
             .iter()
-            .map(|&id| (id, (1.0 - damping) / n as f64))
-            .collect();
+            .filter(|id| out_deg.get(id).copied().unwrap_or(0) == 0)
+            .map(|id| rank.get(id).copied().unwrap_or(0.0))
+            .sum();
+        let base = damping.mul_add(dangling, 1.0 - damping) / nf;
+        let mut new_rank: HashMap<NodeId, f64> = nodes.iter().map(|&id| (id, base)).collect();
 
         for &node in &nodes {
-            let out_count = graph.neighbors(node).count();
-            if out_count == 0 {
-                // Dangling node: distribute rank evenly.
-                let share = damping * rank[&node] / n as f64;
-                for &target in &nodes {
-                    *new_rank.entry(target).or_insert(0.0) += share;
-                }
-            } else {
-                let share = damping * rank[&node] / out_count as f64;
-                for target in graph.neighbors(node) {
-                    *new_rank.entry(target).or_insert(0.0) += share;
-                }
+            let deg = out_deg.get(&node).copied().unwrap_or(0);
+            if deg == 0 {
+                continue;
+            }
+            let share = damping * rank.get(&node).copied().unwrap_or(0.0) / deg as f64;
+            for target in graph.neighbors(node) {
+                *new_rank.entry(target).or_insert(0.0) += share;
             }
         }
         rank = new_rank;
@@ -385,39 +674,10 @@ pub fn page_rank(graph: &Graph, damping: f64, iterations: usize) -> HashMap<Node
 /// ```
 #[must_use]
 pub fn topological_sort_relaxed(graph: &Graph) -> Vec<NodeId> {
-    let mut in_degree: HashMap<NodeId, usize> = HashMap::new();
-    for (node, _) in graph.nodes() {
-        in_degree.entry(node).or_insert(0);
-        for neighbor in graph.neighbors(node) {
-            *in_degree.entry(neighbor).or_insert(0) += 1;
-        }
-    }
-
-    let mut queue: VecDeque<NodeId> = in_degree
-        .iter()
-        .filter(|&(_, deg)| *deg == 0)
-        .map(|(&n, _)| n)
-        .collect();
-
-    let mut order = Vec::new();
-    while let Some(node) = queue.pop_front() {
-        order.push(node);
-        for neighbor in graph.neighbors(node) {
-            let deg = in_degree.entry(neighbor).or_insert(0);
-            *deg -= 1;
-            if *deg == 0 {
-                queue.push_back(neighbor);
-            }
-        }
-    }
-
-    // Append nodes remaining in cycles (in_degree still > 0 after Kahn's).
-    for (&node, &deg) in &in_degree {
-        if deg > 0 {
-            order.push(node);
-        }
-    }
-
+    let (mut order, stuck) = kahn(graph);
+    let mut rest: Vec<NodeId> = stuck.into_keys().collect();
+    rest.sort_unstable();
+    order.extend(rest);
     order
 }
 
@@ -629,18 +889,5 @@ pub fn betweenness_centrality(graph: &Graph) -> HashMap<NodeId, f64> {
 
 /// BFS distances from `start` to all reachable nodes.
 fn bfs_distances(graph: &Graph, start: NodeId) -> HashMap<NodeId, usize> {
-    let mut dist = HashMap::new();
-    let mut queue = VecDeque::new();
-    dist.insert(start, 0usize);
-    queue.push_back(start);
-    while let Some(v) = queue.pop_front() {
-        let d = dist[&v];
-        for w in graph.neighbors(v) {
-            dist.entry(w).or_insert_with(|| {
-                queue.push_back(w);
-                d + 1
-            });
-        }
-    }
-    dist
+    unweighted_distances(graph, start, Direction::Outgoing)
 }
