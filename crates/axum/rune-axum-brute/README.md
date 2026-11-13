@@ -16,6 +16,12 @@ trait lets you swap the backend for Redis, a database, or any custom store; the 
 `InMemoryStore` is bounded (default 100 000 keys) so a flood of distinct keys cannot exhaust
 memory.
 
+Attempts still running count against the limit: with 5 attempts allowed, a sixth parallel
+request from the same key gets `429` before it reaches the handler, so a burst of concurrent
+guesses cannot get past the lockout. Put the layer on the login routes, not on the whole app,
+or ordinary parallel requests from one client may hit that cap. Custom stores get this by
+implementing `begin_attempt` / `end_attempt`; the default methods only check `is_locked`.
+
 IP-based lockout uses the **socket peer address** (`ConnectInfo<SocketAddr>`), never a
 client-supplied `X-Forwarded-For`, so attackers cannot rotate the header to dodge lockout or
 forge a victim's IP to lock them out. Forwarding headers are honoured only from reverse
@@ -123,9 +129,11 @@ async fn login(guard: BruteGuard) -> StatusCode {
 ```rust
 use rune_axum_brute::InMemoryStore;
 
-// 5 failures within 60 s triggers a 10-minute lockout.
+// 5 failures, each within 60 s of the previous one, trigger a 10-minute lockout.
 let store = InMemoryStore::with_window(5, 60, 600);
 ```
+
+The count restarts once `window_secs` pass without a new failure.
 
 ### Bounding memory
 

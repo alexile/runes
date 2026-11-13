@@ -4,11 +4,13 @@
 //! out the key after a configurable threshold. Locked keys receive `429 Too Many Requests`
 //! with a `Retry-After` header before any handler runs. A sliding window resets the
 //! failure count after inactivity, so transient failures do not cause permanent lockout.
+//! Attempts still in flight count against the limit, so parallel requests cannot squeeze
+//! in more guesses than `max_attempts` before the lockout lands.
 //!
 //! Two integration paths are available:
 //!
 //! - [`BruteLayer`] — a Tower middleware that inspects response status codes automatically.
-//!   Apply it as a `.layer()` on your router. Use [`BruteLayer::by_ip`] for lockout per
+//!   Apply it as a `.layer()` on the login routes. Use [`BruteLayer::by_ip`] for lockout per
 //!   socket peer IP, [`BruteLayer::by_client_ip`] behind trusted reverse proxies, or supply
 //!   a custom key function.
 //! - [`BruteGuard`] — an Axum extractor that gives handlers direct access to the store.
@@ -157,15 +159,45 @@ pub trait BruteForceStore: Send + Sync + 'static {
         let _ = key;
         None
     }
+
+    /// Starts an attempt for `key` before the handler runs. Returns `false` when the
+    /// key is locked, or when the attempts already in flight would use up what is left
+    /// before the lockout. [`BruteLayer`] answers `false` with `429`, and pairs every
+    /// `true` with one [`end_attempt`](Self::end_attempt).
+    ///
+    /// The default only checks [`is_locked`](Self::is_locked). That lets parallel
+    /// requests through until the first failure is recorded, so a burst of concurrent
+    /// guesses gets past the limit; stores should override this and `end_attempt`.
+    fn begin_attempt(&self, key: &str) -> bool {
+        !self.is_locked(key)
+    }
+
+    /// Ends an attempt started with [`begin_attempt`](Self::begin_attempt), after its
+    /// outcome was recorded (or when the request was dropped). The default does nothing.
+    fn end_attempt(&self, key: &str) {
+        let _ = key;
+    }
 }
 
 struct Entry {
     failure_count: u32,
     locked_until: Option<Instant>,
+    /// Time of the latest failure; the count restarts once `window` has passed since.
     window_start: Instant,
+    /// Attempts started with `begin_attempt` that have not ended yet.
+    in_flight: u32,
 }
 
 impl Entry {
+    const fn new(now: Instant) -> Self {
+        Self {
+            failure_count: 0,
+            locked_until: None,
+            window_start: now,
+            in_flight: 0,
+        }
+    }
+
     fn locked_at(&self, now: Instant) -> bool {
         self.locked_until.is_some_and(|until| now < until)
     }
@@ -245,7 +277,7 @@ impl InMemoryStore {
     /// ```rust
     /// use rune_axum_brute::InMemoryStore;
     ///
-    /// // 5 failures within 60 s triggers a 10-minute lockout.
+    /// // 5 failures, each within 60 s of the previous one, trigger a 10-minute lockout.
     /// let store = InMemoryStore::with_window(5, 60, 600);
     /// ```
     #[must_use]
@@ -287,8 +319,23 @@ impl InMemoryStore {
         now.saturating_duration_since(entry.window_start) >= self.window
     }
 
+    /// Clears the count and lockout of `key`, keeping track of attempts still running.
+    fn forget(&self, key: &str) {
+        let mut map = self.lock();
+        match map.get_mut(key) {
+            Some(entry) if entry.in_flight > 0 => {
+                entry.failure_count = 0;
+                entry.locked_until = None;
+            }
+            Some(_) => {
+                map.remove(key);
+            }
+            None => {}
+        }
+    }
+
     fn make_room(&self, map: &mut HashMap<String, Entry>, now: Instant) {
-        map.retain(|_, e| e.locked_at(now) || !self.window_expired(e, now));
+        map.retain(|_, e| e.locked_at(now) || e.in_flight > 0 || !self.window_expired(e, now));
         if map.len() < self.max_keys {
             return;
         }
@@ -318,16 +365,12 @@ impl BruteForceStore for InMemoryStore {
         if !map.contains_key(key) && map.len() >= self.max_keys {
             self.make_room(&mut map, now);
         }
-        let entry = map.entry(key.to_owned()).or_insert_with(|| Entry {
-            failure_count: 0,
-            locked_until: None,
-            window_start: now,
-        });
+        let entry = map.entry(key.to_owned()).or_insert_with(|| Entry::new(now));
 
-        if now.saturating_duration_since(entry.window_start) >= self.window {
+        if self.window_expired(entry, now) {
             entry.failure_count = 0;
-            entry.window_start = now;
         }
+        entry.window_start = now;
 
         entry.failure_count = entry.failure_count.saturating_add(1);
 
@@ -346,7 +389,7 @@ impl BruteForceStore for InMemoryStore {
     }
 
     fn record_success(&self, key: &str) {
-        self.lock().remove(key);
+        self.forget(key);
     }
 
     fn is_locked(&self, key: &str) -> bool {
@@ -354,7 +397,47 @@ impl BruteForceStore for InMemoryStore {
     }
 
     fn reset(&self, key: &str) {
-        self.lock().remove(key);
+        self.forget(key);
+    }
+
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the guard must outlive the entry borrowed from it"
+    )]
+    fn begin_attempt(&self, key: &str) -> bool {
+        let now = Instant::now();
+        let mut map = self.lock();
+        if !map.contains_key(key) && map.len() >= self.max_keys {
+            self.make_room(&mut map, now);
+        }
+        let entry = map.entry(key.to_owned()).or_insert_with(|| Entry::new(now));
+        if entry.locked_at(now) {
+            return false;
+        }
+        if self.window_expired(entry, now) {
+            entry.failure_count = 0;
+        }
+        // After a lockout has run out, one failure locks again, so allow one at a time.
+        let left = if entry.locked_until.is_some() {
+            1
+        } else {
+            self.max_attempts.saturating_sub(entry.failure_count).max(1)
+        };
+        if entry.in_flight >= left {
+            return false;
+        }
+        entry.in_flight += 1;
+        true
+    }
+
+    fn end_attempt(&self, key: &str) {
+        let mut map = self.lock();
+        if let Some(entry) = map.get_mut(key) {
+            entry.in_flight = entry.in_flight.saturating_sub(1);
+            if entry.in_flight == 0 && entry.failure_count == 0 && entry.locked_until.is_none() {
+                map.remove(key);
+            }
+        }
     }
 
     #[allow(
@@ -687,9 +770,14 @@ where
             let Some(key) = key else {
                 return Ok(status_response(missing_key_status));
             };
-            if store.is_locked(&key) {
+            if !store.begin_attempt(&key) {
                 return Ok(locked_response(store.lockout_remaining(&key)));
             }
+            // Ends the attempt after the outcome is recorded, or if this future is dropped.
+            let _attempt = Attempt {
+                store: Arc::clone(&store),
+                key: key.clone(),
+            };
 
             let response = inner.call(req).await?;
             let status = response.status();
@@ -721,6 +809,17 @@ where
 
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
         self.project().inner.poll(cx)
+    }
+}
+
+struct Attempt {
+    store: Arc<dyn BruteForceStore>,
+    key: String,
+}
+
+impl Drop for Attempt {
+    fn drop(&mut self) {
+        self.store.end_attempt(&self.key);
     }
 }
 
@@ -991,5 +1090,98 @@ mod tests {
         let store = InMemoryStore::new(1, u64::MAX);
         store.record_failure("k");
         assert!(store.is_locked("k"));
+    }
+
+    /// Attempts that are still running count against the limit. Otherwise a
+    /// burst of parallel guesses all pass the lock check before the first
+    /// failure is recorded, and the attacker gets as many tries as requests
+    /// in flight.
+    #[tokio::test]
+    async fn parallel_attempts_cannot_outrun_the_lockout() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let store = Arc::new(InMemoryStore::new(3, 300));
+        let reached = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&reached);
+        let app = Router::new()
+            .route(
+                "/login",
+                post(move || {
+                    let counter = Arc::clone(&counter);
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        StatusCode::UNAUTHORIZED
+                    }
+                }),
+            )
+            .layer(BruteLayer::by_ip(store.clone()));
+
+        let attempts = (0..20).map(|_| app.clone().oneshot(login_from(Some("10.0.0.1"), &[])));
+        let statuses: Vec<StatusCode> = futures_join(attempts).await;
+        assert_eq!(reached.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            statuses
+                .iter()
+                .filter(|s| **s == StatusCode::TOO_MANY_REQUESTS)
+                .count(),
+            17
+        );
+        assert!(store.is_locked("10.0.0.1"));
+        // Nothing is left counted as in flight.
+        store.record_success("10.0.0.1");
+        assert!(store.is_empty());
+    }
+
+    /// A request that ends without an outcome (the client went away) must
+    /// not keep holding an attempt.
+    #[tokio::test]
+    async fn dropped_attempts_are_released() {
+        let store = Arc::new(InMemoryStore::new(1, 300));
+        let app = Router::new()
+            .route(
+                "/login",
+                post(|| async {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                    StatusCode::OK
+                }),
+            )
+            .layer(BruteLayer::by_ip(store.clone()));
+        let pending = send(&app, login_from(Some("10.0.0.1"), &[]));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), pending)
+                .await
+                .is_err()
+        );
+        assert!(store.is_empty());
+        let app = build_app(store.clone(), StatusCode::OK);
+        assert_eq!(post_login(app).await.status(), StatusCode::OK);
+    }
+
+    /// The window is documented as "reset after `window_secs` without a new
+    /// failure", so failures spaced closer than that keep adding up even
+    /// across the boundary of the first window.
+    #[tokio::test]
+    async fn window_restarts_only_after_a_quiet_period() {
+        let store = InMemoryStore::with_window(3, 1, 600);
+        store.record_failure("k");
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        store.record_failure("k");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert_eq!(store.record_failure("k"), 3);
+        assert!(store.is_locked("k"));
+    }
+
+    async fn futures_join<F, E>(futures: impl Iterator<Item = F>) -> Vec<StatusCode>
+    where
+        F: Future<Output = Result<http::Response<Body>, E>> + Send + 'static,
+        E: fmt::Debug + Send + 'static,
+    {
+        let handles: Vec<_> = futures.map(tokio::spawn).collect();
+        let mut out = Vec::new();
+        for handle in handles {
+            out.push(handle.await.unwrap().unwrap().status());
+        }
+        out
     }
 }
