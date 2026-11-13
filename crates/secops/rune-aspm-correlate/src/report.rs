@@ -68,12 +68,12 @@ impl RiskIssue {
         }
     }
 
-    fn absorb(&mut self, other: Self, correlator: Correlator<'_>) {
+    fn absorb(&mut self, other: Self, gather: &Gather<'_>) {
         merge(
             &mut self.finding,
             other.finding,
-            &correlator,
-            &correlator.options().merge,
+            gather,
+            &gather.0.options().merge,
         );
         self.keys.extend(other.keys);
         self.fingerprints.extend(other.fingerprints);
@@ -150,6 +150,21 @@ impl Report {
     }
 }
 
+/// The correlator, with merging that only collects sources: sorting them on
+/// every merge made a large group quadratic, so [`correlate`] sorts each
+/// issue's sources once at the end.
+struct Gather<'a>(Correlator<'a>);
+
+impl Correlate<Provenance> for Gather<'_> {
+    fn keys(&self, finding: &Finding<Provenance>) -> Vec<Key> {
+        self.0.keys(finding)
+    }
+
+    fn merge_ext(&self, into: &mut Provenance, from: Provenance) {
+        into.sources.extend(from.sources);
+    }
+}
+
 /// Correlate findings from every tool into one risk view.
 ///
 /// 1. Suppressed SARIF results are dropped, unless
@@ -209,7 +224,8 @@ pub fn correlate(
         suppressed += usize::from(drop);
         !drop
     });
-    let groups = dedupe(kept, &correlator, &options.merge);
+    let gather = Gather(correlator);
+    let groups = dedupe(kept, &gather, &options.merge);
 
     // Union SAST and DAST groups that share a link candidate.
     let mut parent: Vec<usize> = (0..groups.len()).collect();
@@ -249,7 +265,7 @@ pub fn correlate(
                 slot.insert(issue);
             }
             std::collections::btree_map::Entry::Occupied(mut slot) => {
-                slot.get_mut().absorb(issue, correlator);
+                slot.get_mut().absorb(issue, &gather);
             }
         }
     }
@@ -257,6 +273,7 @@ pub fn correlate(
     let mut issues: Vec<RiskIssue> = merged
         .into_values()
         .map(|mut issue| {
+            issue.finding.ext.normalize();
             issue.links = correlator.links(&issue.finding.ext);
             issue.keys.extend(correlator.keys(&issue.finding));
             let provenance = &issue.finding.ext;

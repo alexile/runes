@@ -174,8 +174,28 @@ impl Source {
         core::iter::once(&self.location).chain(&self.flow)
     }
 
-    fn sort_key(&self) -> (Kind, &str, &str, &str) {
-        (self.kind, &self.tool, &self.check_id, &self.fingerprint)
+    fn sort_key(&self) -> (Kind, &str, &str, &str, &str, Severity, Confidence) {
+        (
+            self.kind,
+            &self.tool,
+            &self.check_id,
+            &self.fingerprint,
+            &self.title,
+            self.severity,
+            self.confidence,
+        )
+    }
+
+    /// Kind, tool, check id and fingerprint first, then every other
+    /// member, so equal sources always end up next to each other.
+    fn order(&self, other: &Self) -> core::cmp::Ordering {
+        self.sort_key()
+            .cmp(&other.sort_key())
+            .then_with(|| self.location.cmp(&other.location))
+            .then_with(|| self.cwes.cmp(&other.cwes))
+            .then_with(|| self.partial_fingerprints.cmp(&other.partial_fingerprints))
+            .then_with(|| self.flow.cmp(&other.flow))
+            .then_with(|| self.suppressed.cmp(&other.suppressed))
     }
 }
 
@@ -185,7 +205,7 @@ impl Source {
 /// Each ingested finding starts with one source; merging duplicates unions
 /// them, so a correlated finding lists every tool, check id and location
 /// that reported the issue. Sources are kept sorted by kind, tool, check id
-/// and fingerprint, without duplicates.
+/// and fingerprint (then the other members), without duplicates.
 ///
 /// With the `serde` feature it serializes (inside `Finding<Provenance>`) as
 /// a `sources` member next to the finding's own.
@@ -232,7 +252,12 @@ impl Provenance {
     /// duplicates.
     pub fn absorb(&mut self, other: Self) {
         self.sources.extend(other.sources);
-        self.sources.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+        self.normalize();
+    }
+
+    /// Sort the sources and drop repeats.
+    pub(crate) fn normalize(&mut self) {
+        self.sources.sort_by(Source::order);
         self.sources.dedup();
     }
 }
@@ -309,5 +334,25 @@ mod tests {
             ["dast-scanner", "semgrep"]
         );
         assert_eq!(provenance.kinds().len(), 2);
+    }
+
+    // Sources that sort alike but differ (here, in title) used to keep a
+    // repeated one apart from its twin.
+    #[test]
+    fn absorb_drops_repeats_among_alike_sources() {
+        let at = |title: &str| {
+            let finding = Finding::<()>::new(
+                "c",
+                title,
+                Severity::High,
+                Confidence::Firm,
+                Location::file("a.py"),
+            );
+            Source::of("semgrep", &finding)
+        };
+        let mut provenance = Provenance::new(at("one"));
+        provenance.absorb(Provenance::new(at("two")));
+        provenance.absorb(Provenance::new(at("one")));
+        assert_eq!(provenance.sources.len(), 2);
     }
 }
