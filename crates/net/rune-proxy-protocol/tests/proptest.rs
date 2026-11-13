@@ -155,3 +155,34 @@ proptest! {
         }
     }
 }
+
+proptest! {
+    #[test]
+    fn mutated_v2_headers_never_panic(
+        header in v2_header(),
+        ssl in prop::collection::vec(any::<u8>(), 0..40),
+        crc in any::<bool>(),
+        edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..6),
+    ) {
+        let mut header = header.with_tlv(Tlv::new(tlv::PP2_TYPE_SSL, ssl));
+        if crc {
+            header = header.with_crc32c();
+        }
+        let mut bytes = header.encode_v2().unwrap();
+        for (at, byte) in edits {
+            let i = at.index(bytes.len());
+            bytes[i] = byte;
+        }
+        if let Ok(Some(parsed)) = decode(&bytes) {
+            let header = parsed.header;
+            let _ = (header.source(), header.destination(), header.alpn());
+            let _ = (header.authority(), header.unique_id(), header.netns());
+            if let Some(Ok(ssl)) = header.ssl() {
+                let _ = (ssl.version(), ssl.common_name(), ssl.cipher());
+                let _ = (ssl.signature_algorithm(), ssl.key_algorithm());
+                let _ = (ssl.is_tls(), ssl.client_cert_verified());
+            }
+            let _ = header.encode_v1();
+        }
+    }
+}
