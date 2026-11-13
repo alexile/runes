@@ -329,7 +329,7 @@ pub fn run_stub_if_invoked() {
             0 => {
                 // Child: falls through to the Landlock/exec steps below.
             }
-            _parent_pid => {
+            child => {
                 // The relay's own accept loop blocks forever waiting for
                 // new connections — it has no way to notice on its own
                 // that the child (the real program) has exited. Run it
@@ -347,8 +347,13 @@ pub fn run_stub_if_invoked() {
                     }
                 });
                 let mut status = 0i32;
-                unsafe { libc::wait(&raw mut status) };
-                std::process::exit(libc::WEXITSTATUS(status));
+                // SAFETY: plain waitpid on our own child; retried on EINTR.
+                while unsafe { libc::waitpid(child, &raw mut status, 0) } == -1 {
+                    if std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                        std::process::exit(1);
+                    }
+                }
+                std::process::exit(exit_code(status));
             }
         }
     }
@@ -380,6 +385,19 @@ pub fn run_stub_if_invoked() {
         real_program.to_string_lossy()
     );
     std::process::exit(126);
+}
+
+/// The exit code that reports the sandboxed program's wait `status` to our
+/// own parent: its exit code, or `128 + signal` (as a shell does) when a
+/// signal killed it, so a crash or a seccomp kill never looks like success.
+const fn exit_code(status: libc::c_int) -> i32 {
+    if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else if libc::WIFSIGNALED(status) {
+        128 + libc::WTERMSIG(status)
+    } else {
+        1
+    }
 }
 
 /// The [`rune_landlock`] options for exactly `read_only`/`read_write`/
@@ -424,6 +442,26 @@ pub fn restrict_self_to_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Regression: the relay parent exited with `WEXITSTATUS`, which is 0
+    // for a child killed by a signal, so a crashed or seccomp-killed
+    // program looked like a success to whoever ran the sandbox.
+    #[test]
+    fn exit_code_reports_signal_deaths() {
+        use std::os::unix::process::ExitStatusExt;
+        let raw = |script: &str| {
+            std::process::Command::new("sh")
+                .args(["-c", script])
+                .status()
+                .unwrap()
+                .into_raw()
+        };
+        let killed = raw("kill -KILL $$");
+        assert_eq!(libc::WEXITSTATUS(killed), 0, "what the old code reported");
+        assert_eq!(exit_code(killed), 128 + libc::SIGKILL);
+        assert_eq!(exit_code(raw("exit 3")), 3);
+        assert_eq!(exit_code(raw("true")), 0);
+    }
 
     fn scratch_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
