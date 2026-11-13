@@ -4,11 +4,16 @@
 
 #![allow(dead_code, reason = "each test binary uses part of the support module")]
 #![allow(clippy::unwrap_used, reason = "test helpers")]
+#![allow(
+    clippy::cast_possible_truncation,
+    reason = "lengths of small test messages"
+)]
 
 use rune_tls_hello::{
     AlertDescription, CipherSuite, ClientHello, Extension, HELLO_RETRY_REQUEST_RANDOM, NamedGroup,
     ProtocolVersion, ServerHello,
 };
+use rune_tls_probe::KeyExchangeKind;
 
 /// A server configuration.
 #[derive(Debug, Clone)]
@@ -25,6 +30,10 @@ pub struct MockServer {
     pub secure_renegotiation: bool,
     /// Ignore the client's offer and pick this suite (a broken server).
     pub force_suite: Option<CipherSuite>,
+    /// Size of the DHE prime sent in the `ServerKeyExchange`.
+    pub dh_prime_bits: usize,
+    /// The ECDHE curve sent in the `ServerKeyExchange`.
+    pub ecdhe_group: NamedGroup,
 }
 
 impl MockServer {
@@ -36,6 +45,8 @@ impl MockServer {
             compression: false,
             secure_renegotiation: true,
             force_suite: None,
+            dh_prime_bits: 2048,
+            ecdhe_group: NamedGroup::X25519,
         }
     }
 
@@ -101,7 +112,46 @@ impl MockServer {
         if version == ProtocolVersion::SSL_3_0 && reply.extensions().is_empty() {
             reply = reply.without_extensions();
         }
-        reply.to_records(version, 16_384).unwrap()
+        let mut out = reply.to_records(version, 16_384).unwrap();
+        out.extend(self.key_exchange(version, suite));
+        out
+    }
+
+    /// Certificate (empty), `ServerKeyExchange` and `ServerHelloDone` for an
+    /// ephemeral suite, as one record; nothing otherwise.
+    fn key_exchange(&self, version: ProtocolVersion, suite: CipherSuite) -> Vec<u8> {
+        let ske = match rune_tls_probe::key_exchange_kind(suite) {
+            Some(KeyExchangeKind::Dhe) => {
+                let len = self.dh_prime_bits.div_ceil(8);
+                let mut body = (len as u16).to_be_bytes().to_vec();
+                let top = match self.dh_prime_bits % 8 {
+                    0 => 0xff,
+                    r => (1u8 << r) - 1,
+                };
+                body.push(top);
+                body.extend(vec![0xa5; len - 1]);
+                body.extend([0, 1, 2, 0, 1, 9, 0, 0]); // g, Ys, empty signature
+                body
+            }
+            Some(KeyExchangeKind::Ecdhe) => {
+                let mut body = vec![3];
+                body.extend(self.ecdhe_group.0.to_be_bytes());
+                body.extend([1, 4, 0, 0]);
+                body
+            }
+            _ => return Vec::new(),
+        };
+        let mut messages = Vec::new();
+        for (msg_type, body) in [(11u8, vec![0, 0, 0]), (12, ske), (14, Vec::new())] {
+            messages.push(msg_type);
+            messages.extend(&(body.len() as u32).to_be_bytes()[1..]);
+            messages.extend(body);
+        }
+        let mut record = vec![22];
+        record.extend(version.0.to_be_bytes());
+        record.extend((messages.len() as u16).to_be_bytes());
+        record.extend(messages);
+        record
     }
 
     fn pick(&self, hello: &ClientHello, tls13: bool) -> Option<CipherSuite> {

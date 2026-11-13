@@ -5,8 +5,10 @@ use std::fmt;
 
 use rune_finding::{Confidence, Evidence, Finding, Remediation, Severity, TaxonomyRef};
 use rune_service_probe::{ServiceInfo, Target, TlsSupport};
-use rune_tls_hello::{CipherSuite, DowngradeSentinel, ProtocolVersion};
+use rune_tls_hello::{CipherSuite, DowngradeSentinel, NamedGroup, ProtocolVersion};
 
+use crate::kex::KeyExchange;
+use crate::policy::Policy;
 use crate::suites::{Weakness, suite_label, weaknesses};
 
 /// The result of a yes/no check that may not apply or may not be decidable.
@@ -55,10 +57,15 @@ pub struct VersionResult {
     pub secure_renegotiation: Option<bool>,
     /// TLS 1.3 downgrade sentinel in the first accepting `ServerHello`.
     pub downgrade_sentinel: Option<DowngradeSentinel>,
+    /// TLS 1.3: the key-share group the server asked for in its first
+    /// `HelloRetryRequest`.
+    pub key_share_group: Option<NamedGroup>,
 }
 
 impl VersionResult {
-    pub(crate) const fn new(version: ProtocolVersion) -> Self {
+    /// An empty result for `version`: not supported, nothing found.
+    #[must_use]
+    pub const fn new(version: ProtocolVersion) -> Self {
         Self {
             version,
             supported: false,
@@ -66,6 +73,7 @@ impl VersionResult {
             complete: false,
             secure_renegotiation: None,
             downgrade_sentinel: None,
+            key_share_group: None,
         }
     }
 
@@ -93,12 +101,28 @@ pub struct Report {
     /// newest pre-TLS 1.3 version. Whether it allows client-initiated
     /// renegotiation needs a full handshake and is not tested.
     pub secure_renegotiation: Observed,
+    /// Ephemeral key-exchange parameters read from `ServerKeyExchange`
+    /// messages: at most one DHE and one ECDHE entry, at the newest
+    /// pre-TLS 1.3 version.
+    pub key_exchanges: Vec<ServerKeyExchange>,
     /// Protocol violations and connection failures seen, bounded.
     pub anomalies: Vec<String>,
     /// Hellos sent.
     pub attempts: usize,
     /// The scan stopped at [`ScanOptions::max_attempts`](crate::ScanOptions::max_attempts).
     pub truncated: bool,
+}
+
+/// One `ServerKeyExchange` the scan read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct ServerKeyExchange {
+    /// The version negotiated.
+    pub version: ProtocolVersion,
+    /// The suite negotiated.
+    pub cipher_suite: CipherSuite,
+    /// What the message said.
+    pub key_exchange: KeyExchange,
 }
 
 /// Findings for these weaknesses, most severe first.
@@ -320,8 +344,10 @@ impl Report {
     }
 
     /// The report as a `rune-service-probe` [`ServiceInfo`] (service
-    /// `tls`): supported versions as capabilities, per-version suites and
-    /// the extra checks as details, and [`Report::findings`].
+    /// `tls`): supported versions as capabilities, per-version suites, the
+    /// extra checks and the grade under the default (intermediate)
+    /// [`Policy`] as details (`tls.grade`, `tls.grade_reason`,
+    /// `tls.policy`), and [`Report::findings`].
     #[must_use]
     pub fn service_info(&self, target: &Target) -> ServiceInfo {
         let mut info = ServiceInfo::new("tls");
@@ -348,6 +374,18 @@ impl Report {
             self.secure_renegotiation.to_string(),
         );
         details.insert("tls.attempts".to_owned(), self.attempts.to_string());
+        for kx in &self.key_exchanges {
+            let key = match kx.key_exchange {
+                KeyExchange::Dhe { .. } => "tls.dhe",
+                KeyExchange::Ecdhe { .. } => "tls.ecdhe",
+            };
+            details.insert(key.to_owned(), kx.key_exchange.to_string());
+        }
+        let policy = Policy::default();
+        let graded = policy.grade(self);
+        details.insert("tls.grade".to_owned(), graded.grade.to_string());
+        details.insert("tls.grade_reason".to_owned(), graded.grade_reason);
+        details.insert("tls.policy".to_owned(), policy.profile().to_string());
         if self.truncated {
             details.insert("tls.truncated".to_owned(), "true".to_owned());
         }

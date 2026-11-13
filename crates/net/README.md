@@ -45,7 +45,7 @@ Network protocols and parsers: DNS, TLS, HTTP, IP, X.509, service probes, captur
 | [`rune-sse`](rune-sse) | Incremental sans-I/O Server-Sent Events (text/event-stream) parser |
 | [`rune-subdomain-permute`](rune-subdomain-permute) | Pattern-based subdomain permutation (alterx class): deterministic, deduplicated, bounded candidate generation |
 | [`rune-tls-hello`](rune-tls-hello) | Sans-I/O TLS record and ClientHello/ServerHello parser and builder (SNI, ALPN, versions, extensions) |
-| [`rune-tls-probe`](rune-tls-probe) | Read-only TLS server probe over raw handshakes: SSLv3-TLS 1.3 version and cipher-suite enumeration, weak-suite flags, fallback SCSV, compression, secure renegotiation |
+| [`rune-tls-probe`](rune-tls-probe) | Read-only TLS server probe over raw handshakes: SSLv3-TLS 1.3 version and cipher-suite enumeration, weak-suite flags, DHE/ECDHE parameters, a Mozilla-profile policy grader and JARM fingerprinting |
 | [`rune-url`](rune-url) | URL canonicalization, dedup keys, same-origin/same-site tests and scope matching for crawlers and scanners |
 | [`rune-wildcard-dns`](rune-wildcard-dns) | Wildcard DNS detection and filtering for subdomain enumeration, over a caller-supplied resolver |
 | [`rune-wordlist`](rune-wordlist) | Versioned, Ed25519-signed wordlist and payload pack loader with streaming, tamper-checked iteration and safe updates |

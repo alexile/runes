@@ -4,11 +4,17 @@ use std::net::IpAddr;
 
 use rune_tls_hello::{
     Alert, AlertDescription, CipherSuite, ClientHello, DowngradeSentinel, Extension,
-    HandshakeMessage, Message, MessageReader, NamedGroup, ProtocolVersion, ServerHello,
-    SignatureScheme,
+    HandshakeMessage, HandshakeType, Message, MessageReader, NamedGroup, ProtocolVersion,
+    ServerHello, SignatureScheme,
 };
 
 use crate::Error;
+use crate::kex::{KeyExchange, KeyExchangeKind, kind_of};
+
+/// Most bytes a [`ResponseReader`] buffers before giving up. A
+/// `ServerHello` is a few hundred bytes; reading on to the
+/// `ServerKeyExchange` has to get past the certificate chain.
+pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 
 /// Largest record fragment the probe sends.
 const FRAGMENT: usize = 16_384;
@@ -86,6 +92,10 @@ pub struct Offer {
     pub fallback_scsv: bool,
     /// SNI host name; ignored for SSL 3.0 and for IP literals.
     pub server_name: Option<String>,
+    /// Read past the `ServerHello` to the `ServerKeyExchange`, to learn the
+    /// server's Diffie-Hellman prime size or ECDHE curve. Only matters for
+    /// a [`ResponseReader::for_offer`] reader; default `false`.
+    pub read_key_exchange: bool,
 }
 
 impl Offer {
@@ -100,7 +110,15 @@ impl Offer {
             compression: false,
             fallback_scsv: false,
             server_name: None,
+            read_key_exchange: false,
         }
+    }
+
+    /// Sets [`Offer::read_key_exchange`].
+    #[must_use]
+    pub const fn with_read_key_exchange(mut self, read: bool) -> Self {
+        self.read_key_exchange = read;
+        self
     }
 
     /// Sets [`Offer::server_name`].
@@ -220,6 +238,12 @@ pub struct Accepted {
     pub hello_retry_request: bool,
     /// The TLS 1.3 downgrade sentinel in the server random, if any.
     pub downgrade_sentinel: Option<DowngradeSentinel>,
+    /// The TLS 1.3 key-share group the server picked or asked for.
+    pub key_share_group: Option<NamedGroup>,
+    /// The `ServerKeyExchange` parameters, when the reader was asked to
+    /// read that far ([`Offer::read_key_exchange`]) and the server sent
+    /// them.
+    pub key_exchange: Option<KeyExchange>,
 }
 
 impl From<&ServerHello> for Accepted {
@@ -231,6 +255,8 @@ impl From<&ServerHello> for Accepted {
             secure_renegotiation: hello.secure_renegotiation(),
             hello_retry_request: hello.is_hello_retry_request(),
             downgrade_sentinel: hello.downgrade_sentinel(),
+            key_share_group: hello.key_share_group(),
+            key_exchange: None,
         }
     }
 }
@@ -277,6 +303,12 @@ impl Outcome {
 
 /// Reads the server's first handshake message or alert, sans-I/O.
 ///
+/// By default it stops at the `ServerHello`. A reader made with
+/// [`ResponseReader::for_offer`] for an offer with
+/// [`Offer::read_key_exchange`] set reads on through the certificate to
+/// the `ServerKeyExchange` and fills [`Accepted::key_exchange`]. Either
+/// way it buffers at most [`MAX_RESPONSE_BYTES`].
+///
 /// ```
 /// use rune_tls_hello::{CipherSuite, ProtocolVersion, ServerHello};
 /// use rune_tls_probe::{Outcome, ResponseReader};
@@ -296,13 +328,26 @@ impl Outcome {
 pub struct ResponseReader {
     reader: MessageReader,
     seen: bool,
+    fed: usize,
+    read_key_exchange: bool,
+    accepted: Option<Accepted>,
 }
 
 impl ResponseReader {
-    /// A reader that has seen nothing.
+    /// A reader that has seen nothing and stops at the `ServerHello`.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A reader for the answer to `offer`: it reads on to the
+    /// `ServerKeyExchange` when [`Offer::read_key_exchange`] is set.
+    #[must_use]
+    pub fn for_offer(offer: &Offer) -> Self {
+        Self {
+            read_key_exchange: offer.read_key_exchange,
+            ..Self::default()
+        }
     }
 
     /// Feeds bytes; returns the outcome once it is known.
@@ -311,32 +356,77 @@ impl ResponseReader {
             return None;
         }
         self.seen = true;
-        self.reader.feed(bytes);
-        match self.reader.next_message() {
-            Ok(None) => None,
-            Ok(Some(Message::Handshake(HandshakeMessage::ServerHello(hello)))) => {
-                Some(Outcome::Accepted(Accepted::from(&hello)))
+        let room = MAX_RESPONSE_BYTES.saturating_sub(self.fed);
+        let take = bytes.get(..room).unwrap_or(bytes);
+        self.fed += take.len();
+        self.reader.feed(take);
+        loop {
+            let next = self.reader.next_message();
+            if let Some(accepted) = self.accepted {
+                // Past the ServerHello: whatever goes wrong, the hello stands.
+                return match next {
+                    Ok(None) if self.fed < MAX_RESPONSE_BYTES => None,
+                    Ok(Some(Message::Handshake(HandshakeMessage::Other { msg_type, body }))) => {
+                        match msg_type {
+                            HandshakeType::SERVER_KEY_EXCHANGE => {
+                                let mut accepted = accepted;
+                                accepted.key_exchange = kind_of(accepted.cipher_suite)
+                                    .and_then(|kind| KeyExchange::parse(kind, &body));
+                                Some(Outcome::Accepted(accepted))
+                            }
+                            HandshakeType::CERTIFICATE | HandshakeType::CERTIFICATE_STATUS => {
+                                continue;
+                            }
+                            _ => Some(Outcome::Accepted(accepted)),
+                        }
+                    }
+                    _ => Some(Outcome::Accepted(accepted)),
+                };
             }
-            Ok(Some(Message::Alert(alert))) => Some(Outcome::Alert(alert)),
-            Ok(Some(other)) => Some(Outcome::NotTls {
-                reason: format!("expected ServerHello or alert, got {}", describe(&other)),
-            }),
-            Err(error) => Some(Outcome::NotTls {
-                reason: error.to_string(),
-            }),
+            return match next {
+                Ok(None) if self.fed >= MAX_RESPONSE_BYTES => Some(Outcome::NotTls {
+                    reason: format!("no answer in the first {MAX_RESPONSE_BYTES} bytes"),
+                }),
+                Ok(None) => None,
+                Ok(Some(Message::Handshake(HandshakeMessage::ServerHello(hello)))) => {
+                    let accepted = Accepted::from(&hello);
+                    if self.wants_key_exchange(&accepted) {
+                        self.accepted = Some(accepted);
+                        continue;
+                    }
+                    Some(Outcome::Accepted(accepted))
+                }
+                Ok(Some(Message::Alert(alert))) => Some(Outcome::Alert(alert)),
+                Ok(Some(other)) => Some(Outcome::NotTls {
+                    reason: format!("expected ServerHello or alert, got {}", describe(&other)),
+                }),
+                Err(error) => Some(Outcome::NotTls {
+                    reason: error.to_string(),
+                }),
+            };
         }
+    }
+
+    fn wants_key_exchange(&self, accepted: &Accepted) -> bool {
+        self.read_key_exchange
+            && !accepted.hello_retry_request
+            && accepted.version < ProtocolVersion::TLS_1_3
+            && matches!(
+                kind_of(accepted.cipher_suite),
+                Some(KeyExchangeKind::Dhe | KeyExchangeKind::Ecdhe)
+            )
     }
 
     /// The outcome when the connection ended before [`ResponseReader::feed`]
     /// returned one.
     #[must_use]
     pub fn finish(&self) -> Outcome {
-        if self.seen {
-            Outcome::NotTls {
+        match self.accepted {
+            Some(accepted) => Outcome::Accepted(accepted),
+            None if self.seen => Outcome::NotTls {
                 reason: "connection ended inside a TLS message".to_owned(),
-            }
-        } else {
-            Outcome::NoResponse
+            },
+            None => Outcome::NoResponse,
         }
     }
 }

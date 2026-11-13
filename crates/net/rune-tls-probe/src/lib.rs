@@ -1,7 +1,9 @@
 //! Read-only TLS server probing over raw handshakes: which protocol
 //! versions (SSL 3.0 to TLS 1.3) and which cipher suites a server accepts,
 //! with weak-suite flags, `TLS_FALLBACK_SCSV` downgrade protection, TLS
-//! compression (CRIME) and RFC 5746 secure renegotiation.
+//! compression (CRIME), RFC 5746 secure renegotiation and the DHE/ECDHE
+//! parameters; a policy grader after Mozilla's server-side TLS profiles;
+//! and JARM fingerprinting.
 //!
 //! TLS libraries such as rustls cannot speak SSL 3.0, TLS 1.0 or 1.1, nor
 //! offer export, NULL, anonymous or RC4 suites, so an auditor built on them
@@ -19,6 +21,16 @@
 //! - [`Report::findings`] gives [`rune_finding::Finding`]s (`tls.sslv3`,
 //!   `tls.cipher.export`, `tls.compression`...); [`Report::service_info`]
 //!   gives a `rune-service-probe` [`ServiceInfo`](rune_service_probe::ServiceInfo).
+//! - [`policy`] grades a [`Report`] under a `modern`, `intermediate` or
+//!   `old` [`Profile`](policy::Profile) (after Mozilla's server-side TLS
+//!   guidelines, with verdicts from RFC 9325), plus your own allow/deny
+//!   rules: every version, suite and key exchange is good, ok, warn or
+//!   fail with a reason and a source, rolled into an `A`-`F`
+//!   [`Grade`](policy::Grade) and `tls.weak_*` / `tls.discouraged_*`
+//!   findings.
+//! - [`jarm`] builds JARM's ten probe hellos, reads the answers and
+//!   computes the 62-character fingerprint, sans-I/O, with an async
+//!   [`jarm::fingerprint`] runner under the `tokio` feature.
 //! - [`TlsHelloProbe`] is one hello as a `rune-service-probe`
 //!   [`ServiceProbe`](rune_service_probe::ServiceProbe), and with the
 //!   `tokio` feature [`scan`] runs a whole scan over its `Runner`
@@ -35,7 +47,9 @@
 //! [RFC 7507](https://www.rfc-editor.org/rfc/rfc7507); secure renegotiation
 //! [RFC 5746](https://www.rfc-editor.org/rfc/rfc5746); RC4 prohibition
 //! [RFC 7465](https://www.rfc-editor.org/rfc/rfc7465); TLS 1.0/1.1
-//! deprecation [RFC 8996](https://www.rfc-editor.org/rfc/rfc8996).
+//! deprecation [RFC 8996](https://www.rfc-editor.org/rfc/rfc8996); secure
+//! use of TLS [RFC 9325](https://www.rfc-editor.org/rfc/rfc9325); JARM
+//! (Salesforce, BSD 3-Clause), implemented from its published design.
 //!
 //! # Example
 //!
@@ -93,7 +107,10 @@
 #![warn(missing_docs)]
 
 mod error;
+pub mod jarm;
+mod kex;
 mod offer;
+pub mod policy;
 mod probe;
 mod registry;
 mod report;
@@ -103,9 +120,10 @@ mod scan;
 mod suites;
 
 pub use error::Error;
-pub use offer::{Accepted, Offer, Outcome, ResponseReader};
+pub use kex::{KeyExchange, KeyExchangeKind, kind_of as key_exchange_kind};
+pub use offer::{Accepted, MAX_RESPONSE_BYTES, Offer, Outcome, ResponseReader};
 pub use probe::TlsHelloProbe;
-pub use report::{Observed, Report, VersionResult};
+pub use report::{Observed, Report, ServerKeyExchange, VersionResult};
 #[cfg(feature = "tokio")]
 pub use runner::scan;
 pub use scan::{ALL_VERSIONS, ScanOptions, Scanner};

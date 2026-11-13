@@ -37,7 +37,7 @@ fn run(server: &MockServer, options: ScanOptions) -> (Report, Vec<Offer>) {
         // The hello must be valid TLS for every offer.
         let wire = offer.to_records([9; 32]).unwrap();
         ClientHello::parse_records(&wire).unwrap();
-        let mut reader = ResponseReader::new();
+        let mut reader = ResponseReader::for_offer(&offer);
         let outcome = reader
             .feed(&server.respond(&wire))
             .unwrap_or_else(|| reader.finish());

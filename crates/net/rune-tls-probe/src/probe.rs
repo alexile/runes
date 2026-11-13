@@ -92,7 +92,7 @@ impl ServiceProbe for TlsHelloProbe {
     fn session(&self, _target: &Target) -> Box<dyn ProbeSession> {
         Box::new(Session {
             hello: self.offer.to_records(client_random()),
-            reader: ResponseReader::new(),
+            reader: ResponseReader::for_offer(&self.offer),
             outcome: None,
             sink: self.sink.clone(),
         })

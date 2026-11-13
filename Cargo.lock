@@ -5103,6 +5103,7 @@ dependencies = [
  "proptest",
  "rune-finding",
  "rune-service-probe",
+ "rune-sha256",
  "rune-tls-hello",
  "thiserror",
  "tokio",

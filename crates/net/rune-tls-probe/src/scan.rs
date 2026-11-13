@@ -4,7 +4,8 @@ use std::collections::VecDeque;
 
 use rune_tls_hello::{AlertDescription, CipherSuite, ProtocolVersion};
 
-use crate::report::{Observed, Report, VersionResult};
+use crate::kex::{KeyExchangeKind, kind_of};
+use crate::report::{Observed, Report, ServerKeyExchange, VersionResult};
 use crate::suites::{legacy_suites, tls13_suites};
 use crate::{Offer, Outcome};
 
@@ -47,8 +48,9 @@ pub struct ScanOptions {
     pub max_attempts: usize,
     /// SNI host name for the hellos; IP literals are not sent.
     pub server_name: Option<String>,
-    /// Test `TLS_FALLBACK_SCSV`, compression and secure renegotiation.
-    /// Default `true`.
+    /// Test `TLS_FALLBACK_SCSV`, compression and secure renegotiation,
+    /// and read the `ServerKeyExchange` for the DHE prime size and ECDHE
+    /// curve. Default `true`.
     pub extra_checks: bool,
 }
 
@@ -115,6 +117,7 @@ enum Step {
     Version(usize),
     Fallback(ProtocolVersion),
     Compression(ProtocolVersion),
+    KeyExchange(ProtocolVersion, KeyExchangeKind),
 }
 
 /// Per-version enumeration state.
@@ -253,6 +256,24 @@ impl Scanner {
                     _ => Observed::Inconclusive,
                 };
             }
+            Step::KeyExchange(version, kind) => match outcome.accepted() {
+                Some(a) if a.version == version && a.key_exchange.is_some() => {
+                    if let Some(key_exchange) = a.key_exchange {
+                        self.report.key_exchanges.push(ServerKeyExchange {
+                            version,
+                            cipher_suite: a.cipher_suite,
+                            key_exchange,
+                        });
+                    }
+                }
+                _ => self.note(format!(
+                    "{version}: no {} parameters seen in the ServerKeyExchange",
+                    match kind {
+                        KeyExchangeKind::Dhe => "DHE",
+                        KeyExchangeKind::Ecdhe => "ECDHE",
+                    }
+                )),
+            },
         }
     }
 
@@ -295,17 +316,22 @@ impl Scanner {
         }
         let step = self.extras.pop_front()?;
         let version = match step {
-            Step::Fallback(version) | Step::Compression(version) => version,
+            Step::Fallback(version)
+            | Step::Compression(version)
+            | Step::KeyExchange(version, _) => version,
             Step::Version(_) => return None,
         };
         let suites = self
             .lane(version)
             .map(|lane| lane.result.cipher_suites.clone())?;
-        let offer = self.offer(version, suites);
-        let offer = if matches!(step, Step::Fallback(_)) {
-            offer.with_fallback_scsv(true)
-        } else {
-            offer.with_compression(true)
+        let offer = match step {
+            Step::Fallback(_) => self.offer(version, suites).with_fallback_scsv(true),
+            Step::KeyExchange(_, kind) => {
+                let suites = suites.into_iter().filter(|s| kind_of(*s) == Some(kind));
+                self.offer(version, suites.collect())
+                    .with_read_key_exchange(true)
+            }
+            _ => self.offer(version, suites).with_compression(true),
         };
         Some((step, offer))
     }
@@ -325,6 +351,15 @@ impl Scanner {
             .find(|v| *v < ProtocolVersion::TLS_1_3);
         if let Some(version) = newest_legacy {
             self.extras.push_back(Step::Compression(version));
+            let suites = self
+                .lane(version)
+                .map(|lane| lane.result.cipher_suites.clone())
+                .unwrap_or_default();
+            for kind in [KeyExchangeKind::Dhe, KeyExchangeKind::Ecdhe] {
+                if suites.iter().any(|s| kind_of(*s) == Some(kind)) {
+                    self.extras.push_back(Step::KeyExchange(version, kind));
+                }
+            }
             let lane = self.lane(version);
             self.report.secure_renegotiation =
                 match lane.and_then(|l| l.result.secure_renegotiation) {
@@ -373,6 +408,9 @@ impl Scanner {
                     lane.result.supported = true;
                     lane.result.secure_renegotiation = Some(accepted.secure_renegotiation);
                     lane.result.downgrade_sentinel = accepted.downgrade_sentinel;
+                }
+                if lane.result.key_share_group.is_none() {
+                    lane.result.key_share_group = accepted.key_share_group;
                 }
                 if offer.cipher_suites.contains(&suite) {
                     if !lane.result.cipher_suites.contains(&suite) {
