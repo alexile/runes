@@ -30,6 +30,12 @@
 //! checksum) is dropped on [`open`](WalWriter::open) and the file is truncated
 //! back to the last good frame.
 //!
+//! If writing a frame fails, the writer cuts the file back to the last good
+//! frame. If it cannot, or if a checkpoint fails after the new snapshot is in
+//! place, the log no longer matches the graph and every further change is
+//! refused until a [`checkpoint`](WalWriter::checkpoint) succeeds or the
+//! files are reopened.
+//!
 //! # Example
 //!
 //! ```rust
@@ -57,7 +63,7 @@
 
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use bincode::Options;
@@ -141,6 +147,19 @@ pub(crate) enum WalOp {
         label: String,
         key: String,
     },
+}
+
+impl WalOp {
+    /// Whether a property value is nested deeper than replay accepts.
+    fn too_deep(&self) -> bool {
+        match self {
+            Self::AddNode { props, .. } | Self::AddEdge { props, .. } => {
+                props.values().any(Value::too_deep)
+            }
+            Self::SetNodeProp { value, .. } | Self::SetEdgeProp { value, .. } => value.too_deep(),
+            _ => false,
+        }
+    }
 }
 
 fn apply_op(graph: &mut Graph, op: WalOp) -> Result<(), GraphError> {
@@ -346,7 +365,11 @@ fn read_full(reader: &mut impl Read, buf: &mut [u8]) -> Result<bool, WalError> {
 /// if several threads write.
 pub struct WalWriter {
     graph: Graph,
-    writer: BufWriter<File>,
+    file: File,
+    /// Length of the log up to the last frame that was fully written.
+    len: u64,
+    /// Set when the log may no longer match the in-memory graph.
+    broken: bool,
     snapshot_path: PathBuf,
     wal_path: PathBuf,
     generation: u64,
@@ -375,9 +398,8 @@ fn write_wal_header(path: &Path, generation: u64) -> Result<(), WalError> {
     Ok(())
 }
 
-fn open_append(path: &Path) -> Result<BufWriter<File>, WalError> {
-    let file = OpenOptions::new().append(true).open(path)?;
-    Ok(BufWriter::new(file))
+fn open_append(path: &Path) -> Result<File, WalError> {
+    Ok(OpenOptions::new().append(true).open(path)?)
 }
 
 impl WalWriter {
@@ -399,7 +421,9 @@ impl WalWriter {
         graph.save_snapshot(&snapshot_path, 0)?;
         write_wal_header(&wal_path, 0)?;
         Ok(Self {
-            writer: open_append(&wal_path)?,
+            file: open_append(&wal_path)?,
+            len: WAL_HEADER_LEN,
+            broken: false,
             graph,
             snapshot_path,
             wal_path,
@@ -503,7 +527,9 @@ impl WalWriter {
                 }
                 drop(file);
                 Ok(Self {
-                    writer: open_append(&wal_path)?,
+                    file: open_append(&wal_path)?,
+                    len: good,
+                    broken: false,
                     graph,
                     snapshot_path,
                     wal_path,
@@ -526,7 +552,9 @@ impl WalWriter {
         }
         write_wal_header(&wal_path, generation)?;
         Ok(Self {
-            writer: open_append(&wal_path)?,
+            file: open_append(&wal_path)?,
+            len: WAL_HEADER_LEN,
+            broken: false,
             graph,
             snapshot_path,
             wal_path,
@@ -541,8 +569,8 @@ impl WalWriter {
         &self.graph
     }
 
-    /// Consume the writer and return the in-memory graph. Pending frames are
-    /// already flushed; nothing else is written.
+    /// Consume the writer and return the in-memory graph. Every frame is
+    /// already written; nothing else is.
     #[must_use]
     pub fn into_graph(self) -> Graph {
         self.graph
@@ -560,8 +588,7 @@ impl WalWriter {
     ///
     /// Returns [`WalError::Io`] if flushing or syncing fails.
     pub fn sync(&mut self) -> Result<(), WalError> {
-        self.writer.flush()?;
-        self.writer.get_ref().sync_data()?;
+        self.file.sync_data()?;
         Ok(())
     }
 
@@ -575,16 +602,33 @@ impl WalWriter {
     ///
     /// Returns [`WalError`] if either file cannot be written.
     pub fn checkpoint(&mut self) -> Result<(), WalError> {
-        self.writer.flush()?;
         let next = self.generation + 1;
         self.graph.save_snapshot(&self.snapshot_path, next)?;
+        // The snapshot is now ahead of the log, so frames appended to the old
+        // log would be skipped on open. Refuse writes until the reset is done.
+        self.broken = true;
         write_wal_header(&self.wal_path, next)?;
-        self.writer = open_append(&self.wal_path)?;
+        self.file = open_append(&self.wal_path)?;
+        self.len = WAL_HEADER_LEN;
         self.generation = next;
+        self.broken = false;
         Ok(())
     }
 
     fn log(&mut self, op: &WalOp) -> Result<(), WalError> {
+        if self.broken {
+            return Err(WalError::Io(std::io::Error::other(
+                "an earlier write failed; checkpoint or reopen the WAL",
+            )));
+        }
+        if op.too_deep() {
+            // It would encode, but replay could not decode it and would stop
+            // there, dropping every later frame.
+            return Err(WalError::Encode(format!(
+                "property value nested deeper than {} lists",
+                Value::MAX_DEPTH
+            )));
+        }
         let payload = opts()
             .serialize(op)
             .map_err(|e| WalError::Encode(e.to_string()))?;
@@ -597,13 +641,26 @@ impl WalWriter {
                     payload.len()
                 ))
             })?;
-        self.writer.write_all(&len.to_le_bytes())?;
-        self.writer.write_all(&crc32(&payload).to_le_bytes())?;
-        self.writer.write_all(&payload)?;
-        self.writer.flush()?;
-        if self.sync_on_write {
-            self.writer.get_ref().sync_data()?;
+        let mut frame = Vec::with_capacity(payload.len() + 8);
+        frame.extend_from_slice(&len.to_le_bytes());
+        frame.extend_from_slice(&crc32(&payload).to_le_bytes());
+        frame.extend_from_slice(&payload);
+        let written = self.file.write_all(&frame).and_then(|()| {
+            if self.sync_on_write {
+                self.file.sync_data()
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(e) = written {
+            // The operation is not applied, so it must not be in the log
+            // either, whole or in part.
+            if self.file.set_len(self.len).is_err() {
+                self.broken = true;
+            }
+            return Err(e.into());
         }
+        self.len += frame.len() as u64;
         Ok(())
     }
 
@@ -838,5 +895,45 @@ impl WalWriter {
             key: key.to_string(),
         })?;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_write_leaves_nothing_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let (snap, wal) = (dir.path().join("g.bin"), dir.path().join("g.wal"));
+        let mut w = WalWriter::create(&snap, &wal).unwrap();
+        w.add_node(&["A"], HashMap::new()).unwrap();
+
+        // Swap in a handle that cannot write, as a full disk would behave.
+        let read_only = File::open(&wal).unwrap();
+        let good = std::mem::replace(&mut w.file, read_only);
+        assert!(w.add_node(&["B"], HashMap::new()).is_err());
+        // The disk recovers.
+        w.file = good;
+        let _ = w.add_node(&["C"], HashMap::new());
+
+        let expected: Vec<_> = {
+            let mut v: Vec<_> = w
+                .graph()
+                .nodes()
+                .map(|(id, n)| (id, n.labels().to_vec()))
+                .collect();
+            v.sort();
+            v
+        };
+        drop(w);
+        let reopened = WalWriter::open(&snap, &wal).unwrap();
+        let mut got: Vec<_> = reopened
+            .graph()
+            .nodes()
+            .map(|(id, n)| (id, n.labels().to_vec()))
+            .collect();
+        got.sort();
+        assert_eq!(got, expected);
     }
 }

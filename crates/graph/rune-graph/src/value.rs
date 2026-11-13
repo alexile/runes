@@ -42,6 +42,16 @@ impl Value {
     /// Deepest list nesting accepted when decoding a `Value`.
     pub const MAX_DEPTH: usize = 128;
 
+    /// Whether decoding this value would fail the [`Value::MAX_DEPTH`] check.
+    #[cfg(feature = "wal")]
+    pub(crate) fn too_deep(&self) -> bool {
+        fn deeper(v: &Value, depth: usize) -> bool {
+            depth > Value::MAX_DEPTH
+                || matches!(v, Value::List(items) if items.iter().any(|x| deeper(x, depth + 1)))
+        }
+        deeper(self, 0)
+    }
+
     /// Borrow the string if this is a [`Value::Str`].
     ///
     /// ```rust

@@ -340,3 +340,80 @@ fn sync_and_into_graph() {
     w.sync().unwrap();
     assert_eq!(w.into_graph().node_count(), 1);
 }
+
+fn nested(depth: usize) -> Value {
+    let mut v = Value::Null;
+    for _ in 0..depth {
+        v = Value::List(vec![v]);
+    }
+    v
+}
+
+#[test]
+fn value_too_deep_to_replay_is_refused_up_front() {
+    let dir = tempdir().unwrap();
+    let (snap, wal) = empty(&dir);
+
+    let mut w = WalWriter::create(&snap, &wal).unwrap();
+    let a = w.add_node(&["A"], props! {}).unwrap();
+    // Encodes fine but could never be decoded again, so it must not reach
+    // the log: a frame that fails to decode ends replay there.
+    assert!(matches!(
+        w.set_node_property(a, "v", nested(Value::MAX_DEPTH + 1)),
+        Err(WalError::Encode(_))
+    ));
+    assert!(
+        w.add_node(&["B"], props! { "v" => nested(Value::MAX_DEPTH + 1) })
+            .is_err()
+    );
+    w.set_node_property(a, "ok", nested(Value::MAX_DEPTH))
+        .unwrap();
+    w.add_node(&["C"], props! {}).unwrap();
+    let expected = w.graph().node_count();
+    drop(w);
+
+    let w = WalWriter::open(&snap, &wal).unwrap();
+    assert_eq!(w.graph().node_count(), expected);
+    assert!(w.graph().node(a).unwrap().get("ok").is_some());
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_checkpoint_does_not_lose_later_writes() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let snap_dir = tempdir().unwrap();
+    let wal_dir = tempdir().unwrap();
+    let snap = snap_dir.path().join("graph.bin");
+    let wal = wal_dir.path().join("graph.wal");
+
+    let mut w = WalWriter::create(&snap, &wal).unwrap();
+    w.add_node(&["A"], props! {}).unwrap();
+
+    // The snapshot lands, but the fresh WAL cannot be created.
+    let set_mode = |mode| {
+        std::fs::set_permissions(wal_dir.path(), std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    set_mode(0o555);
+    let checkpoint = w.checkpoint();
+    set_mode(0o755);
+    assert!(checkpoint.is_err());
+
+    // Whatever the writer does now, a reopen must agree with it.
+    let _ = w.add_node(&["B"], props! {});
+    let expected = w.graph().node_count();
+    drop(w);
+    let reopened = WalWriter::open(&snap, &wal).unwrap();
+    assert_eq!(reopened.graph().node_count(), expected);
+
+    // A retried checkpoint brings the writer back.
+    let mut w = reopened;
+    w.checkpoint().unwrap();
+    w.add_node(&["C"], props! {}).unwrap();
+    let expected = w.graph().node_count();
+    drop(w);
+    assert_eq!(
+        WalWriter::open(&snap, &wal).unwrap().graph().node_count(),
+        expected
+    );
+}
