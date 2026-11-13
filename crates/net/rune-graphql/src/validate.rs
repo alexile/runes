@@ -86,18 +86,22 @@ pub fn query_depth(document: &str) -> Result<usize, GraphQlError> {
         .map(|fragment| (fragment.name.as_str(), fragment))
         .collect();
     let mut stack = Vec::new();
+    let mut known = BTreeMap::new();
     Ok(document
         .operations
         .iter()
-        .map(|operation| depth_of(&operation.selections, &fragments, &mut stack))
+        .map(|operation| depth_of(&operation.selections, &fragments, &mut stack, &mut known))
         .max()
         .unwrap_or(0))
 }
 
+/// `known` keeps each fragment's depth once computed, so a fragment
+/// spread many times is walked once rather than once per path.
 fn depth_of<'a>(
     selections: &'a [Selection],
     fragments: &BTreeMap<&str, &'a FragmentDefinition>,
     stack: &mut Vec<&'a str>,
+    known: &mut BTreeMap<&'a str, usize>,
 ) -> usize {
     if stack.len() > MAX_NESTING {
         return 0;
@@ -109,19 +113,23 @@ fn depth_of<'a>(
                 1 + field
                     .selections
                     .as_deref()
-                    .map_or(0, |inner| depth_of(inner, fragments, stack))
+                    .map_or(0, |inner| depth_of(inner, fragments, stack, known))
             }
-            Selection::Inline { selections, .. } => depth_of(selections, fragments, stack),
+            Selection::Inline { selections, .. } => depth_of(selections, fragments, stack, known),
             Selection::Spread { name, .. } => {
                 let Some(fragment) = fragments.get(name.as_str()) else {
                     return 0;
                 };
+                if let Some(&depth) = known.get(fragment.name.as_str()) {
+                    return depth;
+                }
                 if stack.contains(&fragment.name.as_str()) {
                     return 0;
                 }
                 stack.push(fragment.name.as_str());
-                let depth = depth_of(&fragment.selections, fragments, stack);
+                let depth = depth_of(&fragment.selections, fragments, stack, known);
                 stack.pop();
+                known.insert(fragment.name.as_str(), depth);
                 depth
             }
         })
@@ -140,6 +148,12 @@ struct Validator<'s, 'd> {
     fragments: BTreeMap<&'d str, &'d FragmentDefinition>,
     errors: Vec<ValidationError>,
     used_fragments: BTreeSet<&'d str>,
+    /// Fragments already walked in the current operation, with the
+    /// shallowest depth they were walked at. A fragment's contents are
+    /// checked against its own type condition, so a second walk at the
+    /// same depth or deeper finds nothing new; skipping it keeps
+    /// validation linear when fragments spread each other many times.
+    walked: BTreeMap<&'d str, usize>,
     reported: BTreeSet<String>,
 }
 
@@ -151,6 +165,7 @@ impl<'s, 'd> Validator<'s, 'd> {
             fragments: BTreeMap::new(),
             errors: Vec::new(),
             used_fragments: BTreeSet::new(),
+            walked: BTreeMap::new(),
             reported: BTreeSet::new(),
         }
     }
@@ -272,6 +287,7 @@ impl<'s, 'd> Validator<'s, 'd> {
             };
             let mut used = BTreeSet::new();
             let mut stack = Vec::new();
+            self.walked.clear();
             self.directives(&operation.directives, &variables, &mut used, &label);
             self.selections(
                 root,
@@ -521,6 +537,14 @@ impl<'s, 'd> Validator<'s, 'd> {
                     if !self.type_condition_ok(&fragment.type_condition, parent, label) {
                         continue;
                     }
+                    if self
+                        .walked
+                        .get(fragment.name.as_str())
+                        .is_some_and(|&shallowest| shallowest <= depth)
+                    {
+                        continue;
+                    }
+                    self.walked.insert(&fragment.name, depth);
                     stack.push(&fragment.name);
                     self.directives(&fragment.directives, variables, used, label);
                     self.selections(
@@ -792,5 +816,31 @@ mod tests {
             &int.list(),
             false
         ));
+    }
+
+    /// `F0` spreads `F1` twice, `F1` spreads `F2` twice, and so on: valid,
+    /// small, and 2^levels paths when every spread is walked again.
+    fn fan_out(levels: usize) -> String {
+        use std::fmt::Write as _;
+        let mut document = String::from("query Q { ...F0 }");
+        for level in 0..levels {
+            let next = level + 1;
+            let _ = write!(
+                document,
+                " fragment F{level} on Query {{ ...F{next} a {{ ...F{next} }} }}"
+            );
+        }
+        let _ = write!(document, " fragment F{levels} on Query {{ x }}");
+        document
+    }
+
+    #[test]
+    fn fragment_fan_out_is_linear() {
+        let schema = crate::parse_sdl("type Query { a: Query x: Int }").unwrap();
+        let document = fan_out(40);
+        let started = std::time::Instant::now();
+        assert_eq!(query_depth(&document).unwrap(), 41);
+        assert_eq!(validate(&document, &schema), Vec::new());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 }
