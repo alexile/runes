@@ -34,7 +34,8 @@ const MAGIC: &[u8; 8] = b"RVSTORE\0";
 const VERSION: u32 = 1;
 const HEADER_LEN: usize = 8 + 4 + 1 + 1 + 2 + 4 + 20 + 8;
 const CRC_LEN: usize = 4;
-/// Upper bounds on HNSW parameters read from a file.
+/// Hard upper bounds on HNSW parameters read from a file, whatever the
+/// [`LoadLimits`] say.
 const MAX_M: u32 = 1024;
 const MAX_EF: u32 = 1 << 20;
 
@@ -44,11 +45,12 @@ const MAX_EF: u32 = 1 << 20;
 /// Every limit is checked *before* the corresponding allocation. The defaults
 /// suit large single-process stores; tighten them for untrusted input.
 ///
-/// These limits bound memory, not time. An HNSW snapshot is rebuilt with the
-/// `m` and `ef_construction` stored in the file, and large values make the
-/// rebuild far slower: a 40 KB file with the maximum parameters can take
-/// seconds to load. Check [`IndexKind`] after loading, or load untrusted
-/// files somewhere a slow load does no harm.
+/// An HNSW snapshot is rebuilt on load with the `m` and `ef_construction`
+/// stored in the file, and large values make the rebuild far slower (a 40 KB
+/// file with `m = 1024` used to take seconds). [`LoadLimits::max_m`] and
+/// [`LoadLimits::max_ef_construction`] cap them; the defaults sit well above
+/// any sensible build setting. Load time still grows with the number of
+/// records, so keep [`LoadLimits::max_bytes`] tight for untrusted files.
 ///
 /// # Example
 ///
@@ -71,6 +73,10 @@ pub struct LoadLimits {
     pub max_dimension: u32,
     /// Largest single id, content or metadata field, in bytes. Default 64 MiB.
     pub max_field_bytes: u32,
+    /// Largest HNSW `m` accepted. Default 128.
+    pub max_m: u32,
+    /// Largest HNSW `ef_construction` accepted. Default 4096.
+    pub max_ef_construction: u32,
 }
 
 impl Default for LoadLimits {
@@ -80,6 +86,8 @@ impl Default for LoadLimits {
             max_records: 10_000_000,
             max_dimension: 65_536,
             max_field_bytes: 64 << 20,
+            max_m: 128,
+            max_ef_construction: 4096,
         }
     }
 }
@@ -110,6 +118,34 @@ impl LoadLimits {
     #[must_use]
     pub const fn with_max_field_bytes(mut self, n: u32) -> Self {
         self.max_field_bytes = n;
+        self
+    }
+
+    /// Set [`LoadLimits::max_m`]. Values above 1024 are still rejected.
+    ///
+    /// ```
+    /// use rune_vectorstore::LoadLimits;
+    ///
+    /// assert_eq!(LoadLimits::default().with_max_m(256).max_m, 256);
+    /// ```
+    #[must_use]
+    pub const fn with_max_m(mut self, n: u32) -> Self {
+        self.max_m = n;
+        self
+    }
+
+    /// Set [`LoadLimits::max_ef_construction`]. Values above 2^20 are still
+    /// rejected.
+    ///
+    /// ```
+    /// use rune_vectorstore::LoadLimits;
+    ///
+    /// let limits = LoadLimits::default().with_max_ef_construction(8192);
+    /// assert_eq!(limits.max_ef_construction, 8192);
+    /// ```
+    #[must_use]
+    pub const fn with_max_ef_construction(mut self, n: u32) -> Self {
+        self.max_ef_construction = n;
         self
     }
 }
@@ -280,6 +316,18 @@ pub fn decode(bytes: &[u8], limits: &LoadLimits) -> Result<Box<dyn VectorIndex>,
         1 => {
             if m > MAX_M || efc > MAX_EF || efs > MAX_EF {
                 return Err(invalid("HNSW parameters out of range"));
+            }
+            for (what, limit, actual) in [
+                ("HNSW m", limits.max_m, m),
+                ("HNSW ef_construction", limits.max_ef_construction, efc),
+            ] {
+                if actual > limit {
+                    return Err(StoreError::LimitExceeded {
+                        what,
+                        limit: u64::from(limit),
+                        actual: u64::from(actual),
+                    });
+                }
             }
             IndexKind::Hnsw(
                 HnswParams::default()
@@ -507,6 +555,80 @@ mod tests {
         bytes[pos] = b'a';
         reseal(&mut bytes);
         assert!(decode(&bytes, &LoadLimits::default()).is_err());
+    }
+
+    /// A small HNSW snapshot with the given build parameters: `n` records of
+    /// dimension 2, empty content and `{}` metadata.
+    fn hnsw_snapshot(m: u32, efc: u32, n: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(MAGIC);
+        out.extend_from_slice(&VERSION.to_le_bytes());
+        out.extend_from_slice(&[2, 1, 0, 0]);
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&m.to_le_bytes());
+        out.extend_from_slice(&efc.to_le_bytes());
+        out.extend_from_slice(&64u32.to_le_bytes());
+        out.extend_from_slice(&7u64.to_le_bytes());
+        out.extend_from_slice(&u64::from(n).to_le_bytes());
+        for i in 0..n {
+            let id = format!("{i:x}");
+            out.extend_from_slice(&u32::try_from(id.len()).unwrap().to_le_bytes());
+            out.extend_from_slice(id.as_bytes());
+            #[allow(clippy::cast_precision_loss)]
+            let x = i as f32;
+            out.extend_from_slice(&x.sin().to_le_bytes());
+            out.extend_from_slice(&x.cos().to_le_bytes());
+            out.extend_from_slice(&0u32.to_le_bytes());
+            out.extend_from_slice(&2u32.to_le_bytes());
+            out.extend_from_slice(b"{}");
+        }
+        let crc = rune_crc32::checksum(&out);
+        out.extend_from_slice(&crc.to_le_bytes());
+        out
+    }
+
+    #[test]
+    fn hostile_hnsw_parameters_are_rejected_before_the_rebuild() {
+        // About 38 KB; with these parameters the rebuild used to take seconds.
+        let hostile = hnsw_snapshot(MAX_M, MAX_EF, 1_500);
+        assert!(hostile.len() < 40_000);
+        let start = std::time::Instant::now();
+        let Err(err) = decode(&hostile, &LoadLimits::default()) else {
+            panic!("hostile snapshot loaded");
+        };
+        assert!(start.elapsed() < std::time::Duration::from_secs(1));
+        assert!(
+            matches!(
+                err,
+                StoreError::LimitExceeded {
+                    what: "HNSW m",
+                    limit: 128,
+                    actual: 1024
+                }
+            ),
+            "{err:?}"
+        );
+
+        let wide_ef = hnsw_snapshot(16, MAX_EF, 1);
+        assert!(matches!(
+            decode(&wide_ef, &LoadLimits::default()),
+            Err(StoreError::LimitExceeded {
+                what: "HNSW ef_construction",
+                ..
+            })
+        ));
+        // Raising the limits lets them through.
+        let lim = LoadLimits::default()
+            .with_max_m(MAX_M)
+            .with_max_ef_construction(MAX_EF);
+        assert_eq!(decode(&wide_ef, &lim).unwrap().len(), 1);
+        // Parameters at the default caps still load.
+        assert_eq!(
+            decode(&hnsw_snapshot(128, 4096, 3), &LoadLimits::default())
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[test]
