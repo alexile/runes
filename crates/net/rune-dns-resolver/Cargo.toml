@@ -43,6 +43,7 @@ tokio-rustls = { workspace = true, optional = true, features = ["ring", "tls12"]
 webpki-roots = { version = "1.0.12", optional = true }
 
 [dev-dependencies]
+proptest.workspace = true
 hyper = { version = "1.12", default-features = false, features = ["server", "http1", "http2"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "net", "time", "io-util", "sync"] }
 

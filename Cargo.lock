@@ -3744,6 +3744,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "proptest",
  "rand 0.9.5",
  "rune-dns-wire",
  "rune-wildcard-dns",
