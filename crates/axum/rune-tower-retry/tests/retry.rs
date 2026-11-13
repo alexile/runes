@@ -226,6 +226,18 @@ async fn non_idempotent_requests_are_sent_once() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn default_cloner_replays_post_too() {
+    // Why HTTP clients need `IdempotentHttp`: `CloneAll` ignores the method.
+    let backend = Scripted::new();
+    let svc = RetryLayer::new(fast_retry())
+        .classify(TransientHttp)
+        .layer(http_backend(&backend, &[503, 200]));
+    let res = svc.oneshot(request(Method::POST, "x")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(backend.calls(), 2);
+}
+
+#[tokio::test(start_paused = true)]
 async fn bodiless_cloner_only_replays_empty_bodies() {
     for (body, calls) in [("", 2), ("streamed", 1)] {
         let backend = Scripted::new();

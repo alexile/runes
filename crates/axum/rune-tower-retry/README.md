@@ -10,7 +10,7 @@
 A [`tower::Layer`](https://docs.rs/tower/latest/tower/trait.Layer.html) for outbound clients that retries transient failures and hedges slow calls, without turning an outage into a retry storm:
 
 - **Retries on retriable failures only.** A pluggable classifier decides what is transient: `ErrorsOnly` (default), `TransientHttp` (errors, `502`, `503`, `504`) or a closure. Everything else returns at once.
-- **Only replayable requests.** A request cloner makes the copies retries send, and decides which requests may be repeated at all: `CloneAll` (default), `IdempotentHttp` (idempotent methods, cloned body), `IdempotentBodiless` (idempotent methods with an empty, non-`Clone` body such as `axum::body::Body`) or a closure.
+- **Only replayable requests.** A request cloner makes the copies retries send, and decides which requests may be repeated at all: `CloneAll` (default), `IdempotentHttp` (idempotent methods, cloned body), `IdempotentBodiless` (idempotent methods with an empty, non-`Clone` body such as `axum::body::Body`) or a closure. `CloneAll` replays any method, `POST` included, so HTTP clients want `IdempotentHttp` or `IdempotentBodiless`.
 - **Backoff with jitter** between attempts: exponential or constant, with full, equal or no jitter.
 - **A retry budget** limits retries and hedges to a share of recent traffic.
 - **Hedging.** A call still pending after a fixed delay, or after a latency percentile of recent calls, is sent again. The first answer wins; the loser's future is dropped, which cancels it.

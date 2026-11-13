@@ -96,6 +96,10 @@ pub trait CloneRequest<Req> {
 }
 
 /// Replays any `Clone` request. Use it for calls that are safe to repeat.
+///
+/// It knows nothing about HTTP methods: an `http::Request` with a `Clone`
+/// body is replayed whatever its method, `POST` and `PATCH` included. Use
+/// [`IdempotentHttp`] or [`IdempotentBodiless`] for HTTP clients.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CloneAll;
 
@@ -258,6 +262,10 @@ pub struct RetryLayer<C = ErrorsOnly, R = CloneAll> {
 impl RetryLayer {
     /// Creates a layer that retries inner-service errors on `Clone`
     /// requests, timed by [`TokioClock`].
+    ///
+    /// The default [`CloneAll`] replays every request, so for an HTTP
+    /// client add `.clone_requests(IdempotentHttp)` unless every call,
+    /// `POST` included, is safe to send twice.
     #[must_use]
     pub fn new(config: Retry) -> Self {
         Self {
