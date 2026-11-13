@@ -170,3 +170,73 @@ fn kill_violation_kills_the_process() {
     }
     assert_eq!(status.signal(), Some(libc::SIGSYS), "{status:?}");
 }
+
+/// Calls `clone` directly, as `unshare` would be used to make a namespace,
+/// and `clone3`, under the stdio promise.
+#[test]
+#[ignore = "needs a kernel that allows unprivileged user namespaces"]
+#[allow(unsafe_code, reason = "raw clone and clone3 system calls")]
+fn stdio_clone_cannot_create_a_user_namespace() {
+    if !available() {
+        return;
+    }
+    let raw_clone = |flags: libc::c_long| {
+        // SAFETY: with a null stack the child runs on a copy of this
+        // thread's stack and exits at once without touching shared state.
+        let pid = unsafe { libc::syscall(libc::SYS_clone, flags, 0, 0, 0, 0) };
+        if pid == 0 {
+            // SAFETY: `_exit` is async-signal-safe and never returns.
+            unsafe { libc::_exit(0) };
+        }
+        (pid, std::io::Error::last_os_error().raw_os_error())
+    };
+    let user = libc::c_long::from(libc::CLONE_NEWUSER | libc::SIGCHLD);
+    let plain = libc::c_long::from(libc::SIGCHLD);
+
+    // The kernel allows it before the profile is applied.
+    let (before, _) = raw_clone(user);
+    if before < 0 {
+        eprintln!("skipping: unprivileged user namespaces are disabled");
+        return;
+    }
+    reap(before);
+
+    let (report, (user, plain, clone3, thread)) = on_fresh_thread(Profile::default(), move || {
+        let mut args = [0_u64; 11];
+        args[0] = u64::from(libc::CLONE_NEWUSER.unsigned_abs());
+        // SAFETY: `args` is a valid `struct clone_args` of the size given.
+        let clone3 = unsafe {
+            libc::syscall(
+                libc::SYS_clone3,
+                args.as_mut_ptr(),
+                std::mem::size_of_val(&args),
+            )
+        };
+        let clone3 = (clone3, std::io::Error::last_os_error().raw_os_error());
+        (
+            raw_clone(user),
+            raw_clone(plain),
+            clone3,
+            // Threads still work: libc falls back from clone3 to clone.
+            std::thread::spawn(|| 42).join().ok(),
+        )
+    });
+    assert_enforced(&report);
+    if plain.0 > 0 {
+        reap(plain.0);
+    }
+    if user.0 > 0 {
+        reap(user.0);
+    }
+    assert_eq!(user, (-1, Some(libc::EPERM)), "clone(CLONE_NEWUSER)");
+    assert!(plain.0 > 0, "plain clone: {plain:?}");
+    assert_eq!(clone3, (-1, Some(libc::ENOSYS)), "clone3");
+    assert_eq!(thread, Some(42));
+}
+
+#[allow(unsafe_code, reason = "waitpid on a child this test made")]
+fn reap(pid: libc::c_long) {
+    let pid = libc::pid_t::try_from(pid).unwrap();
+    // SAFETY: waits for a child of this process; the status is discarded.
+    unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::__WALL) };
+}

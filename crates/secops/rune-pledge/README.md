@@ -45,6 +45,10 @@ Seccomp cannot inspect pointer arguments, so the promises are coarser than
 OpenBSD's: `rpath` and `wpath` both allow `openat` (Landlock then tells
 reads from writes apart per path), `inet` and `unix` both allow `socket`,
 and `stdio` allows `clone` for threads, which also permits a raw `fork`.
+`clone` is only allowed without `CLONE_NEW*` flags, so it cannot create
+namespaces as `unshare` would, and `clone3` fails with `ENOSYS` (its flags
+live in memory seccomp cannot read); libc then falls back to `clone`, as
+under Docker's default profile.
 Landlock does not cover `chmod`/`chown`, so `fattr` is enforced by
 seccomp alone.
 

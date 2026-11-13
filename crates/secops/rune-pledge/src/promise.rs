@@ -19,8 +19,9 @@ use crate::Error;
 pub enum Promise {
     /// Computation and I/O on file descriptors the process already holds:
     /// memory management, reading and writing, polling, pipes, signals,
-    /// clocks, threads (`clone`, which seccomp cannot tell from `fork`
-    /// without inspecting its flags), `ioctl`, `fstat`, sending and
+    /// clocks, threads (`clone`, which also permits a raw `fork`, but never
+    /// with a `CLONE_NEW*` namespace flag; `clone3` fails with `ENOSYS` so
+    /// that libc falls back to `clone`), `ioctl`, `fstat`, sending and
     /// receiving on sockets already open, and installing further seccomp
     /// filters and Landlock rulesets (which can only narrow the
     /// restriction, as a second `pledge(2)` call may). Every useful profile
@@ -385,8 +386,9 @@ const STDIO: &[&str] = &[
     "getcpu",
     "getrandom",
     // Threads and process lifetime.
+    // Only without namespace flags, and `clone3` gets ENOSYS: see
+    // `Profile::seccomp_options`.
     "clone",
-    "clone3",
     "futex",
     "futex_waitv",
     "set_robust_list",
@@ -578,6 +580,7 @@ mod tests {
                 "kexec_load",
                 "unshare",
                 "setns",
+                "clone3",
                 "chroot",
             ] {
                 assert!(!promise.syscalls().contains(&name), "{promise}: {name}");
