@@ -19,8 +19,15 @@ pub fn init_random(n: usize, n_components: usize, rng: &mut Rng) -> Vec<f64> {
 
 /// Spectral initialisation using the normalised graph Laplacian eigenvectors.
 ///
-/// Finds the leading `nc` non-trivial eigenvectors of `L_sym = D^(-1/2) W D^(-1/2)`
-/// via power iteration with Gram-Schmidt deflation, scaled to `[−10, 10]`.
+/// Finds the eigenvectors of `A = D^(-1/2) W D^(-1/2)` for the `nc` largest
+/// eigenvalues after the trivial one (the smallest non-trivial eigenvectors of
+/// the normalised Laplacian), scaled to `[−10, 10]`.
+///
+/// Power iteration runs on `(I + A) / 2` rather than on `A`. The spectrum of
+/// `A` lies in `[−1, 1]`, and plain power iteration picks the eigenvalue with
+/// the largest magnitude, so on a bipartite graph (a ring, a grid) it would
+/// lock onto `−1` and give a coordinate that just alternates between
+/// neighbours. The shift maps the spectrum to `[0, 1]` in the same order.
 /// Falls back to random initialisation when the graph is disconnected.
 pub fn spectral_init(
     edges: &[(usize, usize, f64)],
@@ -45,23 +52,32 @@ pub fn spectral_init(
         .map(|&d| if d > 0.0 { 1.0 / d.sqrt() } else { 0.0 })
         .collect();
 
-    // Power iteration with Gram-Schmidt deflation — find nc+1 eigenvectors, skip trivial
+    // The trivial eigenvector (eigenvalue 1) of a connected graph is
+    // sqrt(degree), so start from it and deflate it out of every other vector.
+    let mut trivial: Vec<f64> = degree.iter().map(|d| d.sqrt()).collect();
+    normalize(&mut trivial);
+
+    // Power iteration with Gram-Schmidt deflation for the next nc eigenvectors.
     let iters = 300;
     let mut found: Vec<Vec<f64>> = Vec::with_capacity(nc + 1);
+    found.push(trivial);
 
-    for _ in 0..=nc {
+    for _ in 0..nc {
         // Random start
         let mut v: Vec<f64> = (0..n).map(|_| rng.next_f64() - 0.5).collect();
         orthogonalize(&mut v, &found);
         normalize(&mut v);
 
         for _ in 0..iters {
-            // v ← L_sym · v  (sparse matvec)
-            let mut w_vec = vec![0.0f64; n];
+            // v ← (v + A·v) / 2  (sparse matvec on the shifted operator)
+            let mut w_vec = v.clone();
             for &(i, j, w) in edges {
                 let wi = d_inv_sqrt[i] * w * d_inv_sqrt[j];
                 w_vec[i] = wi.mul_add(v[j], w_vec[i]);
                 w_vec[j] = wi.mul_add(v[i], w_vec[j]);
+            }
+            for x in &mut w_vec {
+                *x *= 0.5;
             }
             orthogonalize(&mut w_vec, &found);
             normalize(&mut w_vec);
@@ -371,4 +387,57 @@ fn sq_dist_cross(a: &[f64], b: &[f64], i: usize, j: usize, nc: usize) -> f64 {
             diff * diff
         })
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Rayleigh quotient of `x` on `D^-1/2 W D^-1/2`.
+    fn rayleigh(edges: &[(usize, usize, f64)], n: usize, x: &[f64]) -> f64 {
+        let mut deg = vec![0.0; n];
+        for &(i, j, w) in edges {
+            deg[i] += w;
+            deg[j] += w;
+        }
+        let num: f64 = edges
+            .iter()
+            .map(|&(i, j, w)| 2.0 * w * x[i] * x[j] / (deg[i] * deg[j]).sqrt())
+            .sum();
+        num / x.iter().map(|v| v * v).sum::<f64>()
+    }
+
+    fn check_leading(edges: &[(usize, usize, f64)], n: usize, nc: usize) {
+        let flat = spectral_init(edges, n, nc, &mut Rng::new(7));
+        for dim in 0..nc {
+            let col: Vec<f64> = (0..n).map(|i| flat[i * nc + dim]).collect();
+            let r = rayleigh(edges, n, &col);
+            assert!(r > 0.0, "dim {dim} has Rayleigh quotient {r}");
+        }
+    }
+
+    #[test]
+    fn spectral_init_picks_positive_eigenvalues_on_ring() {
+        let n = 8;
+        let edges: Vec<_> = (0..n).map(|i| (i, (i + 1) % n, 1.0)).collect();
+        check_leading(&edges, n, 2);
+    }
+
+    #[test]
+    fn spectral_init_picks_positive_eigenvalues_on_grid() {
+        let side = 4;
+        let mut edges = Vec::new();
+        for r in 0..side {
+            for c in 0..side {
+                let i = r * side + c;
+                if c + 1 < side {
+                    edges.push((i, i + 1, 1.0));
+                }
+                if r + 1 < side {
+                    edges.push((i, i + side, 1.0));
+                }
+            }
+        }
+        check_leading(&edges, side * side, 2);
+    }
 }

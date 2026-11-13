@@ -58,7 +58,8 @@ fn embed(points: &[Vec<f64>]) -> Result<(), UmapError> {
 The `try_*` methods (`try_fit`, `try_fit_supervised`, `fit_semi_supervised`,
 `try_transform`) return a `UmapError` for empty input, rows without features,
 ragged rows, `NaN`/infinite values, `n_neighbors ≥ n_samples`, mismatched label
-counts and non-finite parameters. The original `fit`, `fit_supervised` and
+counts, non-finite parameters, `min_dist > spread` and an `n_components` too
+large to allocate. The original `fit`, `fit_supervised` and
 `transform` are kept for compatibility and panic on the same conditions.
 
 ### Supervised and semi-supervised
@@ -77,6 +78,10 @@ let sup = Umap::new().n_neighbors(2).try_fit_supervised(&points, &labels)?;
 let partial = [Some(0), None, Some(0), Some(1), None, None];
 let semi = Umap::new().n_neighbors(2).fit_semi_supervised(&points, &partial)?;
 ```
+
+The label graph is built by exact search inside each class, so supervised and
+semi-supervised fits cost `O(n²)` distance evaluations for a few large classes,
+even with `KnnMethod::NnDescent`.
 
 ### Measuring quality
 
@@ -116,8 +121,8 @@ validated the same way as `try_fit` (empty, ragged, non-finite, `k = 0`,
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `n_neighbors` | 15 | Neighbourhood size. Lower = finer local detail; higher = more global structure. |
-| `min_dist` | 0.1 | Packing of output points. `0.0` = dense clusters; `1.0` = spread out. |
+| `n_neighbors` | 15 | Neighbourhood size. Lower = finer local detail; higher = more global structure. Minimum 2. |
+| `min_dist` | 0.1 | Packing of output points. `0.0` = dense clusters; `1.0` = spread out. Clamped to `[0, 1]`; must not exceed `spread`. |
 | `n_components` | 2 | Output dimensions. |
 | `spread` | 1.0 | Scale of the embedded space; works with `min_dist`. |
 | `n_epochs` | 500 / 200 | SGD iterations. More = better quality, slower. |

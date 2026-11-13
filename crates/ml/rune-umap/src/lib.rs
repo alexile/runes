@@ -224,7 +224,8 @@ impl Umap {
     /// Number of nearest neighbours used to build the fuzzy k-NN graph.
     ///
     /// Larger values consider more of the global structure; smaller values focus
-    /// on fine local detail. Typical range: 5–50.
+    /// on fine local detail. Typical range: 5–50. Values below `2` are raised
+    /// to `2`, so at least three points are needed to fit.
     ///
     /// # Example
     ///
@@ -259,6 +260,10 @@ impl Umap {
     /// Smaller values allow points to cluster more tightly; larger values spread them
     /// out. Works together with `spread`. Defaults to `0.1`.
     ///
+    /// Values are clamped to `[0, 1]`. A fit fails with
+    /// [`UmapError::InvalidParameter`] when `min_dist` (after clamping) is
+    /// greater than [`Umap::spread`].
+    ///
     /// # Example
     ///
     /// ```rust
@@ -274,6 +279,9 @@ impl Umap {
 
     /// Scale of the embedded space. Controls cluster separation. Defaults to `1.0`.
     ///
+    /// Values below `0.01` are raised to `0.01`; `NaN` is kept so that the fit
+    /// reports it as [`UmapError::InvalidParameter`].
+    ///
     /// # Example
     ///
     /// ```rust
@@ -283,7 +291,7 @@ impl Umap {
     /// ```
     #[must_use]
     pub const fn spread(mut self, s: f64) -> Self {
-        self.spread = s.max(0.01);
+        self.spread = if s.is_nan() { s } else { s.max(0.01) };
         self
     }
 
@@ -340,6 +348,9 @@ impl Umap {
 
     /// Initial SGD learning rate. Defaults to `1.0`.
     ///
+    /// Values below `1e-8` are raised to `1e-8`; `NaN` is kept so that the fit
+    /// reports it as [`UmapError::InvalidParameter`].
+    ///
     /// # Example
     ///
     /// ```rust
@@ -349,7 +360,7 @@ impl Umap {
     /// ```
     #[must_use]
     pub const fn learning_rate(mut self, lr: f64) -> Self {
-        self.learning_rate = lr.max(1e-8);
+        self.learning_rate = if lr.is_nan() { lr } else { lr.max(1e-8) };
         self
     }
 
@@ -489,7 +500,8 @@ impl Umap {
     /// [`UmapError::Empty`], [`UmapError::NoFeatures`],
     /// [`UmapError::DimensionMismatch`] (ragged rows), [`UmapError::NonFinite`],
     /// [`UmapError::TooFewSamples`] (`n_neighbors ≥ n_points`) or
-    /// [`UmapError::InvalidParameter`] (a `NaN` parameter).
+    /// [`UmapError::InvalidParameter`] (a `NaN` parameter, `min_dist > spread`,
+    /// or an `n_components` so large the embedding can't be allocated).
     ///
     /// # Example
     ///
@@ -509,6 +521,11 @@ impl Umap {
     /// Builds a second graph connecting same-class neighbours, then merges it with
     /// the structure graph via fuzzy union. The relative influence is controlled by
     /// [`Umap::target_weight`].
+    ///
+    /// The label graph is built by exact search within each class, so this costs
+    /// `O(n_c²)` distance evaluations per class of size `n_c` (`O(n²)` overall
+    /// for few classes) whatever [`Umap::knn_method`] is set to. Expect it to
+    /// dominate the run time on large inputs.
     ///
     /// # Panics
     ///
@@ -552,6 +569,9 @@ impl Umap {
     /// Semi-supervised embedding: like [`Umap::fit_supervised`], but points
     /// whose label is `None` are unlabelled and positioned by the data
     /// structure alone.
+    ///
+    /// Like [`Umap::fit_supervised`], the label graph uses exact search within
+    /// each class, which is quadratic in the class size.
     ///
     /// # Errors
     ///
@@ -600,6 +620,13 @@ impl Umap {
                 });
             }
         }
+        if self.min_dist > self.spread {
+            return Err(UmapError::InvalidParameter {
+                name: "min_dist",
+                value: self.min_dist,
+                reason: "must not be greater than spread",
+            });
+        }
         Ok(())
     }
 
@@ -611,6 +638,20 @@ impl Umap {
         self.validate_params()?;
         let n_features = quality::validate_matrix(points)?;
         let n = points.len();
+        let fits = n
+            .checked_mul(self.n_components)
+            .is_some_and(|len| len <= isize::MAX.unsigned_abs() / std::mem::size_of::<f64>());
+        if !fits {
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "the value is only reported in the error"
+            )]
+            return Err(UmapError::InvalidParameter {
+                name: "n_components",
+                value: self.n_components as f64,
+                reason: "embedding size overflows",
+            });
+        }
         if self.n_neighbors >= n {
             return Err(UmapError::TooFewSamples {
                 n_neighbors: self.n_neighbors,
@@ -1039,5 +1080,103 @@ mod tests {
         let (a, b) = params::fit_ab(0.1, 1.0);
         assert!((a - 1.577).abs() < 0.05, "a={a:.4} expected ~1.577");
         assert!((b - 0.895).abs() < 0.05, "b={b:.4} expected ~0.895");
+    }
+
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        reason = "small test indices; rounding to integers only to compare values"
+    )]
+    #[test]
+    fn spectral_init_on_ring_is_not_alternating() {
+        // 8 points on a circle with k = 2 give the cycle graph C8, which is
+        // bipartite. With one epoch the SGD never fires, so this is the init.
+        let pts: Vec<Vec<f64>> = (0..8)
+            .map(|i| {
+                let t = f64::from(i) * std::f64::consts::TAU / 8.0;
+                vec![t.cos(), t.sin()]
+            })
+            .collect();
+        let f = Umap::new()
+            .n_neighbors(2)
+            .n_epochs(1)
+            .random_seed(3)
+            .try_fit(&pts)
+            .unwrap();
+        for dim in 0..2 {
+            let mut xs: Vec<i64> = f
+                .embedding
+                .iter()
+                .map(|r| (r[dim] * 1e6).round() as i64)
+                .collect();
+            xs.sort_unstable();
+            xs.dedup();
+            assert!(xs.len() > 2, "dim {dim} collapsed to {xs:?}");
+        }
+        // Ring neighbours must land closer together than opposite points.
+        let d = |a: usize, b: usize| {
+            let (p, q) = (&f.embedding[a], &f.embedding[b]);
+            (p[0] - q[0]).hypot(p[1] - q[1])
+        };
+        for i in 0..8 {
+            assert!(d(i, (i + 1) % 8) < d(i, (i + 4) % 8), "point {i}");
+        }
+    }
+
+    #[test]
+    fn min_dist_above_spread_is_rejected() {
+        let pts = two_blobs(10);
+        let r = Umap::new()
+            .n_neighbors(5)
+            .spread(0.1)
+            .min_dist(0.5)
+            .try_fit(&pts);
+        assert!(matches!(
+            r,
+            Err(UmapError::InvalidParameter {
+                name: "min_dist",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn nan_spread_and_learning_rate_are_rejected() {
+        let pts = two_blobs(10);
+        let r = Umap::new().n_neighbors(5).spread(f64::NAN).try_fit(&pts);
+        assert!(matches!(
+            r,
+            Err(UmapError::InvalidParameter { name: "spread", .. })
+        ));
+        let r = Umap::new()
+            .n_neighbors(5)
+            .learning_rate(f64::NAN)
+            .try_fit(&pts);
+        assert!(matches!(
+            r,
+            Err(UmapError::InvalidParameter {
+                name: "learning_rate",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn huge_n_components_is_an_error() {
+        let pts = two_blobs(5);
+        for spectral in [true, false] {
+            let r = Umap::new()
+                .n_neighbors(3)
+                .n_components(usize::MAX)
+                .spectral_init(spectral)
+                .try_fit(&pts);
+            assert!(matches!(
+                r,
+                Err(UmapError::InvalidParameter {
+                    name: "n_components",
+                    ..
+                })
+            ));
+        }
     }
 }
