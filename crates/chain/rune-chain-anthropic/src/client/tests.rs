@@ -4,7 +4,9 @@
 use rune_chain_core::LlmErrorKind;
 use rune_chain_core::{FinishReason, Llm, ReasoningBlock, ToolCall};
 
-use crate::{ThinkingDisplay, Usage};
+use crate::{
+    FallbackModel, FallbackSwitch, Fallbacks, SERVER_SIDE_FALLBACK_BETA, ThinkingDisplay, Usage,
+};
 use serde_json::{Value, json};
 
 use super::*;
@@ -1321,6 +1323,293 @@ fn tool_use_start_counts_against_the_stream_cap() {
     );
 }
 
+// ── server-side fallbacks and betas ───────────────────────────────────────────
+
+#[test]
+fn fallbacks_default_serializes_as_a_string() {
+    let llm = Anthropic::new("k")
+        .model(models::CLAUDE_OPUS_5_5)
+        .fallbacks(Fallbacks::Default);
+    assert_eq!(body_for(&llm, None)["fallbacks"], "default");
+    assert!(
+        body_for(&Anthropic::new("k"), None)
+            .get("fallbacks")
+            .is_none()
+    );
+}
+
+#[test]
+fn fallback_models_serialize_with_per_attempt_overrides() {
+    let llm = Anthropic::new("k").fallbacks(Fallbacks::models([
+        FallbackModel::new("claude-opus-4-8")
+            .with_max_tokens(8000)
+            .with_thinking(Thinking::adaptive())
+            .with_effort(Effort::High)
+            .with_speed("fast"),
+        FallbackModel::new("claude-opus-4-7"),
+    ]));
+    assert_eq!(
+        body_for(&llm, None)["fallbacks"],
+        json!([
+            {
+                "model": "claude-opus-4-8",
+                "max_tokens": 8000,
+                "thinking": { "type": "adaptive" },
+                "output_config": { "effort": "high" },
+                "speed": "fast",
+            },
+            { "model": "claude-opus-4-7" },
+        ])
+    );
+}
+
+#[test]
+fn beta_header_adds_the_fallback_beta_once() {
+    let header = |llm: &Anthropic, fallbacks: bool| {
+        llm.beta_header(fallbacks)
+            .unwrap()
+            .map(|v| v.to_str().unwrap().to_string())
+    };
+    let plain = Anthropic::new("k");
+    assert_eq!(header(&plain, false), None);
+    assert_eq!(
+        header(&plain, true).as_deref(),
+        Some(SERVER_SIDE_FALLBACK_BETA)
+    );
+
+    let llm = Anthropic::new("k").beta("feature-a-2026-01-01").betas([
+        "feature-b-2026-02-01, feature-a-2026-01-01",
+        SERVER_SIDE_FALLBACK_BETA,
+        " ",
+    ]);
+    assert_eq!(
+        llm.beta_names(),
+        [
+            "feature-a-2026-01-01",
+            "feature-b-2026-02-01",
+            SERVER_SIDE_FALLBACK_BETA
+        ]
+    );
+    assert_eq!(
+        header(&llm, true).as_deref(),
+        Some("feature-a-2026-01-01,feature-b-2026-02-01,server-side-fallback-2026-07-01")
+    );
+
+    let bad = Anthropic::new("k").beta("line\nbreak");
+    assert!(matches!(
+        bad.preflight(&[Message::human("Hi")], None, false),
+        Err(e) if e.message().contains("beta")
+    ));
+}
+
+#[test]
+fn invalid_fallback_lists_fail_before_sending() {
+    let check = |fallbacks: Fallbacks| {
+        Anthropic::new("k")
+            .fallbacks(fallbacks)
+            .preflight(&[Message::human("Hi")], None, false)
+    };
+    let model = FallbackModel::new;
+    assert!(check(Fallbacks::Default).is_ok());
+    assert!(check(Fallbacks::models([model("a"), model("b"), model("c")])).is_ok());
+    // A model repeated with different overrides is a different entry.
+    assert!(
+        check(Fallbacks::models([
+            model("a"),
+            model("a").with_max_tokens(10)
+        ]))
+        .is_ok()
+    );
+
+    for (fallbacks, needle) in [
+        (Fallbacks::models([]), "1 to 3"),
+        (
+            Fallbacks::models([model("a"), model("b"), model("c"), model("d")]),
+            "1 to 3",
+        ),
+        (Fallbacks::models([model("a"), model("a")]), "repeats"),
+        (Fallbacks::models([model(" ")]), "empty model"),
+    ] {
+        assert!(
+            matches!(check(fallbacks.clone()), Err(e) if e.message().contains(needle)),
+            "{fallbacks:?}"
+        );
+    }
+}
+
+#[test]
+fn decodes_fallback_block_and_iterations() {
+    let message = decode_response(fixture!("messages_fallback.json").as_bytes()).unwrap();
+    assert_eq!(message.model, "claude-opus-4-8");
+    assert!(message.served_by_fallback());
+    assert_eq!(
+        message.fallback_switches().collect::<Vec<_>>(),
+        [&FallbackSwitch::new("claude-opus-5-5", "claude-opus-4-8")]
+    );
+    assert_eq!(message.iterations().len(), 2);
+    assert!(!message.iterations()[0].is_fallback());
+    assert!(message.iterations()[1].is_fallback());
+    assert_eq!(message.iterations()[1].usage.output_tokens, 46);
+    assert_eq!(message.stop_details(), None);
+    // Text from both models is kept; thinking from before the switch is not
+    // part of the turn sent back.
+    assert_eq!(
+        message.text(),
+        "Here is how the scanner\n matches signatures against each file."
+    );
+    let result = message.to_generate_result();
+    assert_eq!(result.reasoning.len(), 1);
+    assert_eq!(result.reasoning_text(), "Continue the explanation.");
+}
+
+#[test]
+fn replay_keeps_the_fallback_block_in_place() {
+    let message = decode_response(fixture!("messages_fallback.json").as_bytes()).unwrap();
+    assert_eq!(
+        serde_json::to_value(message.replay_content()).unwrap(),
+        json!([
+            { "type": "text", "text": "Here is how the scanner" },
+            {
+                "type": "fallback",
+                "from": { "model": "claude-opus-5-5" },
+                "to": { "model": "claude-opus-4-8" },
+            },
+            {
+                "type": "thinking",
+                "thinking": "Continue the explanation.",
+                "signature": "EpoBCkYIBxgCKkB2",
+            },
+            { "type": "text", "text": " matches signatures against each file." },
+        ])
+    );
+}
+
+#[test]
+fn tool_calls_before_a_fallback_are_dropped() {
+    let message = decode_response(
+        json!({
+            "model": "claude-opus-4-8",
+            "content": [
+                { "type": "tool_use", "id": "t1", "name": "scan", "input": {} },
+                { "type": "fallback", "from": { "model": "claude-opus-5-5" }, "to": { "model": "claude-opus-4-8" } },
+                { "type": "tool_use", "id": "t2", "name": "scan", "input": { "path": "src" } },
+            ],
+            "stop_reason": "tool_use",
+            "usage": { "input_tokens": 1, "output_tokens": 1 },
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    let calls = message.tool_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].id, "t2");
+    assert_eq!(message.replay_content().len(), 2);
+}
+
+#[test]
+fn decodes_refusal_with_stop_details() {
+    let message = decode_response(fixture!("messages_refusal.json").as_bytes()).unwrap();
+    assert!(message.is_refusal());
+    assert!(!message.served_by_fallback());
+    let details = message.stop_details().unwrap();
+    assert_eq!(details.kind, "refusal");
+    assert_eq!(details.category.as_deref(), Some("cyber"));
+    assert_eq!(
+        details.explanation.as_deref(),
+        Some("The fallback model is rate limited.")
+    );
+    assert_eq!(
+        details.recommended_model.as_deref(),
+        Some("claude-opus-4-8")
+    );
+    let err = check_structured(&message).unwrap_err();
+    assert_eq!(err.kind(), LlmErrorKind::Provider);
+    assert!(err.message().contains("category: cyber"));
+    assert!(err.message().contains("recommended model: claude-opus-4-8"));
+}
+
+#[test]
+fn odd_fallback_fields_never_fail_a_response() {
+    let message = decode_response(
+        json!({
+            "content": [
+                { "type": "fallback", "from": null, "to": "claude-opus-4-8" },
+                { "type": "some_future_block", "payload": [1, 2] },
+                { "type": "text", "text": "ok" },
+            ],
+            "stop_reason": "refusal",
+            "stop_details": "refusal",
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 1,
+                "iterations": [{ "type": "fallback_message" }, 7, { "type": null }],
+            },
+        })
+        .to_string()
+        .as_bytes(),
+    )
+    .unwrap();
+    assert_eq!(message.text(), "ok");
+    assert_eq!(
+        message.content[0],
+        ContentBlock::Fallback(FallbackSwitch::default())
+    );
+    assert_eq!(message.stop_details(), None);
+    assert_eq!(message.iterations().len(), 1);
+    assert!(message.served_by_fallback());
+
+    let message = decode_response(
+        br#"{"content":[],"usage":{"input_tokens":1,"iterations":{"type":"message"}}}"#,
+    )
+    .unwrap();
+    assert_eq!(message.iterations(), []);
+}
+
+#[test]
+fn stream_with_mid_stream_fallback_at_any_chunking() {
+    let body = fixture!("stream_fallback.sse").as_bytes();
+    for size in [1, 3, 17, body.len()] {
+        let out: Vec<StreamEvent> = events(body, size, DEFAULT_MAX_STREAM_BYTES)
+            .into_iter()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let switch = FallbackSwitch::new("claude-opus-5-5", "claude-opus-4-8");
+        assert_eq!(out[0], StreamEvent::Text("The parser reads".into()));
+        assert_eq!(out[1], StreamEvent::Fallback(switch.clone()));
+        assert_eq!(out[2], StreamEvent::Text(" each rule file once.".into()));
+        let StreamEvent::Done(m) = &out[3] else {
+            panic!("{out:?}")
+        };
+        assert_eq!(m.text(), "The parser reads\n each rule file once.");
+        assert_eq!(m.content[1], ContentBlock::Fallback(switch));
+        assert_eq!(m.model, "claude-opus-4-8");
+        assert!(m.served_by_fallback());
+        assert_eq!(m.iterations().len(), 2);
+        assert_eq!(m.usage().output_tokens, 30);
+    }
+}
+
+#[test]
+fn streamed_refusal_keeps_stop_details() {
+    let out = push_all(&[
+        MSG_START,
+        r#"{"type":"message_delta","delta":{"stop_reason":"refusal","stop_details":{"type":"refusal","category":null,"recommended_model":"claude-opus-4-8"}},"usage":{"output_tokens":0}}"#,
+        r#"{"type":"message_stop"}"#,
+    ])
+    .unwrap();
+    let StreamEvent::Done(m) = &out[0] else {
+        panic!()
+    };
+    assert!(m.is_refusal());
+    let details = m.stop_details().unwrap();
+    assert_eq!(details.category, None);
+    assert_eq!(
+        details.recommended_model.as_deref(),
+        Some("claude-opus-4-8")
+    );
+}
+
 proptest::proptest! {
     #[test]
     fn arbitrary_stream_bytes_never_panic(body in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512), size in 1usize..32) {
@@ -1332,7 +1621,7 @@ proptest::proptest! {
     }
 
     #[test]
-    fn arbitrary_event_json_never_panics(data in "\\{\"type\":\"(content_block_(start|delta|stop)|message_(start|delta|stop)|ping)\",\"index\":[0-9]{1,3}(,\"delta\":\\{\"type\":\"(text_delta|input_json_delta|thinking_delta)\",\"(text|partial_json|thinking)\":\"[a-z{}\\[\\]:,]{0,6}\"\\})?(,\"content_block\":\\{\"type\":\"(text|tool_use|thinking)\",\"text\":\"\",\"id\":\"i\",\"name\":\"n\",\"input\":\\{\\}\\})?\\}", n in 1usize..6) {
+    fn arbitrary_event_json_never_panics(data in "\\{\"type\":\"(content_block_(start|delta|stop)|message_(start|delta|stop)|ping)\",\"index\":[0-9]{1,3}(,\"delta\":\\{\"type\":\"(text_delta|input_json_delta|thinking_delta)\",\"(text|partial_json|thinking)\":\"[a-z{}\\[\\]:,]{0,6}\"\\})?(,\"content_block\":\\{\"type\":\"(text|tool_use|thinking|fallback)\",\"text\":\"\",\"id\":\"i\",\"name\":\"n\",\"input\":\\{\\}\\})?\\}", n in 1usize..6) {
         let mut acc = MessageAccumulator::with_limit(4096);
         for _ in 0..n {
             let _ = acc.push(&data);

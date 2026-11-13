@@ -12,7 +12,9 @@ use rune_chain_core::{
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::config::{CachePolicy, CacheTtl, Effort, StructuredOutput, Thinking};
+use crate::config::{
+    CachePolicy, CacheTtl, Effort, Fallbacks, SERVER_SIDE_FALLBACK_BETA, StructuredOutput, Thinking,
+};
 use crate::http::{self, ApiKey};
 use crate::models::{self, ModelInfo};
 use crate::response::{ContentBlock, MessageResponse};
@@ -114,6 +116,8 @@ pub struct Anthropic {
     thinking: Option<Thinking>,
     effort: Option<Effort>,
     structured_output: StructuredOutput,
+    betas: Vec<String>,
+    fallbacks: Option<Fallbacks>,
     max_retries: u32,
     timeout: Duration,
     max_response_bytes: usize,
@@ -131,6 +135,8 @@ impl fmt::Debug for Anthropic {
             .field("thinking", &self.thinking)
             .field("effort", &self.effort)
             .field("structured_output", &self.structured_output)
+            .field("betas", &self.betas)
+            .field("fallbacks", &self.fallbacks)
             .field("max_retries", &self.max_retries)
             .field("timeout", &self.timeout)
             .finish_non_exhaustive()
@@ -162,6 +168,8 @@ impl Anthropic {
             thinking: None,
             effort: None,
             structured_output: StructuredOutput::Auto,
+            betas: Vec::new(),
+            fallbacks: None,
             max_retries: DEFAULT_MAX_RETRIES,
             timeout: DEFAULT_TIMEOUT,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
@@ -279,6 +287,79 @@ impl Anthropic {
     pub const fn structured_output(mut self, mode: StructuredOutput) -> Self {
         self.structured_output = mode;
         self
+    }
+
+    /// Opt into a beta feature: `name` is sent in the `anthropic-beta`
+    /// header of every request. Repeated names are sent once, and a
+    /// comma-separated list is split into its names.
+    ///
+    /// Settings are per client; for a one-off request, clone the client
+    /// (cheap) and add the beta to the clone.
+    ///
+    /// ```rust
+    /// use rune_chain_anthropic::Anthropic;
+    ///
+    /// let llm = Anthropic::new("sk-ant-example").beta("some-feature-2026-01-01");
+    /// ```
+    #[must_use]
+    pub fn beta(mut self, name: impl AsRef<str>) -> Self {
+        for part in name.as_ref().split(',').map(str::trim) {
+            if !part.is_empty() && !self.betas.iter().any(|b| b == part) {
+                self.betas.push(part.to_string());
+            }
+        }
+        self
+    }
+
+    /// Opt into several beta features; see [`beta`](Self::beta).
+    #[must_use]
+    pub fn betas<I, S>(self, names: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        names.into_iter().fold(self, Self::beta)
+    }
+
+    /// The beta names set with [`beta`](Self::beta), in order. The
+    /// fallback beta that [`fallbacks`](Self::fallbacks) adds is not listed.
+    #[must_use]
+    pub fn beta_names(&self) -> &[String] {
+        &self.betas
+    }
+
+    /// Re-run declined requests on a fallback model inside the same call
+    /// (the `fallbacks` field). Adds the
+    /// [`SERVER_SIDE_FALLBACK_BETA`](crate::SERVER_SIDE_FALLBACK_BETA) header
+    /// to generation requests. An invalid list fails locally before sending;
+    /// see [`Fallbacks::validate`].
+    ///
+    /// ```rust
+    /// use rune_chain_anthropic::{Anthropic, Fallbacks, models};
+    ///
+    /// let llm = Anthropic::new("sk-ant-example")
+    ///     .model(models::CLAUDE_OPUS_5_5)
+    ///     .fallbacks(Fallbacks::Default);
+    /// ```
+    #[must_use]
+    pub fn fallbacks(mut self, fallbacks: Fallbacks) -> Self {
+        self.fallbacks = Some(fallbacks);
+        self
+    }
+
+    /// The `anthropic-beta` header value: the configured betas plus the
+    /// fallback beta when `fallbacks` is sent, each once.
+    fn beta_header(&self, fallbacks: bool) -> Result<Option<HeaderValue>, LlmError> {
+        let mut names: Vec<&str> = self.betas.iter().map(String::as_str).collect();
+        if fallbacks && !names.contains(&SERVER_SIDE_FALLBACK_BETA) {
+            names.push(SERVER_SIDE_FALLBACK_BETA);
+        }
+        if names.is_empty() {
+            return Ok(None);
+        }
+        HeaderValue::from_str(&names.join(","))
+            .map(Some)
+            .map_err(|_| LlmError::other("beta name contains characters not allowed in a header"))
     }
 
     /// Set how many times a retryable failure is retried (default
@@ -558,6 +639,10 @@ impl Anthropic {
     ) -> Result<(), LlmError> {
         http::check_base_url(&self.base_url)?;
         self.cache.check_order().map_err(LlmError::other)?;
+        self.beta_header(self.fallbacks.is_some())?;
+        if let Some(fallbacks) = &self.fallbacks {
+            fallbacks.validate()?;
+        }
         for msg in messages {
             if msg.role == Role::Tool && msg.tool_call_id.is_none() {
                 return Err(LlmError::other(
@@ -691,15 +776,17 @@ impl Anthropic {
                 effort: self.effort,
                 format: None,
             },
+            fallbacks: self.fallbacks.clone(),
         }
     }
 
-    /// POST `body` to `path`, retrying retryable failures. Returns the
-    /// successful response (body unread).
+    /// POST `body` to `path` with the `beta` header, if any, retrying
+    /// retryable failures. Returns the successful response (body unread).
     async fn send<B: Serialize + Sync>(
         &self,
         path: &str,
         body: &B,
+        beta: Option<HeaderValue>,
         streaming: bool,
     ) -> Result<reqwest::Response, LlmError> {
         http::check_base_url(&self.base_url)?;
@@ -716,6 +803,9 @@ impl Anthropic {
                 .header("anthropic-version", ANTHROPIC_VERSION)
                 .header(CONTENT_TYPE, HeaderValue::from_static("application/json"))
                 .body(payload.clone());
+            if let Some(beta) = &beta {
+                request = request.header("anthropic-beta", beta.clone());
+            }
             if !streaming {
                 request = request.timeout(self.timeout);
             }
@@ -751,13 +841,15 @@ impl Anthropic {
     }
 
     async fn complete(&self, body: &MessagesRequest) -> Result<MessageResponse, LlmError> {
-        let response = self.send(MESSAGES_PATH, body, false).await?;
+        let beta = self.beta_header(body.fallbacks.is_some())?;
+        let response = self.send(MESSAGES_PATH, body, beta, false).await?;
         let bytes = http::read_capped(response, self.max_response_bytes).await?;
         decode_response(&bytes)
     }
 
     async fn open_stream(&self, body: &MessagesRequest) -> Result<MessageStream, LlmError> {
-        let response = self.send(MESSAGES_PATH, body, true).await?;
+        let beta = self.beta_header(body.fallbacks.is_some())?;
+        let response = self.send(MESSAGES_PATH, body, beta, true).await?;
         Ok(Box::pin(assemble_events(
             Box::pin(response.bytes_stream()),
             self.stream_limit(),
@@ -819,6 +911,7 @@ impl Anthropic {
             .send(
                 COUNT_TOKENS_PATH,
                 &CountTokensRequest::from(&request),
+                self.beta_header(false)?,
                 false,
             )
             .await?;
@@ -882,9 +975,7 @@ fn decode_response(body: &[u8]) -> Result<MessageResponse, LlmError> {
 /// Reject responses that cannot hold a complete structured answer.
 fn check_structured(message: &MessageResponse) -> Result<(), LlmError> {
     if message.is_refusal() {
-        return Err(LlmError::provider(
-            "the model declined the request (stop_reason: refusal)",
-        ));
+        return Err(LlmError::provider(refusal_message(message)));
     }
     if message.is_truncated() {
         return Err(LlmError::invalid_response(
@@ -892,6 +983,28 @@ fn check_structured(message: &MessageResponse) -> Result<(), LlmError> {
         ));
     }
     Ok(())
+}
+
+/// Describe a refusal, with the `stop_details` the API gave.
+fn refusal_message(message: &MessageResponse) -> String {
+    let mut out = String::from("the model declined the request (stop_reason: refusal");
+    if let Some(details) = message.stop_details() {
+        if let Some(category) = &details.category {
+            out.push_str(", category: ");
+            out.push_str(category);
+        }
+        if let Some(model) = &details.recommended_model {
+            out.push_str(", recommended model: ");
+            out.push_str(model);
+        }
+        if let Some(explanation) = &details.explanation {
+            out.push_str("): ");
+            out.push_str(explanation);
+            return out;
+        }
+    }
+    out.push(')');
+    out
 }
 
 /// Turn a byte stream of SSE (an HTTP response body) into typed events.

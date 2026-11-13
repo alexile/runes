@@ -3,7 +3,10 @@
 use rune_chain_core::{LlmError, ToolCall};
 use serde_json::Value;
 
-use crate::response::{ContentBlock, MessageResponse, Usage};
+use crate::response::{
+    ContentBlock, FallbackSwitch, MessageResponse, StopDetails, Usage, UsageIteration,
+    iterations_from,
+};
 use crate::types::{Delta, ResponseContentBlock, SseEvent};
 
 /// Default cap on the content a streamed response may accumulate
@@ -26,6 +29,10 @@ pub enum StreamEvent {
     /// A complete tool call, emitted when its block closes with the
     /// streamed `input_json_delta` fragments assembled and parsed.
     ToolCall(ToolCall),
+    /// A server-side fallback switched models; what follows comes from
+    /// [`FallbackSwitch::to`]. Text streamed before it is kept in the
+    /// response.
+    Fallback(FallbackSwitch),
     /// The final, fully assembled response; always the last event.
     Done(MessageResponse),
 }
@@ -44,6 +51,7 @@ enum Partial {
         initial: Value,
         json: String,
     },
+    Fallback(FallbackSwitch),
     /// A block type this crate does not model; deltas to it are ignored.
     Unknown,
 }
@@ -95,7 +103,9 @@ pub struct MessageAccumulator {
     model: String,
     slots: Vec<Slot>,
     stop_reason: Option<String>,
+    stop_details: Option<StopDetails>,
     usage: Usage,
+    iterations: Vec<UsageIteration>,
     bytes: usize,
     max_bytes: usize,
     started: bool,
@@ -124,7 +134,9 @@ impl MessageAccumulator {
             model: String::new(),
             slots: Vec::new(),
             stop_reason: None,
+            stop_details: None,
             usage: Usage::new(0, 0, 0, 0),
+            iterations: Vec::new(),
             bytes: 0,
             max_bytes,
             started: false,
@@ -139,7 +151,8 @@ impl MessageAccumulator {
     }
 
     /// Consume one SSE `data` payload. Returns the event it completes, if
-    /// any (pings, starts and unknown event types yield `None`).
+    /// any (pings, unknown event types and block starts other than
+    /// `fallback` yield `None`).
     ///
     /// # Errors
     ///
@@ -155,7 +168,7 @@ impl MessageAccumulator {
             return Err(invalid("stream event after `message_stop`"));
         }
         match event {
-            SseEvent::MessageStart { message } => {
+            SseEvent::MessageStart { mut message } => {
                 if self.started {
                     return Err(invalid("duplicate `message_start`"));
                 }
@@ -163,6 +176,9 @@ impl MessageAccumulator {
                 self.id = message.id;
                 self.model = message.model;
                 self.usage.merge(&message.usage);
+                if let Some(list) = iterations_from(&mut message.usage) {
+                    self.iterations = list;
+                }
                 Ok(None)
             }
             SseEvent::ContentBlockStart {
@@ -171,11 +187,17 @@ impl MessageAccumulator {
             } => self.start_block(index, content_block),
             SseEvent::ContentBlockDelta { index, delta } => self.delta(index, delta),
             SseEvent::ContentBlockStop { index } => self.stop_block(index),
-            SseEvent::MessageDelta { delta, usage } => {
+            SseEvent::MessageDelta { delta, mut usage } => {
                 if delta.stop_reason.is_some() {
                     self.stop_reason = delta.stop_reason;
                 }
+                if let Some(details) = delta.stop_details {
+                    self.stop_details = Some(details.into());
+                }
                 self.usage.merge(&usage);
+                if let Some(list) = iterations_from(&mut usage) {
+                    self.iterations = list;
+                }
                 Ok(None)
             }
             SseEvent::MessageStop => {
@@ -204,6 +226,8 @@ impl MessageAccumulator {
             content,
             stop_reason: self.stop_reason.clone(),
             usage: self.usage,
+            stop_details: self.stop_details.clone(),
+            iterations: self.iterations.clone(),
         })
     }
 
@@ -274,14 +298,27 @@ impl MessageAccumulator {
                     json: String::new(),
                 }
             }
+            ResponseContentBlock::Fallback { from, to } => {
+                self.charge(from.model.len() + to.model.len())?;
+                // `message_start` named the first model; later output comes
+                // from the one switched to.
+                if !to.model.is_empty() {
+                    self.model.clone_from(&to.model);
+                }
+                Partial::Fallback(FallbackSwitch::new(from.model, to.model))
+            }
             ResponseContentBlock::Unknown => Partial::Unknown,
+        };
+        let event = match &partial {
+            Partial::Fallback(switch) => Some(StreamEvent::Fallback(switch.clone())),
+            _ => None,
         };
         self.slots.push(Slot {
             partial,
             done: None,
             closed: false,
         });
-        Ok(None)
+        Ok(event)
     }
 
     fn open_slot(&mut self, index: usize) -> Result<&mut Slot, LlmError> {
@@ -320,7 +357,7 @@ impl MessageAccumulator {
                 Ok(None)
             }
             // New delta kinds (e.g. citations) and blocks we do not model.
-            (_, Delta::Other) | (Partial::Unknown, _) => Ok(None),
+            (_, Delta::Other) | (Partial::Unknown | Partial::Fallback(_), _) => Ok(None),
             (_, _) => Err(invalid(format!(
                 "delta kind does not match content block {index}"
             ))),
@@ -366,6 +403,7 @@ fn finish_partial(partial: &Partial, closed: bool) -> Result<Option<ContentBlock
             name: name.clone(),
             input: tool_input(initial, json)?,
         }),
+        Partial::Fallback(switch) => Some(ContentBlock::Fallback(switch.clone())),
         Partial::Unknown => None,
     })
 }

@@ -1,6 +1,6 @@
 //! Request options beyond the portable [`Llm`](rune_chain_core::Llm)
-//! surface: prompt caching, extended thinking, effort and the structured
-//! output strategy.
+//! surface: prompt caching, extended thinking, effort, the structured
+//! output strategy, beta flags and server-side refusal fallbacks.
 
 use serde::Serialize;
 
@@ -285,4 +285,171 @@ pub enum StructuredOutput {
     /// No API-level constraint: the format's instructions are added as a
     /// system message (the [`Llm`](rune_chain_core::Llm) default).
     Prompt,
+}
+
+/// Beta flag for server-side refusal fallbacks; sent automatically when
+/// [`Anthropic::fallbacks`](crate::Anthropic::fallbacks) is set.
+pub const SERVER_SIDE_FALLBACK_BETA: &str = "server-side-fallback-2026-07-01";
+
+/// Server-side refusal fallbacks (the request's `fallbacks` field).
+///
+/// On models with safety classifiers (Claude Opus 5.5, Opus 5, Fable 5.1,
+/// Fable 5.2, Sonnet 5.5) a request can be declined with
+/// `stop_reason: "refusal"`. With fallbacks set, the API re-runs a declined
+/// request on another model inside the same call; the response then reports
+/// the switch (see [`MessageResponse::served_by_fallback`](crate::MessageResponse::served_by_fallback)
+/// and [`MessageResponse::fallback_switches`](crate::MessageResponse::fallback_switches)).
+/// A refusal on the final response means every model in the chain declined.
+///
+/// Setting fallbacks adds the [`SERVER_SIDE_FALLBACK_BETA`] header. Not
+/// accepted by the Batches API or on Bedrock, Vertex AI and Foundry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Fallbacks {
+    /// `"default"`: the API picks the fallback model by refusal category.
+    /// The preferred form; no model list to maintain.
+    Default,
+    /// An explicit chain of 1–3 distinct fallback models, tried in order.
+    Models(Vec<FallbackModel>),
+}
+
+impl Fallbacks {
+    /// Most entries the [`Models`](Self::Models) form may hold.
+    pub const MAX_MODELS: usize = 3;
+
+    /// An explicit fallback chain.
+    #[must_use]
+    pub fn models(models: impl IntoIterator<Item = FallbackModel>) -> Self {
+        Self::Models(models.into_iter().collect())
+    }
+
+    /// Check what can be checked locally: the [`Models`](Self::Models) form
+    /// needs 1–3 entries, each with a model id, and no entry twice.
+    ///
+    /// # Errors
+    ///
+    /// [`LlmError::other`](rune_chain_core::LlmError::other) describing the
+    /// first problem found.
+    pub fn validate(&self) -> Result<(), rune_chain_core::LlmError> {
+        let Self::Models(models) = self else {
+            return Ok(());
+        };
+        let err = |msg: String| Err(rune_chain_core::LlmError::other(msg));
+        if models.is_empty() || models.len() > Self::MAX_MODELS {
+            return err(format!(
+                "fallbacks need 1 to {} models, got {}",
+                Self::MAX_MODELS,
+                models.len()
+            ));
+        }
+        for (i, entry) in models.iter().enumerate() {
+            if entry.model.trim().is_empty() {
+                return err(format!("fallback entry {i} has an empty model id"));
+            }
+            if models[..i].contains(entry) {
+                return err(format!(
+                    "fallback entry {i} (`{}`) repeats an earlier entry",
+                    entry.model
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Serialize for Fallbacks {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Default => serializer.serialize_str("default"),
+            Self::Models(models) => models.serialize(serializer),
+        }
+    }
+}
+
+/// One entry of [`Fallbacks::Models`]: a fallback model and optional
+/// settings that apply to that attempt only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FallbackModel {
+    /// Model id, e.g. `claude-opus-4-8`.
+    pub model: String,
+    /// `max_tokens` for this attempt.
+    pub max_tokens: Option<u32>,
+    /// `thinking` for this attempt.
+    pub thinking: Option<Thinking>,
+    /// `output_config.effort` for this attempt.
+    pub effort: Option<Effort>,
+    /// `speed` for this attempt (e.g. `"fast"` where the model offers it).
+    pub speed: Option<String>,
+}
+
+impl FallbackModel {
+    /// A fallback to `model` with the request's own settings.
+    #[must_use]
+    pub fn new(model: impl Into<String>) -> Self {
+        Self {
+            model: model.into(),
+            max_tokens: None,
+            thinking: None,
+            effort: None,
+            speed: None,
+        }
+    }
+
+    /// Override `max_tokens` for this attempt.
+    #[must_use]
+    pub const fn with_max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    /// Override `thinking` for this attempt.
+    #[must_use]
+    pub const fn with_thinking(mut self, thinking: Thinking) -> Self {
+        self.thinking = Some(thinking);
+        self
+    }
+
+    /// Override the effort (`output_config.effort`) for this attempt.
+    #[must_use]
+    pub const fn with_effort(mut self, effort: Effort) -> Self {
+        self.effort = Some(effort);
+        self
+    }
+
+    /// Override `speed` for this attempt.
+    #[must_use]
+    pub fn with_speed(mut self, speed: impl Into<String>) -> Self {
+        self.speed = Some(speed.into());
+        self
+    }
+}
+
+impl Serialize for FallbackModel {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct EntryOutput {
+            effort: Effort,
+        }
+        #[derive(Serialize)]
+        struct Entry<'a> {
+            model: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            max_tokens: Option<u32>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            thinking: Option<Thinking>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            output_config: Option<EntryOutput>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            speed: Option<&'a str>,
+        }
+        Entry {
+            model: &self.model,
+            max_tokens: self.max_tokens,
+            thinking: self.thinking,
+            output_config: self.effort.map(|effort| EntryOutput { effort }),
+            speed: self.speed.as_deref(),
+        }
+        .serialize(serializer)
+    }
 }

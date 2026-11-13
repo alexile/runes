@@ -6,8 +6,8 @@
 
 use futures::StreamExt;
 use rune_chain_anthropic::{
-    Anthropic, CachePolicy, CacheTtl, DEFAULT_MAX_TOKENS, DEFAULT_STREAM_MAX_TOKENS, StreamEvent,
-    StructuredOutput, Usage, models,
+    Anthropic, CachePolicy, CacheTtl, DEFAULT_MAX_TOKENS, DEFAULT_STREAM_MAX_TOKENS, FallbackModel,
+    Fallbacks, SERVER_SIDE_FALLBACK_BETA, StreamEvent, StructuredOutput, Usage, models,
 };
 use rune_chain_core::LlmErrorKind;
 use rune_chain_core::testing::check_llm;
@@ -420,4 +420,109 @@ fn default_client_does_not_follow_redirects() {
     let err = tokio_test::block_on(llm.generate(&[Message::human("Hi")])).unwrap_err();
     assert_eq!(err.status(), Some(307), "{err:?}");
     assert_eq!(server.finish().unwrap().len(), 1);
+}
+
+#[test]
+fn fallbacks_send_the_beta_header_and_body_field() {
+    let server = MockServer::start([
+        MockResponse::json(200, fixture!("messages_fallback.json")),
+        MockResponse::json(200, fixture!("messages_fallback.json")),
+        MockResponse::json(200, r#"{"input_tokens":7}"#),
+    ])
+    .unwrap();
+    let base = client(&server).model(models::CLAUDE_OPUS_5_5);
+    let msgs = [Message::human("Explain the scanner.")];
+    tokio_test::block_on(async {
+        let reply = base
+            .clone()
+            .fallbacks(Fallbacks::Default)
+            .generate_message(&msgs, &[], None)
+            .await
+            .unwrap();
+        assert!(reply.served_by_fallback());
+
+        let llm = base
+            .clone()
+            .betas(["feature-a-2026-01-01", SERVER_SIDE_FALLBACK_BETA])
+            .fallbacks(Fallbacks::models([FallbackModel::new("claude-opus-4-8")]));
+        llm.generate_message(&msgs, &[], None).await.unwrap();
+        // Token counting takes the configured betas, not the fallback one.
+        base.clone()
+            .beta("feature-a-2026-01-01")
+            .fallbacks(Fallbacks::Default)
+            .count_tokens(&msgs, &[])
+            .await
+            .unwrap();
+    });
+
+    let requests = server.finish().unwrap();
+    assert_eq!(
+        requests[0].header("anthropic-beta"),
+        Some(SERVER_SIDE_FALLBACK_BETA)
+    );
+    assert_eq!(requests[0].json().unwrap()["fallbacks"], "default");
+    assert_eq!(
+        requests[1].header("anthropic-beta"),
+        Some("feature-a-2026-01-01,server-side-fallback-2026-07-01")
+    );
+    assert_eq!(
+        requests[1].json().unwrap()["fallbacks"],
+        json!([{ "model": "claude-opus-4-8" }])
+    );
+    assert_eq!(requests[2].path, "/v1/messages/count_tokens");
+    assert_eq!(
+        requests[2].header("anthropic-beta"),
+        Some("feature-a-2026-01-01")
+    );
+    assert!(requests[2].json().unwrap().get("fallbacks").is_none());
+}
+
+#[test]
+fn no_beta_header_without_betas() {
+    let server =
+        MockServer::start([MockResponse::json(200, fixture!("messages_text.json"))]).unwrap();
+    tokio_test::block_on(client(&server).generate(&[Message::human("Hi")])).unwrap();
+    assert!(
+        server.finish().unwrap()[0]
+            .header("anthropic-beta")
+            .is_none()
+    );
+}
+
+#[test]
+fn invalid_fallbacks_never_reach_the_server() {
+    let server = MockServer::start([]).unwrap();
+    let llm = client(&server).fallbacks(Fallbacks::models([]));
+    let err = tokio_test::block_on(llm.generate(&[Message::human("Hi")])).unwrap_err();
+    assert!(err.message().contains("fallbacks"));
+    assert_eq!(server.finish().unwrap().len(), 0);
+}
+
+#[test]
+fn stream_message_reports_a_mid_stream_fallback() {
+    let server =
+        MockServer::start(
+            [MockResponse::event_stream(fixture!("stream_fallback.sse")).chunked(11)],
+        )
+        .unwrap();
+    let events: Vec<StreamEvent> = tokio_test::block_on(async {
+        let stream = client(&server)
+            .model(models::CLAUDE_OPUS_5_5)
+            .fallbacks(Fallbacks::Default)
+            .stream_message(&[Message::human("Explain the parser.")], &[], None)
+            .await
+            .unwrap();
+        stream.map(Result::unwrap).collect().await
+    });
+    assert!(matches!(&events[1], StreamEvent::Fallback(s) if s.to == "claude-opus-4-8"));
+    let Some(StreamEvent::Done(message)) = events.last() else {
+        panic!("{events:?}")
+    };
+    assert!(message.served_by_fallback());
+    assert_eq!(message.text(), "The parser reads\n each rule file once.");
+    let requests = server.finish().unwrap();
+    assert_eq!(
+        requests[0].header("anthropic-beta"),
+        Some(SERVER_SIDE_FALLBACK_BETA)
+    );
 }

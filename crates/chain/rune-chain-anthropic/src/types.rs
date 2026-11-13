@@ -5,7 +5,7 @@ use rune_chain_core::{LlmError, LlmErrorKind};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::config::{CacheControl, Effort, Thinking};
+use crate::config::{CacheControl, Effort, Fallbacks, Thinking};
 
 // ── request ──────────────────────────────────────────────────────────────────
 
@@ -28,6 +28,8 @@ pub struct MessagesRequest {
     pub thinking: Option<Thinking>,
     #[serde(skip_serializing_if = "OutputConfig::is_empty")]
     pub output_config: OutputConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallbacks: Option<Fallbacks>,
 }
 
 /// Body of `/v1/messages/count_tokens`: the request minus generation
@@ -213,7 +215,30 @@ pub struct MessagesResponse {
     pub content: Vec<ResponseContentBlock>,
     #[serde(default)]
     pub stop_reason: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub stop_details: Option<StopDetailsReport>,
     pub usage: UsageReport,
+}
+
+/// `stop_details` (set on a refusal). Every field is optional and unknown
+/// ones are ignored.
+#[derive(Debug, Default, Deserialize)]
+pub struct StopDetailsReport {
+    #[serde(rename = "type", default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub explanation: Option<String>,
+    #[serde(default)]
+    pub recommended_model: Option<String>,
+}
+
+/// `{"model": …}` as used by the `from`/`to` fields of a fallback block.
+#[derive(Debug, Default, Deserialize)]
+pub struct ModelRef {
+    #[serde(default)]
+    pub model: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -238,6 +263,13 @@ pub enum ResponseContentBlock {
         #[serde(default)]
         data: String,
     },
+    /// A server-side fallback switched models at this point.
+    Fallback {
+        #[serde(default, deserialize_with = "lenient_or_default")]
+        from: ModelRef,
+        #[serde(default, deserialize_with = "lenient_or_default")]
+        to: ModelRef,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -246,6 +278,25 @@ pub enum ResponseContentBlock {
 /// carry only some of them; absent and `null` both read as "not reported".
 #[derive(Debug, Default, Deserialize)]
 pub struct UsageReport {
+    #[serde(default)]
+    pub input_tokens: Option<u32>,
+    #[serde(default)]
+    pub output_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_creation_input_tokens: Option<u32>,
+    #[serde(default)]
+    pub cache_read_input_tokens: Option<u32>,
+    /// Per-attempt usage (`usage.iterations`), e.g. one entry per model
+    /// tried when a fallback ran.
+    #[serde(default, deserialize_with = "lenient_list")]
+    pub iterations: Option<Vec<IterationReport>>,
+}
+
+/// One entry of `usage.iterations`. Unknown fields are ignored.
+#[derive(Debug, Default, Deserialize)]
+pub struct IterationReport {
+    #[serde(rename = "type", default)]
+    pub kind: String,
     #[serde(default)]
     pub input_tokens: Option<u32>,
     #[serde(default)]
@@ -309,10 +360,50 @@ where
     Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+/// Read an optional object, treating `null` or a value of the wrong shape
+/// as absent, so a field this crate only reports never fails a response.
+fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
+/// [`lenient`], falling back to the type's default.
+fn lenient_or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+{
+    Ok(lenient(deserializer)?.unwrap_or_default())
+}
+
+/// A list whose malformed entries are skipped; anything but an array reads
+/// as absent.
+fn lenient_list<'de, D, T>(deserializer: D) -> Result<Option<Vec<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Array(items) => Some(
+            items
+                .into_iter()
+                .filter_map(|v| serde_json::from_value(v).ok())
+                .collect(),
+        ),
+        _ => None,
+    })
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub struct MessageDeltaBody {
     #[serde(default)]
     pub stop_reason: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub stop_details: Option<StopDetailsReport>,
 }
 
 #[derive(Debug, Deserialize)]

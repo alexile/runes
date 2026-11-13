@@ -145,6 +145,51 @@ into `generation`/`text()`.
 complete tool calls (streamed `input_json_delta` fragments assembled and
 parsed), and finally the whole `MessageResponse` with usage.
 
+## Refusal fallbacks
+
+Claude Opus 5.5, Opus 5, Fable 5.1, Fable 5.2 and Sonnet 5.5 can decline a
+request (`stop_reason: "refusal"`), now and then even for ordinary security
+tooling work. With `fallbacks` set, the API re-runs a declined request on a
+fallback model inside the same call:
+
+```rust,no_run
+use rune_chain_anthropic::{Anthropic, Fallbacks, models};
+use rune_chain_core::Message;
+
+# async fn run() {
+let llm = Anthropic::from_env().unwrap()
+    .model(models::CLAUDE_OPUS_5_5)
+    .fallbacks(Fallbacks::Default); // the API picks the fallback model
+
+let reply = llm
+    .generate_message(&[Message::human("Explain how this YARA rule matches.")], &[], None)
+    .await
+    .unwrap();
+if reply.served_by_fallback() {
+    println!("answered by {}", reply.model);
+}
+if let Some(details) = reply.stop_details() {
+    // The whole chain declined.
+    println!("refused: {:?}, try {:?}", details.category, details.recommended_model);
+}
+# }
+```
+
+`Fallbacks::models([FallbackModel::new("claude-opus-4-8")])` names the chain
+yourself (1–3 models, each with optional `max_tokens`, thinking, effort and
+speed overrides). The `server-side-fallback-2026-07-01` beta header is added for
+you; `.beta(..)` sends any other beta names. Fallbacks are not available on
+Bedrock, Vertex AI or Foundry.
+
+Each switch shows up as a `ContentBlock::Fallback` (and a
+`StreamEvent::Fallback` while streaming); text from before the switch is kept.
+`served_by_fallback()` also checks `usage.iterations`, since a turn routed
+straight to the fallback model has no such block. To send the turn back
+verbatim, serialize `reply.replay_content()`: it keeps the `fallback` blocks in
+place and drops thinking and tool calls from before the last switch. The
+portable `Llm` path drops the same blocks, but `rune_chain_core::Message` has
+no place for the `fallback` block itself.
+
 ## Security and reliability
 
 - The API key is sent only as a sensitive `x-api-key` header; `Debug` prints

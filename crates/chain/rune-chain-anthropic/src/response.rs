@@ -1,9 +1,15 @@
 //! Provider-level view of a Messages API response.
 
 use rune_chain_core::{FinishReason, GenerateResult, ReasoningBlock, TokenUsage, ToolCall};
+use serde::Serialize;
 use serde_json::Value;
 
-use crate::types::{MessagesResponse, ResponseContentBlock, UsageReport};
+use crate::types::{
+    IterationReport, MessagesResponse, ResponseContentBlock, StopDetailsReport, UsageReport,
+};
+
+/// `usage.iterations` entry type of an attempt served by a fallback model.
+pub const FALLBACK_ITERATION: &str = "fallback_message";
 
 /// Token usage as reported by the Messages API, including prompt-cache
 /// accounting.
@@ -111,6 +117,150 @@ pub enum ContentBlock {
         /// Tool input (a JSON object).
         input: Value,
     },
+    /// A server-side fallback switched models here (a `fallback` block).
+    /// Output before it came from [`FallbackSwitch::from`], output after it
+    /// from [`FallbackSwitch::to`].
+    Fallback(FallbackSwitch),
+}
+
+/// The models on either side of a `fallback` content block.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct FallbackSwitch {
+    /// Model that declined.
+    pub from: String,
+    /// Model that took over.
+    pub to: String,
+}
+
+impl FallbackSwitch {
+    /// A switch from one model to another.
+    #[must_use]
+    pub fn new(from: impl Into<String>, to: impl Into<String>) -> Self {
+        Self {
+            from: from.into(),
+            to: to.into(),
+        }
+    }
+}
+
+/// Why the model stopped, beyond the bare `stop_reason` (the response's
+/// `stop_details`; set on a refusal).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct StopDetails {
+    /// `type`, e.g. `refusal`.
+    pub kind: String,
+    /// Refusal category such as `cyber` or `bio`, if one applies.
+    pub category: Option<String>,
+    /// Human-readable explanation, if given.
+    pub explanation: Option<String>,
+    /// A model to retry on, given when the fallback model could not run
+    /// (for example because it was rate limited).
+    pub recommended_model: Option<String>,
+}
+
+impl From<StopDetailsReport> for StopDetails {
+    fn from(r: StopDetailsReport) -> Self {
+        Self {
+            kind: r.kind.unwrap_or_default(),
+            category: r.category,
+            explanation: r.explanation,
+            recommended_model: r.recommended_model,
+        }
+    }
+}
+
+/// One attempt's usage from `usage.iterations`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct UsageIteration {
+    /// Entry `type`; [`FALLBACK_ITERATION`] for an attempt served by a
+    /// fallback model.
+    pub kind: String,
+    /// Tokens of this attempt (fields the entry leaves out read as 0).
+    pub usage: Usage,
+}
+
+impl UsageIteration {
+    /// `true` for an attempt served by a fallback model.
+    #[must_use]
+    pub fn is_fallback(&self) -> bool {
+        self.kind == FALLBACK_ITERATION
+    }
+}
+
+impl From<IterationReport> for UsageIteration {
+    fn from(r: IterationReport) -> Self {
+        Self {
+            kind: r.kind,
+            usage: Usage::new(
+                r.input_tokens.unwrap_or(0),
+                r.output_tokens.unwrap_or(0),
+                r.cache_creation_input_tokens.unwrap_or(0),
+                r.cache_read_input_tokens.unwrap_or(0),
+            ),
+        }
+    }
+}
+
+pub fn iterations_from(report: &mut UsageReport) -> Option<Vec<UsageIteration>> {
+    report
+        .iterations
+        .take()
+        .map(|list| list.into_iter().map(UsageIteration::from).collect())
+}
+
+/// Wire form of a content block, for sending an assistant turn back.
+impl Serialize for ContentBlock {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct ModelRef<'a> {
+            model: &'a str,
+        }
+        #[derive(Serialize)]
+        #[serde(tag = "type", rename_all = "snake_case")]
+        enum Wire<'a> {
+            Text {
+                text: &'a str,
+            },
+            Thinking {
+                thinking: &'a str,
+                signature: &'a str,
+            },
+            RedactedThinking {
+                data: &'a str,
+            },
+            ToolUse {
+                id: &'a str,
+                name: &'a str,
+                input: &'a Value,
+            },
+            Fallback {
+                from: ModelRef<'a>,
+                to: ModelRef<'a>,
+            },
+        }
+        match self {
+            Self::Text { text } => Wire::Text { text },
+            Self::Thinking {
+                thinking,
+                signature,
+            } => Wire::Thinking {
+                thinking,
+                signature,
+            },
+            Self::RedactedThinking { data } => Wire::RedactedThinking { data },
+            Self::ToolUse { id, name, input } => Wire::ToolUse { id, name, input },
+            Self::Fallback(switch) => Wire::Fallback {
+                from: ModelRef {
+                    model: &switch.from,
+                },
+                to: ModelRef { model: &switch.to },
+            },
+        }
+        .serialize(serializer)
+    }
 }
 
 /// A complete Messages API response with everything the portable
@@ -124,7 +274,8 @@ pub enum ContentBlock {
 pub struct MessageResponse {
     /// Message id (`msg_…`).
     pub id: String,
-    /// Model that produced the message.
+    /// Model that produced the message (the fallback model when a fallback
+    /// served it).
     pub model: String,
     /// Content blocks in order.
     pub content: Vec<ContentBlock>,
@@ -133,6 +284,10 @@ pub struct MessageResponse {
     pub stop_reason: Option<String>,
     /// Token usage.
     pub usage: Usage,
+    /// `stop_details`, when reported (on a refusal).
+    pub stop_details: Option<StopDetails>,
+    /// Per-attempt usage (`usage.iterations`), when reported.
+    pub iterations: Vec<UsageIteration>,
 }
 
 impl MessageResponse {
@@ -175,10 +330,11 @@ impl MessageResponse {
         parts.join("\n")
     }
 
-    /// Tool calls, with arguments as JSON text.
+    /// Tool calls, with arguments as JSON text. After a server-side
+    /// fallback only the calls made after the last switch count.
     #[must_use]
     pub fn tool_calls(&self) -> Vec<ToolCall> {
-        self.content
+        self.after_last_fallback()
             .iter()
             .filter_map(|b| match b {
                 ContentBlock::ToolUse { id, name, input } => {
@@ -195,6 +351,73 @@ impl MessageResponse {
         self.stop_reason.as_deref() == Some("refusal")
     }
 
+    /// `stop_details` (category, explanation, recommended model), when
+    /// reported. On a refusal with fallbacks set, it describes the last
+    /// model in the chain.
+    #[must_use]
+    pub const fn stop_details(&self) -> Option<&StopDetails> {
+        self.stop_details.as_ref()
+    }
+
+    /// Per-attempt usage (`usage.iterations`); empty when not reported.
+    #[must_use]
+    pub fn iterations(&self) -> &[UsageIteration] {
+        &self.iterations
+    }
+
+    /// `true` when a fallback model produced this message.
+    ///
+    /// Based on a [`FALLBACK_ITERATION`] entry in `usage.iterations`, the
+    /// reliable signal: turns routed straight to the fallback model carry no
+    /// `fallback` block. A `fallback` block counts too.
+    #[must_use]
+    pub fn served_by_fallback(&self) -> bool {
+        self.iterations.iter().any(UsageIteration::is_fallback)
+            || self.fallback_switches().next().is_some()
+    }
+
+    /// The points where a server-side fallback switched models, in order.
+    pub fn fallback_switches(&self) -> impl Iterator<Item = &FallbackSwitch> {
+        self.content.iter().filter_map(|b| match b {
+            ContentBlock::Fallback(switch) => Some(switch),
+            _ => None,
+        })
+    }
+
+    /// The content to send back as this assistant turn: every block in
+    /// order, `fallback` blocks kept where they appeared, minus the thinking
+    /// and tool-use blocks that came before the last `fallback` block.
+    /// Serialize the blocks to get the wire form.
+    #[must_use]
+    pub fn replay_content(&self) -> Vec<ContentBlock> {
+        let cut = self.last_fallback_index().unwrap_or(0);
+        self.content
+            .iter()
+            .enumerate()
+            .filter(|(i, b)| {
+                *i >= cut
+                    || !matches!(
+                        b,
+                        ContentBlock::Thinking { .. }
+                            | ContentBlock::RedactedThinking { .. }
+                            | ContentBlock::ToolUse { .. }
+                    )
+            })
+            .map(|(_, b)| b.clone())
+            .collect()
+    }
+
+    fn last_fallback_index(&self) -> Option<usize> {
+        self.content
+            .iter()
+            .rposition(|b| matches!(b, ContentBlock::Fallback(_)))
+    }
+
+    fn after_last_fallback(&self) -> &[ContentBlock] {
+        self.last_fallback_index()
+            .map_or(&self.content[..], |i| &self.content[i + 1..])
+    }
+
     /// `true` when output was cut off at `max_tokens`.
     #[must_use]
     pub fn is_truncated(&self) -> bool {
@@ -202,10 +425,11 @@ impl MessageResponse {
     }
 
     /// Thinking and redacted-thinking blocks as portable
-    /// [`ReasoningBlock`]s, signatures included, in order.
+    /// [`ReasoningBlock`]s, signatures included, in order. After a
+    /// server-side fallback only the blocks after the last switch count.
     #[must_use]
     pub fn reasoning(&self) -> Vec<ReasoningBlock> {
-        self.content
+        self.after_last_fallback()
             .iter()
             .filter_map(|b| match b {
                 ContentBlock::Thinking {
@@ -267,9 +491,10 @@ pub fn finish_reason(stop_reason: &str) -> FinishReason {
 }
 
 impl From<MessagesResponse> for MessageResponse {
-    fn from(body: MessagesResponse) -> Self {
+    fn from(mut body: MessagesResponse) -> Self {
         let mut usage = Usage::default();
         usage.merge(&body.usage);
+        let iterations = iterations_from(&mut body.usage).unwrap_or_default();
         Self {
             id: body.id,
             model: body.model,
@@ -280,6 +505,8 @@ impl From<MessagesResponse> for MessageResponse {
                 .collect(),
             stop_reason: body.stop_reason,
             usage,
+            stop_details: body.stop_details.map(StopDetails::from),
+            iterations,
         }
     }
 }
@@ -297,6 +524,9 @@ impl ContentBlock {
                 signature,
             },
             ResponseContentBlock::RedactedThinking { data } => Self::RedactedThinking { data },
+            ResponseContentBlock::Fallback { from, to } => {
+                Self::Fallback(FallbackSwitch::new(from.model, to.model))
+            }
             ResponseContentBlock::Unknown => return None,
         })
     }

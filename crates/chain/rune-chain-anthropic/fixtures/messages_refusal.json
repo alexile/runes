@@ -1,0 +1,16 @@
+{
+  "id": "msg_01RfD3nT6yH8kQ2wZ5vB9cXa",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-opus-5-5",
+  "content": [],
+  "stop_reason": "refusal",
+  "stop_sequence": null,
+  "stop_details": {
+    "type": "refusal",
+    "category": "cyber",
+    "explanation": "The fallback model is rate limited.",
+    "recommended_model": "claude-opus-4-8"
+  },
+  "usage": { "input_tokens": 80, "output_tokens": 0 }
+}

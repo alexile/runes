@@ -13,7 +13,8 @@
 //! - `from_env()` — reads `ANTHROPIC_API_KEY` from the environment
 //! - Builder methods — `model()`, `temperature()`, `max_tokens()`, `base_url()`,
 //!   `http_client()`, `cache()`, `thinking()`, `effort()`, `structured_output()`,
-//!   `max_retries()`, `timeout()`, `max_response_bytes()`
+//!   `beta()`, `betas()`, `fallbacks()`, `max_retries()`, `timeout()`,
+//!   `max_response_bytes()`
 //! - Output budget defaults sized for thinking models: [`DEFAULT_MAX_TOKENS`]
 //!   (16 000) for blocking calls, [`DEFAULT_STREAM_MAX_TOKENS`] (64 000) for
 //!   streams, capped at a known model's output limit
@@ -36,6 +37,9 @@
 //!   provider response (thinking, stop reason, cache-token usage) and typed
 //!   [`StreamEvent`]s with tool-call JSON assembled by [`MessageAccumulator`]
 //! - [`Anthropic::count_tokens`] — `/v1/messages/count_tokens`
+//! - Server-side refusal fallbacks — [`Fallbacks`] re-runs a declined request
+//!   on a fallback model in the same call; beta flags via `beta()`
+//!   / `betas()`
 //! - Hardened transport — redacted API key, HTTPS-only (except localhost),
 //!   redirects not followed, bounded bodies, default timeouts, retries on
 //!   408/409/429/5xx/529 honouring `retry-after`
@@ -62,6 +66,30 @@
 //!     "{} uncached, {} written to cache, {} read from cache",
 //!     usage.input_tokens, usage.cache_creation_input_tokens, usage.cache_read_input_tokens,
 //! );
+//! # });
+//! ```
+//!
+//! # Refusal fallbacks
+//!
+//! ```rust,no_run
+//! use rune_chain_anthropic::{Anthropic, Fallbacks, models};
+//! use rune_chain_core::Message;
+//!
+//! # tokio_test::block_on(async {
+//! let llm = Anthropic::from_env()
+//!     .unwrap()
+//!     .model(models::CLAUDE_OPUS_5_5)
+//!     .fallbacks(Fallbacks::Default);
+//!
+//! let reply = llm
+//!     .generate_message(&[Message::human("Explain how this YARA rule matches.")], &[], None)
+//!     .await
+//!     .unwrap();
+//! if reply.served_by_fallback() {
+//!     println!("answered by {}", reply.model);
+//! } else if let Some(details) = reply.stop_details() {
+//!     println!("declined ({:?}); try {:?}", details.category, details.recommended_model);
+//! }
 //! # });
 //! ```
 //!
@@ -164,7 +192,13 @@ pub use client::{
     DEFAULT_MAX_RETRIES, DEFAULT_MAX_TOKENS, DEFAULT_STREAM_MAX_TOKENS, DEFAULT_TIMEOUT,
     MessageStream,
 };
-pub use config::{CachePolicy, CacheTtl, Effort, StructuredOutput, Thinking, ThinkingDisplay};
+pub use config::{
+    CachePolicy, CacheTtl, Effort, FallbackModel, Fallbacks, SERVER_SIDE_FALLBACK_BETA,
+    StructuredOutput, Thinking, ThinkingDisplay,
+};
 pub use models::ModelInfo;
-pub use response::{ContentBlock, MessageResponse, Usage, finish_reason};
+pub use response::{
+    ContentBlock, FALLBACK_ITERATION, FallbackSwitch, MessageResponse, StopDetails, Usage,
+    UsageIteration, finish_reason,
+};
 pub use stream::{DEFAULT_MAX_STREAM_BYTES, MessageAccumulator, StreamEvent};
