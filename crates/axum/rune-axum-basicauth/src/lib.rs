@@ -58,12 +58,13 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use http::{HeaderValue, StatusCode, header, request::Parts};
 use pin_project_lite::pin_project;
 use std::{
+    fmt,
     future::Future,
     pin::Pin,
     sync::Arc,
     task::{self, Poll},
 };
-use subtle::ConstantTimeEq;
+use subtle::{Choice, ConstantTimeEq};
 use tower_layer::Layer;
 use tower_service::Service;
 
@@ -87,13 +88,26 @@ use tower_service::Service;
 ///
 /// let app: Router = Router::new().route("/", get(handler));
 /// ```
-#[derive(Debug, Clone)]
+///
+/// `Debug` output redacts the password.
+#[derive(Clone)]
 pub struct BasicAuth {
     /// The username from the `Authorization: Basic` header.
     pub username: String,
     /// The password from the `Authorization: Basic` header.
     pub password: String,
 }
+
+impl fmt::Debug for BasicAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BasicAuth")
+            .field("username", &self.username)
+            .field("password", &REDACTED)
+            .finish()
+    }
+}
+
+const REDACTED: &str = "[redacted]";
 
 /// Rejection returned when [`BasicAuth`] extraction fails.
 ///
@@ -159,7 +173,8 @@ fn unauthorized() -> Response {
 /// Extracts `Authorization: Basic` credentials and compares them against the
 /// configured username and password using constant-time byte comparison.
 /// Requests with missing, malformed, or incorrect credentials receive
-/// `401 Unauthorized` before reaching the handler.
+/// `401 Unauthorized` before reaching the handler. `Debug` output redacts the
+/// configured credentials.
 ///
 /// # Examples
 ///
@@ -177,7 +192,7 @@ fn unauthorized() -> Response {
 ///     axum::serve(listener, app).await.unwrap();
 /// }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BasicAuthLayer {
     username: Arc<[u8]>,
     password: Arc<[u8]>,
@@ -205,6 +220,15 @@ impl BasicAuthLayer {
     }
 }
 
+impl fmt::Debug for BasicAuthLayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BasicAuthLayer")
+            .field("username", &REDACTED)
+            .field("password", &REDACTED)
+            .finish()
+    }
+}
+
 impl<S> Layer<S> for BasicAuthLayer {
     type Service = BasicAuthService<S>;
 
@@ -218,11 +242,34 @@ impl<S> Layer<S> for BasicAuthLayer {
 }
 
 /// Tower [`Service`] produced by [`BasicAuthLayer`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct BasicAuthService<S> {
     inner: S,
     username: Arc<[u8]>,
     password: Arc<[u8]>,
+}
+
+impl<S: fmt::Debug> fmt::Debug for BasicAuthService<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BasicAuthService")
+            .field("inner", &self.inner)
+            .field("username", &REDACTED)
+            .field("password", &REDACTED)
+            .finish()
+    }
+}
+
+/// Compares presented bytes with the configured ones in constant time.
+///
+/// `subtle`'s slice comparison returns early when the lengths differ, which
+/// tells a client how long the password is. This walks the presented bytes
+/// only, so the time depends on what the client sent, never on the secret.
+fn ct_matches(given: &[u8], expected: &[u8]) -> Choice {
+    let diff = given
+        .iter()
+        .zip(expected.iter().cycle())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+    diff.ct_eq(&0) & given.len().ct_eq(&expected.len())
 }
 
 impl<S, ReqB> Service<http::Request<ReqB>> for BasicAuthService<S>
@@ -244,8 +291,8 @@ where
             .and_then(decode_basic);
 
         let authorized = credentials.as_ref().is_some_and(|creds| {
-            let user_ok = creds.username.as_bytes().ct_eq(&self.username);
-            let pass_ok = creds.password.as_bytes().ct_eq(&self.password);
+            let user_ok = ct_matches(creds.username.as_bytes(), &self.username);
+            let pass_ok = ct_matches(creds.password.as_bytes(), &self.password);
             bool::from(user_ok & pass_ok)
         });
 
@@ -436,5 +483,33 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn debug_never_prints_the_password() {
+        let layer = BasicAuthLayer::new("alice", "p4ssw0rd");
+        let bytes = format!("{:?}", b"p4ssw0rd");
+        let bytes = &bytes[1..bytes.len() - 1];
+        assert!(!format!("{layer:?}").contains(bytes), "{layer:?}");
+        let service = layer.layer(());
+        assert!(!format!("{service:?}").contains(bytes), "{service:?}");
+        let creds = BasicAuth {
+            username: "alice".to_owned(),
+            password: "p4ssw0rd".to_owned(),
+        };
+        let rendered = format!("{creds:?}");
+        assert!(rendered.contains("alice") && !rendered.contains("p4ssw0rd"));
+    }
+
+    #[test]
+    fn credential_comparison() {
+        let eq = |a: &[u8], b: &[u8]| bool::from(ct_matches(a, b));
+        assert!(eq(b"abc", b"abc"));
+        assert!(eq(b"", b""));
+        assert!(!eq(b"abd", b"abc"));
+        assert!(!eq(b"ab", b"abc"));
+        assert!(!eq(b"abcabc", b"abc"));
+        assert!(!eq(b"", b"abc"));
+        assert!(!eq(b"a", b""));
     }
 }
