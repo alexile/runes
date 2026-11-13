@@ -1,7 +1,7 @@
 //! JSON resources: OIDC discovery, Digital Asset Links and Apple
 //! App Site Association.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -375,13 +375,12 @@ impl AppleAppSiteAssociation {
         .into_iter()
         .flatten()
         .flat_map(|l| &l.apps);
-        let mut out: Vec<&str> = Vec::new();
-        for id in details.chain(lists) {
-            if !out.contains(&id.as_str()) {
-                out.push(id);
-            }
-        }
-        out
+        let mut seen: HashSet<&str> = HashSet::new();
+        details
+            .chain(lists)
+            .map(String::as_str)
+            .filter(|id| seen.insert(id))
+            .collect()
     }
 }
 
@@ -477,5 +476,22 @@ mod tests {
             ]
         );
         assert!(AppleAppSiteAssociation::parse(r#"{"applinks":{"details":{}}}"#).is_err());
+    }
+
+    // Regression: each id was compared with every id kept so far, so a
+    // 1 MiB file of distinct ids took seconds.
+    #[test]
+    fn app_ids_dedupe_in_linear_time() {
+        let ids: Vec<String> = (0..100_000).map(|i| format!("\"{i}\"")).collect();
+        let text = format!(r#"{{"webcredentials":{{"apps":[{}]}}}}"#, ids.join(","));
+        assert!(text.len() <= crate::MAX_BODY_LEN);
+        let a = AppleAppSiteAssociation::parse(&text).unwrap();
+        let start = std::time::Instant::now();
+        assert_eq!(a.app_ids().len(), 100_000);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            start.elapsed()
+        );
     }
 }
