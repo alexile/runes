@@ -304,3 +304,29 @@ proptest! {
         prop_assert_eq!(again.log.entries.len(), har.log.entries.len());
     }
 }
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Real captures with a few bytes changed: whatever still parses as
+    /// JSON reaches the lenient field readers with odd types and values.
+    #[test]
+    fn reading_never_panics_on_mutated_captures(
+        which in 0usize..3,
+        edits in vec((any::<prop::sample::Index>(), any::<u8>()), 1..6),
+    ) {
+        let seeds: [&[u8]; 3] = [
+            include_bytes!("fixtures/charles.har"),
+            include_bytes!("fixtures/chrome.har"),
+            include_bytes!("fixtures/firefox.har"),
+        ];
+        let mut input = seeds[which].to_vec();
+        for (at, byte) in edits {
+            let i = at.index(input.len());
+            input[i] = byte;
+        }
+        if let Ok(report) = read(&input, &ReadOptions::default()) {
+            let _ = write(&report.exchanges, &WriteOptions::default());
+        }
+    }
+}

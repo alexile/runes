@@ -207,14 +207,12 @@ pub fn read(input: &[u8], options: &ReadOptions) -> Result<ReadReport, HarError>
         .filter_map(|warning| warning.entry)
         .collect();
     skipped.sort_unstable();
-    let original = |mut index: usize| {
-        for &gap in &skipped {
-            if gap <= index {
-                index += 1;
-            }
-        }
-        index
-    };
+    // File position of each kept entry, built in one pass.
+    let mut gaps = skipped.iter().copied().peekable();
+    let kept: Vec<usize> = (0..har.log.entries.len() + skipped.len())
+        .filter(|&position| gaps.next_if_eq(&position).is_none())
+        .collect();
+    let original = |index: usize| kept.get(index).copied().unwrap_or(index);
     let mut report = to_exchanges(&har, options, &original);
     warnings.append(&mut report.warnings);
     report.warnings = warnings;
@@ -570,6 +568,31 @@ mod tests {
             report.warnings[1]
                 .to_string()
                 .starts_with("entries[1]: skipped")
+        );
+    }
+
+    #[test]
+    fn many_skipped_entries_take_linear_time() {
+        // Alternate kept and malformed entries; ids must still be file
+        // positions, without rescanning every skipped index per entry.
+        let pairs = 60_000;
+        let mut input = String::from(r#"{"log": {"entries": ["#);
+        for _ in 0..pairs {
+            input.push_str(r#"{"request": {"method": "GET"}}, 1, "#);
+        }
+        input.push_str("1]}}");
+        let started = std::time::Instant::now();
+        let report = read(input.as_bytes(), &ReadOptions::default()).unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(report.exchanges.len(), pairs);
+        assert_eq!(report.exchanges[1].id, ExchangeId(2));
+        assert_eq!(
+            report.exchanges[pairs - 1].id,
+            ExchangeId(2 * (pairs as u64 - 1))
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "{pairs} pairs took {elapsed:?}"
         );
     }
 
