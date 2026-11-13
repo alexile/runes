@@ -1,13 +1,11 @@
 //! The [`ServiceProbe`] implementation.
 
 use rune_service_probe::banner::{printable, split_line};
-use rune_service_probe::rune_finding::{
-    Confidence, Evidence, Finding, Remediation, Severity, TaxonomyRef,
-};
+use rune_service_probe::rune_finding::{Confidence, Evidence, Remediation, Severity, TaxonomyRef};
 use rune_service_probe::{Action, End, ProbeSession, ServiceInfo, ServiceProbe, Target};
 
-use crate::audit::{Category, audit, terrapin_exposed};
 use crate::hostkey::parse_kex_reply_host_key;
+use crate::policy::Policy;
 use crate::wire::{
     MSG_DEBUG, MSG_DISCONNECT, MSG_IGNORE, MSG_KEX_INIT, MSG_UNIMPLEMENTED, Reader, encode_packet,
     put_string,
@@ -96,25 +94,23 @@ const HOST_KEY_PREFERENCE: [&str; 8] = [
 /// [`ServiceInfo`] fields it fills: `product` and `version` from the
 /// software version, `banner` (the identification line), `capabilities`
 /// (every offered algorithm as `kex:…`, `host_key:…`, `cipher:…`, `mac:…`,
-/// `compression:…`) and `details` under `ssh.*`. Findings:
+/// `compression:…`) and `details` under `ssh.*`, including `ssh.grade`,
+/// `ssh.grade_reason` and `ssh.policy`.
 ///
-/// | Check id                       | When                                                      |
-/// | ------------------------------ | --------------------------------------------------------- |
-/// | `ssh.protocol_v1`              | the server offers SSH-1 (`SSH-1.x`, `SSH-1.99`)          |
-/// | `ssh.weak_kex`                 | SHA-1 or 1024-bit key exchange offered                    |
-/// | `ssh.weak_host_key_algorithm`  | `ssh-rsa` or `ssh-dss` signatures offered                 |
-/// | `ssh.weak_cipher`              | CBC, RC4, 64-bit block or `none` ciphers offered          |
-/// | `ssh.weak_mac`                 | MD5, SHA-1, truncated, 64-bit or `none` MACs offered      |
-/// | `ssh.terrapin`                 | exposed to CVE-2023-48795 (no strict KEX)                 |
-/// | `ssh.weak_host_key`            | the host key is DSA or RSA below 2048 bits                |
-///
-/// See [`audit::classify`](crate::audit::classify) for the policy.
+/// Findings are those of [`Report::findings`](crate::policy::Report::findings)
+/// for the probe's [`Policy`] (modern by default; see
+/// [`with_policy`](Self::with_policy)): `ssh.protocol_v1`,
+/// `ssh.weak_<category>`, `ssh.discouraged_<category>`, `ssh.terrapin`
+/// and tentative `ssh.cve-…` version matches. On top of those,
+/// `ssh.weak_host_key` reports a DSA host key or an RSA key below 2048
+/// bits.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SshProbe {
     client_software: String,
     host_key: bool,
     host_key_algorithm: Option<String>,
+    policy: Policy,
 }
 
 impl Default for SshProbe {
@@ -132,7 +128,31 @@ impl SshProbe {
             client_software: DEFAULT_CLIENT_SOFTWARE.to_owned(),
             host_key: true,
             host_key_algorithm: None,
+            policy: Policy::modern(),
         }
+    }
+
+    /// Grade servers with `policy` instead of [`Policy::modern`].
+    ///
+    /// ```
+    /// use rune_probe_ssh::SshProbe;
+    /// use rune_probe_ssh::audit::Category;
+    /// use rune_probe_ssh::policy::Policy;
+    ///
+    /// let probe = SshProbe::new()
+    ///     .with_policy(Policy::compatible().deny(Category::HostKey, "ssh-rsa"));
+    /// assert_eq!(probe.policy().profile().as_str(), "compatible");
+    /// ```
+    #[must_use]
+    pub fn with_policy(mut self, policy: Policy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// The grading policy.
+    #[must_use]
+    pub const fn policy(&self) -> &Policy {
+        &self.policy
     }
 
     /// Whether to run the key-exchange step that fetches the host key
@@ -450,11 +470,17 @@ impl Session {
         if let Some(pre) = self.pre_banner.take() {
             info = info.with_detail("ssh.pre_banner", pre);
         }
-        if ident.offers_ssh1() {
-            info = info.push_finding(self.protocol_v1(&ident));
+        let kexinit = self.kexinit.take();
+        if let Some(kexinit) = &kexinit {
+            info = Self::report_kexinit(info, kexinit);
         }
-        if let Some(kexinit) = self.kexinit.take() {
-            info = self.report_kexinit(info, &kexinit);
+        let report = self.probe.policy.grade(Some(&ident), kexinit.as_ref());
+        info = info
+            .with_detail("ssh.grade", report.grade.as_str())
+            .with_detail("ssh.grade_reason", report.grade_reason)
+            .with_detail("ssh.policy", report.profile.as_str());
+        for finding in report.findings(&self.target.location()) {
+            info = info.push_finding(finding);
         }
         if let Some((kex, host_key)) = self.negotiated.take() {
             info = info
@@ -473,30 +499,7 @@ impl Session {
         info
     }
 
-    fn protocol_v1(&self, ident: &Identification) -> Finding {
-        let severity = if ident.speaks_ssh2() {
-            Severity::Medium
-        } else {
-            Severity::High
-        };
-        self.target
-            .finding(
-                "ssh.protocol_v1",
-                "SSH server offers protocol version 1",
-                severity,
-                Confidence::Certain,
-            )
-            .push_evidence(Evidence::new(
-                "protocol_version",
-                ident.proto_version.clone(),
-            ))
-            .push_taxonomy(TaxonomyRef::cwe(327))
-            .with_remediation(Remediation::new(
-                "Disable SSH protocol 1; it has known cryptographic weaknesses.",
-            ))
-    }
-
-    fn report_kexinit(&self, mut info: ServiceInfo, kexinit: &KexInit) -> ServiceInfo {
+    fn report_kexinit(mut info: ServiceInfo, kexinit: &KexInit) -> ServiceInfo {
         let lists: [(&str, Vec<&str>); 5] = [
             ("kex", strs(&kexinit.kex_algorithms)),
             ("host_key", strs(&kexinit.server_host_key_algorithms)),
@@ -509,8 +512,7 @@ impl Session {
                 info = info.push_capability(format!("{label}:{name}"));
             }
         }
-        info = info
-            .with_detail("ssh.kex_algorithms", kexinit.kex_algorithms.join(","))
+        info.with_detail("ssh.kex_algorithms", kexinit.kex_algorithms.join(","))
             .with_detail(
                 "ssh.host_key_algorithms",
                 kexinit.server_host_key_algorithms.join(","),
@@ -532,59 +534,7 @@ impl Session {
                 kexinit.mac_server_to_client.join(","),
             )
             .with_detail("ssh.compression", kexinit.compression().join(","))
-            .with_detail("ssh.strict_kex", kexinit.strict_kex().to_string());
-
-        let weak = audit(kexinit);
-        for category in Category::ALL {
-            let mine: Vec<_> = weak.iter().filter(|w| w.category == category).collect();
-            let Some(severity) = mine.iter().map(|w| w.severity).max() else {
-                continue;
-            };
-            let names: Vec<&str> = mine.iter().map(|w| w.algorithm.as_str()).collect();
-            let mut finding = self
-                .target
-                .finding(
-                    category.check_id(),
-                    format!(
-                        "SSH server offers weak {} algorithms: {}",
-                        category_title(category),
-                        names.join(", ")
-                    ),
-                    severity,
-                    Confidence::Certain,
-                )
-                .push_taxonomy(TaxonomyRef::cwe(327))
-                .with_remediation(Remediation::new(format!(
-                    "Remove the listed {} algorithms from the server configuration.",
-                    category_title(category)
-                )));
-            for w in mine {
-                finding = finding.push_evidence(Evidence::new(w.algorithm.clone(), w.reason));
-            }
-            info = info.push_finding(finding);
-        }
-        if terrapin_exposed(kexinit) {
-            info = info.push_finding(
-                self.target
-                    .finding(
-                        "ssh.terrapin",
-                        "SSH server is exposed to the Terrapin attack (CVE-2023-48795)",
-                        Severity::Medium,
-                        Confidence::Firm,
-                    )
-                    .push_evidence(Evidence::new("strict_kex", "not offered"))
-                    .push_taxonomy(TaxonomyRef::cwe(354))
-                    .with_remediation(
-                        Remediation::new(
-                            "Upgrade to a server that supports strict key exchange, or disable \
-                             chacha20-poly1305@openssh.com and encrypt-then-MAC MACs with CBC ciphers.",
-                        )
-                        .push_reference("https://terrapin-attack.com/"),
-                    )
-                    .push_remediation_ref("https://nvd.nist.gov/vuln/detail/CVE-2023-48795"),
-            );
-        }
-        info
+            .with_detail("ssh.strict_kex", kexinit.strict_kex().to_string())
     }
 
     fn report_host_key(&self, mut info: ServiceInfo, key: &HostKey) -> ServiceInfo {
@@ -620,15 +570,6 @@ impl Session {
             );
         }
         info
-    }
-}
-
-const fn category_title(category: Category) -> &'static str {
-    match category {
-        Category::Kex => "key-exchange",
-        Category::HostKey => "host-key",
-        Category::Cipher => "cipher",
-        Category::Mac => "MAC",
     }
 }
 

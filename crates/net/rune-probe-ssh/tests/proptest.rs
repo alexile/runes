@@ -8,6 +8,9 @@
 #![allow(clippy::unwrap_used, reason = "test code")]
 
 use proptest::prelude::*;
+use rune_probe_ssh::audit::Category;
+use rune_probe_ssh::policy::{Level, Policy};
+use rune_probe_ssh::software::{Family, Version};
 use rune_probe_ssh::{
     HostKey, Identification, KexInit, SshProbe, encode_packet, parse_kex_reply_host_key,
     parse_packet,
@@ -103,5 +106,37 @@ proptest! {
             prop_assert!(banner.bytes().all(|b| (0x20..=0x7e).contains(&b)));
         }
         prop_assert!(sim.sent.len() <= 2);
+    }
+
+    #[test]
+    fn grading_is_total_and_profiles_are_ordered(k in kexinit(), banner in "[!-~]{1,40}") {
+        let ident = Identification::parse(format!("SSH-2.0-{banner}").as_bytes()).ok();
+        let modern = Policy::modern().grade(ident.as_ref(), Some(&k));
+        let compatible = Policy::compatible().grade(ident.as_ref(), Some(&k));
+        prop_assert_eq!(modern.algorithms.len(), compatible.algorithms.len());
+        for (m, c) in modern.algorithms.iter().zip(&compatible.algorithms) {
+            prop_assert!(c.level <= m.level, "{}", m.algorithm);
+        }
+        prop_assert!(compatible.grade <= modern.grade);
+        let _ = modern.findings(&rune_service_probe::rune_finding::Location::network("h", 22));
+    }
+
+    #[test]
+    fn rules_pin_levels(name in "[a-z0-9@.-]{1,24}") {
+        for category in Category::ALL {
+            let denied = Policy::compatible().deny(category, name.clone());
+            prop_assert_eq!(denied.assess(category, &name).level, Level::Fail);
+            let allowed = Policy::modern().deny(category, "*").allow(category, name.clone());
+            prop_assert_eq!(allowed.assess(category, &name).level, Level::Info);
+        }
+    }
+
+    #[test]
+    fn versions_order_like_tuples(a in prop::collection::vec(0u32..50, 1..5), b in prop::collection::vec(0u32..50, 1..5)) {
+        let text = |v: &[u32]| v.iter().map(u32::to_string).collect::<Vec<_>>().join(".");
+        let va = Version::parse(Family::Dropbear, &text(&a)).unwrap();
+        let vb = Version::parse(Family::Dropbear, &text(&b)).unwrap();
+        let pad = |v: &[u32]| { let mut v = v.to_vec(); v.resize(5, 0); v };
+        prop_assert_eq!(va.cmp(&vb), pad(&a).cmp(&pad(&b)));
     }
 }

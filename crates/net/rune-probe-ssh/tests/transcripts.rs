@@ -8,7 +8,7 @@
 #![allow(clippy::unwrap_used, reason = "test code")]
 
 use rune_probe_ssh::{KexInit, SshProbe, encode_packet, parse_packet};
-use rune_service_probe::rune_finding::Severity;
+use rune_service_probe::rune_finding::{Confidence, Severity};
 use rune_service_probe::{End, Error, Options, ServiceInfo, Target, simulate};
 
 const ED25519: &str = "AAAAC3NzaC1lZDI1NTE5AAAAIOJv+0BnO5Sq9IS18Q8eLfxJL3GuLtonL4clXHHkg4EX";
@@ -162,9 +162,27 @@ fn modern_openssh_server() {
             .contains(&"compression:zlib@openssh.com".to_owned())
     );
     assert!(!info.details.contains_key("ssh.probe_error"));
-    // Only the SHA-1 and 64-bit-tag MACs; strict KEX blocks Terrapin.
-    assert_eq!(checks(&info), ["ssh.weak_mac"]);
-    let mac = &info.findings[0];
+    // Under the modern policy only the SHA-1 and 64-bit-tag MACs fail;
+    // NIST curves, the 2048-bit group and encrypt-and-MAC MACs draw
+    // warnings. Strict KEX blocks Terrapin. 9.6p1 is in two CVE ranges by
+    // version alone, even though Ubuntu backports the fixes.
+    assert_eq!(
+        checks(&info),
+        [
+            "ssh.discouraged_kex",
+            "ssh.discouraged_host_key_algorithm",
+            "ssh.weak_mac",
+            "ssh.discouraged_mac",
+            "ssh.cve-2024-6387",
+            "ssh.cve-2025-26466",
+        ]
+    );
+    assert_eq!(info.details["ssh.grade"], "C");
+    assert_eq!(info.details["ssh.policy"], "modern");
+    let cve = &info.findings[4];
+    assert_eq!(cve.confidence, Confidence::Tentative);
+    assert!(cve.evidence.iter().any(|e| e.label == "distribution"));
+    let mac = &info.findings[2];
     assert_eq!(mac.severity, Severity::Low);
     let flagged: Vec<&str> = mac.evidence.iter().map(|e| e.label.as_str()).collect();
     assert_eq!(
@@ -210,13 +228,23 @@ fn legacy_server_with_dh_and_short_rsa_key() {
         [
             "ssh.protocol_v1",
             "ssh.weak_kex",
+            "ssh.discouraged_kex",
             "ssh.weak_host_key_algorithm",
             "ssh.weak_cipher",
             "ssh.weak_mac",
+            "ssh.discouraged_mac",
+            "ssh.cve-2018-15473",
+            "ssh.cve-2016-6210",
             "ssh.weak_host_key",
         ]
     );
-    let sev: Vec<Severity> = info.findings.iter().map(|f| f.severity).collect();
+    assert_eq!(info.details["ssh.grade"], "F");
+    let sev: Vec<Severity> = info
+        .findings
+        .iter()
+        .filter(|f| f.check_id.starts_with("ssh.weak") || f.check_id == "ssh.protocol_v1")
+        .map(|f| f.severity)
+        .collect();
     assert_eq!(
         sev,
         [

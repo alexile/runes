@@ -1,10 +1,19 @@
-//! Weak-algorithm classification for a server's KEXINIT.
+//! Weak-algorithm classification and the Terrapin check for a server's
+//! KEXINIT.
+//!
+//! This is the plain "what is broken" view: an algorithm is weak when it
+//! fails the [`modern`](crate::policy::Profile::Modern) profile of the
+//! [algorithm table](crate::algorithms). For per-algorithm levels, other
+//! profiles, custom allow/deny lists and an overall grade, see
+//! [`policy`](crate::policy).
 
 use std::fmt;
 
 use rune_service_probe::rune_finding::Severity;
 
 use crate::KexInit;
+use crate::algorithms::lookup;
+use crate::policy::{Level, Profile};
 
 /// Which KEXINIT list an algorithm comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -18,14 +27,22 @@ pub enum Category {
     Cipher,
     /// MAC, either direction.
     Mac,
+    /// Compression method, either direction.
+    Compression,
 }
 
 impl Category {
     /// Every category, in KEXINIT order.
-    pub const ALL: [Self; 4] = [Self::Kex, Self::HostKey, Self::Cipher, Self::Mac];
+    pub const ALL: [Self; 5] = [
+        Self::Kex,
+        Self::HostKey,
+        Self::Cipher,
+        Self::Mac,
+        Self::Compression,
+    ];
 
-    /// The finding check id for weak algorithms of this category, e.g.
-    /// `ssh.weak_kex`.
+    /// The finding check id for algorithms of this category that fail a
+    /// policy, e.g. `ssh.weak_kex`.
     #[must_use]
     pub const fn check_id(self) -> &'static str {
         match self {
@@ -33,10 +50,25 @@ impl Category {
             Self::HostKey => "ssh.weak_host_key_algorithm",
             Self::Cipher => "ssh.weak_cipher",
             Self::Mac => "ssh.weak_mac",
+            Self::Compression => "ssh.weak_compression",
         }
     }
 
-    /// A short lowercase label: `kex`, `host_key`, `cipher` or `mac`.
+    /// The finding check id for algorithms a policy warns about, e.g.
+    /// `ssh.discouraged_kex`.
+    #[must_use]
+    pub const fn warn_check_id(self) -> &'static str {
+        match self {
+            Self::Kex => "ssh.discouraged_kex",
+            Self::HostKey => "ssh.discouraged_host_key_algorithm",
+            Self::Cipher => "ssh.discouraged_cipher",
+            Self::Mac => "ssh.discouraged_mac",
+            Self::Compression => "ssh.discouraged_compression",
+        }
+    }
+
+    /// A short lowercase label: `kex`, `host_key`, `cipher`, `mac` or
+    /// `compression`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -44,6 +76,47 @@ impl Category {
             Self::HostKey => "host_key",
             Self::Cipher => "cipher",
             Self::Mac => "mac",
+            Self::Compression => "compression",
+        }
+    }
+
+    /// A label for prose: `key-exchange`, `host-key`, `cipher`, `MAC` or
+    /// `compression`.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Kex => "key-exchange",
+            Self::HostKey => "host-key",
+            Self::Cipher => "cipher",
+            Self::Mac => "MAC",
+            Self::Compression => "compression",
+        }
+    }
+
+    /// The names `kexinit` offers in this category, in the server's order.
+    /// Ciphers, MACs and compression merge both directions.
+    ///
+    /// ```
+    /// use rune_probe_ssh::KexInit;
+    /// use rune_probe_ssh::audit::Category;
+    ///
+    /// let mut offer = KexInit::default();
+    /// offer.mac_client_to_server = vec!["hmac-sha2-256".into()];
+    /// offer.mac_server_to_client = vec!["hmac-sha2-512".into()];
+    /// assert_eq!(Category::Mac.offered(&offer), ["hmac-sha2-256", "hmac-sha2-512"]);
+    /// ```
+    #[must_use]
+    pub fn offered(self, kexinit: &KexInit) -> Vec<&str> {
+        match self {
+            Self::Kex => kexinit.kex_algorithms.iter().map(String::as_str).collect(),
+            Self::HostKey => kexinit
+                .server_host_key_algorithms
+                .iter()
+                .map(String::as_str)
+                .collect(),
+            Self::Cipher => kexinit.ciphers(),
+            Self::Mac => kexinit.macs(),
+            Self::Compression => kexinit.compression(),
         }
     }
 }
@@ -68,17 +141,17 @@ pub struct Weakness {
     pub reason: &'static str,
 }
 
-/// Classify one algorithm name. `None` means it is not known to be weak.
+/// Classify one algorithm name. `None` means it does not fail the modern
+/// profile (it may still draw a warning there; see
+/// [`Policy::assess`](crate::policy::Policy::assess)).
 ///
-/// The policy follows RFC 9142 (key exchange), RFC 8332 (`ssh-rsa`
-/// signatures), RFC 8758 (RC4) and current OpenSSH defaults:
-///
-/// | Category | Flagged                                                                 |
-/// | -------- | ----------------------------------------------------------------------- |
-/// | KEX      | SHA-1 exchange hashes; 1024-bit groups (`diffie-hellman-group1-sha1`)   |
-/// | Host key | `ssh-rsa` (SHA-1 signatures), `ssh-dss`                                 |
-/// | Cipher   | `none`, RC4, DES/3DES and other 64-bit blocks, any CBC mode             |
-/// | MAC      | `none`, MD5, SHA-1, 96-bit truncated tags, `umac-64`                    |
+/// | Category    | Weak                                                              |
+/// | ----------- | ----------------------------------------------------------------- |
+/// | KEX         | SHA-1 exchange hashes, 1024-bit groups, `rsa1024-sha1`, ECMQV     |
+/// | Host key    | `ssh-rsa` (SHA-1 signatures), `ssh-dss`                           |
+/// | Cipher      | `none`, RC4, DES/3DES and other 64-bit blocks, any CBC mode       |
+/// | MAC         | `none`, MD5, SHA-1, RIPEMD-160, 96-bit truncated tags, `umac-64`  |
+/// | Compression | nothing                                                           |
 ///
 /// ```
 /// use rune_probe_ssh::audit::{Category, classify};
@@ -90,69 +163,9 @@ pub struct Weakness {
 /// ```
 #[must_use]
 pub fn classify(category: Category, name: &str) -> Option<(Severity, &'static str)> {
-    match category {
-        Category::Kex => classify_kex(name),
-        Category::HostKey => classify_host_key(name),
-        Category::Cipher => classify_cipher(name),
-        Category::Mac => classify_mac(name),
-    }
-}
-
-fn classify_kex(name: &str) -> Option<(Severity, &'static str)> {
-    if name == "diffie-hellman-group1-sha1" || name.starts_with("gss-group1-sha1-") {
-        Some((Severity::Medium, "1024-bit Diffie-Hellman group with SHA-1"))
-    } else if name == "rsa1024-sha1" {
-        Some((Severity::Medium, "1024-bit RSA key exchange with SHA-1"))
-    } else if name.ends_with("-sha1") || name.contains("-sha1-") {
-        Some((Severity::Low, "SHA-1 exchange hash"))
-    } else {
-        None
-    }
-}
-
-fn classify_host_key(name: &str) -> Option<(Severity, &'static str)> {
-    let base = name.strip_prefix("x509v3-").unwrap_or(name);
-    let base = base.strip_suffix("-cert-v01@openssh.com").unwrap_or(base);
-    match base {
-        "ssh-dss" => Some((Severity::Medium, "DSA: 1024-bit keys and SHA-1 signatures")),
-        "ssh-rsa" => Some((Severity::Low, "RSA signatures with SHA-1")),
-        _ => None,
-    }
-}
-
-fn classify_cipher(name: &str) -> Option<(Severity, &'static str)> {
-    if name == "none" {
-        Some((Severity::High, "no encryption"))
-    } else if name.starts_with("arcfour") {
-        Some((Severity::Medium, "RC4 stream cipher"))
-    } else if name == "des" || name.starts_with("des-") {
-        Some((Severity::Medium, "56-bit DES"))
-    } else if ["3des", "blowfish", "cast128", "idea"]
-        .iter()
-        .any(|p| name.starts_with(p))
-    {
-        Some((Severity::Medium, "64-bit block cipher (Sweet32)"))
-    } else if name.contains("-cbc") {
-        Some((Severity::Low, "CBC mode (plaintext recovery attacks)"))
-    } else {
-        None
-    }
-}
-
-fn classify_mac(name: &str) -> Option<(Severity, &'static str)> {
-    if name == "none" {
-        Some((Severity::High, "no integrity protection"))
-    } else if name.starts_with("hmac-md5") {
-        Some((Severity::Medium, "MD5-based MAC"))
-    } else if name.ends_with("-96") || name.contains("-96-") {
-        Some((Severity::Low, "truncated 96-bit MAC"))
-    } else if name.starts_with("umac-64") {
-        Some((Severity::Low, "64-bit MAC tag"))
-    } else if name.starts_with("hmac-sha1") {
-        Some((Severity::Low, "SHA-1-based MAC"))
-    } else {
-        None
-    }
+    lookup(category, name)
+        .filter(|a| a.level(Profile::Modern) == Level::Fail)
+        .map(|a| (a.severity, a.reason))
 }
 
 /// Every weak algorithm in `kexinit`, by category and then in the server's
@@ -173,25 +186,9 @@ fn classify_mac(name: &str) -> Option<(Severity, &'static str)> {
 /// ```
 #[must_use]
 pub fn audit(kexinit: &KexInit) -> Vec<Weakness> {
-    let lists: [(Category, Vec<&str>); 4] = [
-        (
-            Category::Kex,
-            kexinit.kex_algorithms.iter().map(String::as_str).collect(),
-        ),
-        (
-            Category::HostKey,
-            kexinit
-                .server_host_key_algorithms
-                .iter()
-                .map(String::as_str)
-                .collect(),
-        ),
-        (Category::Cipher, kexinit.ciphers()),
-        (Category::Mac, kexinit.macs()),
-    ];
     let mut out = Vec::new();
-    for (category, names) in lists {
-        for name in names {
+    for category in Category::ALL {
+        for name in category.offered(kexinit) {
             if let Some((severity, reason)) = classify(category, name) {
                 out.push(Weakness {
                     category,
@@ -205,24 +202,67 @@ pub fn audit(kexinit: &KexInit) -> Vec<Weakness> {
     out
 }
 
-/// True when the offer is exposed to the Terrapin prefix-truncation attack.
+/// What the Terrapin check
+/// ([CVE-2023-48795](https://terrapin-attack.com/)) found in a KEXINIT.
 ///
-/// That is [CVE-2023-48795](https://terrapin-attack.com/): the server offers
-/// `chacha20-poly1305@openssh.com`, or a CBC cipher together with an
-/// encrypt-then-MAC MAC, and does not signal strict key exchange.
+/// The prefix-truncation attack works against
+/// `chacha20-poly1305@openssh.com` and against CBC ciphers combined with
+/// an encrypt-then-MAC MAC. Strict key exchange
+/// (`kex-strict-s-v00@openssh.com`, OpenSSH 9.6) shuts it out.
+///
+/// ```
+/// use rune_probe_ssh::KexInit;
+/// use rune_probe_ssh::audit::Terrapin;
+///
+/// let mut offer = KexInit::default();
+/// offer.encryption_server_to_client = vec!["aes256-cbc".into()];
+/// offer.mac_server_to_client = vec!["hmac-sha2-256-etm@openssh.com".into()];
+/// let t = Terrapin::assess(&offer);
+/// assert!(t.cbc_etm && !t.chacha20 && t.vulnerable());
+///
+/// offer.kex_algorithms.push("kex-strict-s-v00@openssh.com".into());
+/// assert!(!Terrapin::assess(&offer).vulnerable());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub struct Terrapin {
+    /// `chacha20-poly1305@openssh.com` is offered.
+    pub chacha20: bool,
+    /// A CBC cipher and an `-etm` MAC are both offered.
+    pub cbc_etm: bool,
+    /// The server advertises strict key exchange.
+    pub strict_kex: bool,
+}
+
+impl Terrapin {
+    /// Check `kexinit`.
+    #[must_use]
+    pub fn assess(kexinit: &KexInit) -> Self {
+        let ciphers = kexinit.ciphers();
+        let cbc = ciphers.iter().any(|c| c.contains("-cbc"));
+        let etm = kexinit
+            .macs()
+            .iter()
+            .any(|m| m.ends_with("-etm@openssh.com"));
+        Self {
+            chacha20: ciphers.contains(&"chacha20-poly1305@openssh.com"),
+            cbc_etm: cbc && etm,
+            strict_kex: kexinit.strict_kex(),
+        }
+    }
+
+    /// True when an affected mode is offered and strict key exchange is not.
+    #[must_use]
+    pub const fn vulnerable(&self) -> bool {
+        (self.chacha20 || self.cbc_etm) && !self.strict_kex
+    }
+}
+
+/// True when the offer is exposed to the Terrapin prefix-truncation attack;
+/// shorthand for `Terrapin::assess(kexinit).vulnerable()`; see [`Terrapin`].
 #[must_use]
 pub fn terrapin_exposed(kexinit: &KexInit) -> bool {
-    if kexinit.strict_kex() {
-        return false;
-    }
-    let ciphers = kexinit.ciphers();
-    let chacha = ciphers.contains(&"chacha20-poly1305@openssh.com");
-    let cbc = ciphers.iter().any(|c| c.contains("-cbc"));
-    let etm = kexinit
-        .macs()
-        .iter()
-        .any(|m| m.ends_with("-etm@openssh.com"));
-    chacha || (cbc && etm)
+    Terrapin::assess(kexinit).vulnerable()
 }
 
 #[cfg(test)]
@@ -248,6 +288,11 @@ mod tests {
                 "gss-group1-sha1-toWM5Slw5Ew8Mqkay+al2g==",
                 Severity::Medium,
             ),
+            (
+                Category::Kex,
+                "vendor-group-sha1@example.com",
+                Severity::Low,
+            ),
             (Category::HostKey, "ssh-dss", Severity::Medium),
             (
                 Category::HostKey,
@@ -255,9 +300,11 @@ mod tests {
                 Severity::Low,
             ),
             (Category::Cipher, "none", Severity::High),
+            (Category::Cipher, "des-cbc", Severity::High),
             (Category::Cipher, "arcfour256", Severity::Medium),
             (Category::Cipher, "3des-cbc", Severity::Medium),
             (Category::Cipher, "blowfish-cbc", Severity::Medium),
+            (Category::Cipher, "twofish256-cbc", Severity::Low),
             (
                 Category::Cipher,
                 "rijndael-cbc@lysator.liu.se",
@@ -271,6 +318,7 @@ mod tests {
             (Category::Mac, "hmac-sha1-96", Severity::Low),
             (Category::Mac, "hmac-sha1-etm@openssh.com", Severity::Low),
             (Category::Mac, "umac-64@openssh.com", Severity::Low),
+            (Category::Mac, "hmac-ripemd160@openssh.com", Severity::Low),
         ];
         for (category, name, severity) in weak {
             assert_eq!(
@@ -292,6 +340,7 @@ mod tests {
             (Category::Cipher, "chacha20-poly1305@openssh.com"),
             (Category::Mac, "hmac-sha2-256-etm@openssh.com"),
             (Category::Mac, "umac-128@openssh.com"),
+            (Category::Compression, "zlib"),
         ];
         for (category, name) in strong {
             assert_eq!(classify(category, name), None, "{name}");

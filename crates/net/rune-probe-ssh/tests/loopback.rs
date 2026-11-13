@@ -141,7 +141,16 @@ async fn fetches_host_key_and_hangs_up() {
         "SHA256:sy6hgZYNW2YfQFZt6xYCu+D96SlMGrevKRhp8XYPN74"
     );
     let checks: Vec<&str> = info.findings.iter().map(|f| f.check_id.as_str()).collect();
-    assert_eq!(checks, ["ssh.weak_cipher"]);
+    // OpenSSH_9.9 is before 9.9p2, so the banner heuristic flags it too.
+    assert_eq!(
+        checks,
+        [
+            "ssh.weak_cipher",
+            "ssh.discouraged_mac",
+            "ssh.cve-2025-26466"
+        ]
+    );
+    assert_eq!(info.details["ssh.grade"], "C");
 
     let seen = seen.await.unwrap();
     assert_eq!(seen.ident, b"SSH-2.0-rune_probe_ssh\r\n");

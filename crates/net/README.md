@@ -37,7 +37,7 @@ Network protocols and parsers: DNS, TLS, HTTP, IP, X.509, service probes, captur
 | [`rune-probe-ms`](rune-probe-ms) | Read-only SMB negotiate (dialect, signing, SMBv1) and RDP security-protocol negotiation probes |
 | [`rune-probe-nosql`](rune-probe-nosql) | Read-only Redis, MongoDB, Memcached and Elasticsearch probes for unauthenticated exposure |
 | [`rune-probe-sql`](rune-probe-sql) | Read-only MySQL/MariaDB, PostgreSQL and MSSQL (TDS prelogin) handshake and version probes |
-| [`rune-probe-ssh`](rune-probe-ssh) | Read-only SSH probe: identification string, KEXINIT algorithm audit and host-key fingerprint |
+| [`rune-probe-ssh`](rune-probe-ssh) | Read-only SSH probe and policy grader: banner, KEXINIT algorithm grading, Terrapin check, version CVE hints and host-key fingerprint |
 | [`rune-proxy-protocol`](rune-proxy-protocol) | HAProxy PROXY protocol v1 (text) and v2 (binary, TLVs) sans-I/O decoder and encoder, with an optional tokio adapter |
 | [`rune-rdap`](rune-rdap) | RDAP client for domains, IP networks and ASNs with IANA bootstrap (RFC 9224), typed responses, caching and rate limiting |
 | [`rune-service-probe`](rune-service-probe) | Read-only service probing framework: a sans-I/O ServiceProbe trait, ServiceInfo model and a bounded tokio runner |

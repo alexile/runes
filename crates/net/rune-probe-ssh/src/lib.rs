@@ -1,5 +1,6 @@
-//! Read-only SSH probe: the identification string, the server's offered
-//! algorithms with a weak-algorithm audit, and the host-key fingerprint.
+//! Read-only SSH probe and policy grader: the identification string, the
+//! server's offered algorithms graded against a policy, the Terrapin
+//! check, banner-based software detection, and the host-key fingerprint.
 //!
 //! [`SshProbe`] is a [`rune_service_probe::ServiceProbe`]: run it with the
 //! `rune-service-probe` runner (or [`simulate`](rune_service_probe::simulate)
@@ -9,8 +10,8 @@
 //!    ([RFC 4253 §4.2](https://www.rfc-editor.org/rfc/rfc4253#section-4.2)),
 //! 2. reads `SSH_MSG_KEXINIT`
 //!    ([§7.1](https://www.rfc-editor.org/rfc/rfc4253#section-7.1)) and audits
-//!    the offered key-exchange, host-key, cipher and MAC algorithms
-//!    ([`audit`]),
+//!    grades the offered key-exchange, host-key, cipher, MAC and
+//!    compression algorithms ([`policy`]),
 //! 3. starts a key exchange only far enough to read the server's public
 //!    host key and report its SHA-256 fingerprint, as `ssh-keyscan` does.
 //!
@@ -18,7 +19,20 @@
 //!
 //! The parsers it is built from are public and sans-I/O:
 //! [`Identification`], [`parse_packet`] / [`encode_packet`], [`KexInit`]
-//! and [`HostKey`].
+//! and [`HostKey`]. So is the grading:
+//!
+//! - [`policy`]: [`Policy`](policy::Policy) (profiles `modern` and
+//!   `compatible`, plus your own allow/deny lists) judges each algorithm
+//!   as fail, warn or info, and grades the server `A` to `F`;
+//!   [`Report::findings`](policy::Report::findings) turns the result into
+//!   `rune-finding` findings.
+//! - [`algorithms`]: the table behind it, with the RFC, NIST and OpenSSH
+//!   release-note sources for each entry.
+//! - [`audit`]: the plain weak-algorithm list and the Terrapin
+//!   (CVE-2023-48795) check.
+//! - [`software`]: server software and version from the banner, with a
+//!   small table of notable CVEs by version range. Heuristic: distribution
+//!   builds backport fixes without changing the version.
 //!
 //! # Example
 //!
@@ -68,18 +82,25 @@
 //! );
 //! assert!(info.capabilities.contains(&"cipher:aes128-cbc".to_owned()));
 //! let checks: Vec<&str> = info.findings.iter().map(|f| f.check_id.as_str()).collect();
-//! assert_eq!(checks, ["ssh.weak_kex", "ssh.weak_cipher"]);
+//! assert_eq!(
+//!     checks,
+//!     ["ssh.weak_kex", "ssh.weak_cipher", "ssh.discouraged_mac", "ssh.cve-2024-6387"],
+//! );
+//! assert_eq!(info.details["ssh.grade"], "D");
 //! # Ok::<(), rune_service_probe::Error>(())
 //! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod algorithms;
 pub mod audit;
 mod error;
 mod hostkey;
 mod kexinit;
+pub mod policy;
 mod probe;
+pub mod software;
 mod wire;
 
 pub use error::Error;
