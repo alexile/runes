@@ -19,6 +19,27 @@ proptest! {
     }
 
     #[test]
+    fn parsers_survive_corrupted_replies(
+        which in 0usize..4,
+        edits in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..6),
+    ) {
+        // Corrupt real replies so the inner decoders (negotiate contexts,
+        // SMB1 strings, RDP negotiation) see hostile values.
+        let mut reply = match which {
+            0 => common::windows_2022(1),
+            1 => common::smb1_response(0x0f, true),
+            2 => common::smb1_response(0x03, false),
+            _ => common::rdp_confirm(2, 0x1f, 8),
+        };
+        for (at, byte) in edits {
+            let at = at % reply.len();
+            reply[at] = byte;
+        }
+        let _ = smb::parse_negotiate(&reply);
+        let _ = rdp::parse_confirm(&reply);
+    }
+
+    #[test]
     fn smb2_fields_round_trip(
         dialect in any::<u16>(),
         mode in any::<u16>(),
