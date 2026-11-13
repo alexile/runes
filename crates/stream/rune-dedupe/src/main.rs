@@ -4,11 +4,11 @@
 #![allow(clippy::print_stdout)]
 
 use clap::Parser;
-use rune_dedupe::Dedupe;
+use rune_dedupe::{ApproxConfig, Dedupe};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Filter duplicate keys (one per line) within a trailing time window.
 ///
@@ -24,6 +24,15 @@ struct Args {
     /// Milliseconds to advance the simulated clock between lines.
     #[arg(long, default_value_t = 0)]
     step_ms: u64,
+    /// Remember at most this many keys, evicting the oldest first (exact mode).
+    #[arg(long, conflicts_with = "fpr")]
+    max_keys: Option<usize>,
+    /// Use fixed-memory approximate mode with this false-positive rate.
+    #[arg(long)]
+    fpr: Option<f64>,
+    /// Distinct keys per window to size approximate mode for.
+    #[arg(long, default_value_t = 1_000_000, requires = "fpr")]
+    expected_keys: usize,
     /// File of newline-separated keys, or `-` for stdin.
     path: String,
 }
@@ -43,10 +52,20 @@ fn main() -> ExitCode {
         }
     };
 
-    let mut dedupe = Dedupe::new(Duration::from_secs(args.window_secs));
-    let start = Instant::now();
-    let mut kept = 0usize;
-    let mut dropped = 0usize;
+    let mut builder = Dedupe::builder(Duration::from_secs(args.window_secs));
+    if let Some(max_keys) = args.max_keys {
+        builder = builder.max_keys(max_keys);
+    }
+    if let Some(fpr) = args.fpr {
+        builder = builder.approximate(ApproxConfig::new(args.expected_keys, fpr));
+    }
+    let mut dedupe: Dedupe<String, u64> = match builder.build() {
+        Ok(d) => d,
+        Err(err) => {
+            eprintln!("rune-dedupe: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
 
     for (line_no, line) in reader.lines().enumerate() {
         let line = match line {
@@ -59,15 +78,22 @@ fn main() -> ExitCode {
         if line.trim().is_empty() {
             continue;
         }
-        let at = start + Duration::from_millis(args.step_ms * line_no as u64);
+        let at = args.step_ms.saturating_mul(line_no as u64);
         if dedupe.check(line.clone(), at) {
             println!("{line}");
-            kept += 1;
-        } else {
-            dropped += 1;
         }
     }
 
-    eprintln!("{kept} kept, {dropped} duplicate(s) dropped");
+    let stats = dedupe.stats();
+    eprintln!(
+        "{} kept, {} duplicate(s) dropped",
+        stats.fresh, stats.duplicates
+    );
+    if stats.evicted_capacity > 0 {
+        eprintln!(
+            "{} key(s) evicted early by --max-keys",
+            stats.evicted_capacity
+        );
+    }
     ExitCode::SUCCESS
 }

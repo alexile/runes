@@ -1,20 +1,21 @@
 //! Idempotency/dedup filter over a keyed, windowed stream.
 //!
-//! Tracks the most recent time each key was seen and reports whether a new
-//! occurrence falls inside a trailing time window — the classic building block for
-//! at-least-once delivery systems that need at-most-once processing downstream
-//! (retried webhooks, redelivered queue messages, flaky sensor uplinks).
+//! Turns at-least-once delivery (retried webhooks, redelivered queue messages,
+//! flaky uplinks) into at-most-once processing by remembering which keys were
+//! accepted recently, with bounded memory and state that can be checkpointed.
 //!
-//! # Features
+//! # Pick a deduplicator
 //!
-//! - [`Dedupe::check`] — records a key/time pair and reports whether it's a duplicate.
-//! - Explicit `Instant` input (no internal clock), so behavior is fully deterministic
-//!   and testable.
-//! - Lazy expiry: stale entries are purged as part of `check`, so memory stays bounded
-//!   by the number of *distinct* keys seen within the trailing window, not the total
-//!   number of events ever processed.
+//! | Need | Use |
+//! | --- | --- |
+//! | Drop repeats within a TTL of arrival time | [`Dedupe`] in [`Mode::Exact`] |
+//! | Same, with fixed memory and a small false-positive rate | [`Dedupe`] in [`Mode::Approximate`] |
+//! | Drop repeats by *event* time, with watermarks | [`EventTimeDedupe`] |
 //!
-//! # Quick Start
+//! All of them take time as an argument instead of reading a clock, so runs are
+//! deterministic. Time can be an [`Instant`](std::time::Instant), a
+//! [`SystemTime`](std::time::SystemTime), or `i64`/`u64` milliseconds (see
+//! [`Timestamp`]).
 //!
 //! ```rust
 //! use rune_dedupe::Dedupe;
@@ -25,223 +26,157 @@
 //!
 //! assert!(dedupe.check("msg-1", start), "first time seeing this key");
 //! assert!(!dedupe.check("msg-1", start + Duration::from_secs(1)), "duplicate within window");
-//! assert!(dedupe.check("msg-1", start + Duration::from_secs(61)), "window elapsed, not a duplicate");
+//! assert!(dedupe.check("msg-1", start + Duration::from_secs(61)), "window elapsed");
 //! ```
+//!
+//! # Bounding memory
+//!
+//! Exact mode drops entries once they leave the window. On its own that bounds
+//! memory by the number of distinct keys per window, which an untrusted sender
+//! controls, so set a hard cap too. At the cap the **oldest accepted** key is
+//! evicted first: it is the one closest to expiring anyway. Capacity evictions
+//! are the only way exact mode can miss a duplicate, and each one is counted.
+//!
+//! Approximate mode stores no keys at all: the window is covered by a few
+//! rotating Bloom filters whose total size is fixed up front by
+//! [`ApproxConfig`]. It never misses a duplicate within the window (while sized
+//! correctly), and reports at most the configured fraction of new keys as
+//! duplicates.
+//!
+//! ```rust
+//! use rune_dedupe::{ApproxConfig, Dedupe};
+//! use std::time::Duration;
+//!
+//! let window = Duration::from_secs(600);
+//! let capped: Dedupe<String, u64> = Dedupe::builder(window).max_keys(250_000).build()?;
+//! let approx: Dedupe<String, u64> = Dedupe::builder(window)
+//!     .approximate(ApproxConfig::new(5_000_000, 0.0001))
+//!     .build()?;
+//! # Ok::<(), rune_dedupe::ConfigError>(())
+//! ```
+//!
+//! # Event time and watermarks
+//!
+//! [`EventTimeDedupe`] treats two occurrences as duplicates when their event
+//! times are within the window of each other, in either order, and only forgets
+//! an entry once the watermark has moved a full window past it. Events behind
+//! the watermark come back as [`Verdict::Late`] when they can't be decided.
+//! Timestamps default to `i64` milliseconds, matching `rune-watermark`, so its
+//! tracker plugs in directly:
+//!
+//! ```rust
+//! use rune_dedupe::{EventTimeDedupe, Verdict};
+//! use std::time::Duration;
+//!
+//! let mut dedupe: EventTimeDedupe<&str> = EventTimeDedupe::new(Duration::from_secs(5));
+//! for (key, ts) in [("a", 10_000), ("a", 7_000), ("b", 9_000)] {
+//!     // With rune-watermark: `tracker.observe(ts); if let Some(wm) = tracker.watermark() { .. }`
+//!     dedupe.advance_watermark(ts - 2_000);
+//!     let _ = dedupe.check(key, ts);
+//! }
+//! assert_eq!(dedupe.check("a", 12_000), Verdict::Duplicate);
+//! ```
+//!
+//! # Exactly-once with checkpoints
+//!
+//! A consumer that crashes after processing an event but before recording its
+//! progress will see the event again. To make that safe, commit the dedupe
+//! state and the input offset **together, atomically**, after the outputs for
+//! everything up to that offset are durable (or in the same transaction as
+//! them):
+//!
+//! 1. Read events from `offset`, call `check`, emit only fresh ones.
+//! 2. Periodically build a [`Checkpoint`] from the next offset and
+//!    [`Dedupe::snapshot`], serialize it (with the `serde` feature) and write it
+//!    in one atomic step: write a temp file and rename it over the old one, or
+//!    put it in the same database transaction as the outputs.
+//! 3. On start, load the checkpoint, [`Dedupe::restore`] the state and seek to
+//!    its offset. Replayed events hit the restored seen-set and are dropped.
+//!
+//! A restored deduplicator makes exactly the same decisions as the original
+//! (approximate mode included: the snapshot carries the hash key and filters).
+//! `rune-checkpoint` persists offsets only, as a `source -> u64` map, so it
+//! can't hold the seen-set; storing the two separately would let them drift
+//! apart on a crash. Keep the offset inside the [`Checkpoint`] and treat that
+//! as the source of truth.
+//!
+//! ```rust
+//! use rune_dedupe::{Checkpoint, Dedupe};
+//! use std::time::Duration;
+//!
+//! let mut dedupe: Dedupe<String, u64> = Dedupe::new(Duration::from_secs(60));
+//! let input = ["a", "b", "a", "c"];
+//! for key in &input[..2] {
+//!     dedupe.check((*key).to_owned(), 0);
+//! }
+//! let saved = Checkpoint { offset: 2, state: dedupe.snapshot() };
+//! // With the `serde` feature: serde_json::to_vec(&saved), write + rename.
+//!
+//! // ...crash, restart...
+//! let mut dedupe = Dedupe::restore(saved.state)?;
+//! let replayed: Vec<_> = input[saved.offset as usize..]
+//!     .iter()
+//!     .filter(|k| dedupe.check((**k).to_owned(), 1))
+//!     .collect();
+//! assert_eq!(replayed, [&"c"]);
+//! # Ok::<(), rune_dedupe::RestoreError>(())
+//! ```
+//!
+//! # Untrusted keys
+//!
+//! Keys are hashed with SipHash-2-4 under a secret random [`HashKey`], so
+//! nobody can craft keys that collide in the hash table (`HashDoS`) or that a
+//! Bloom filter would mistake for duplicates. Only pin a fixed key for
+//! reproducible tests.
+//!
+//! # Metrics
+//!
+//! Every deduplicator keeps [`Stats`] (seen, fresh, duplicates, late,
+//! evictions by reason) and can forward each [`MetricEvent`] to a callback.
 //!
 //! # CLI
 //!
 //! ```bash
 //! rune-dedupe --window-secs 60 keys.txt
-//! cat keys.txt | rune-dedupe --window-secs 60 -
+//! cat keys.txt | rune-dedupe --window-secs 60 --max-keys 100000 -
 //! ```
 
-use std::collections::HashMap;
-use std::hash::Hash;
-use std::time::{Duration, Instant};
+mod bloom;
+mod dedupe;
+mod error;
+mod event_time;
+mod hash;
+mod metrics;
+mod store;
+mod time;
 
-/// A deduplicator over keys of type `K`, tracking a trailing `window` of time.
-pub struct Dedupe<K> {
-    window: Duration,
-    seen: HashMap<K, Instant>,
-}
+pub use bloom::ApproxConfig;
+pub use dedupe::{Dedupe, DedupeBuilder, Mode, Snapshot};
+pub use error::{ConfigError, RestoreError};
+pub use event_time::{EventTimeBuilder, EventTimeDedupe, EventTimeSnapshot, Verdict};
+pub use hash::{HashKey, SipHasher24};
+pub use metrics::{EvictionReason, MetricEvent, Stats};
+pub use time::Timestamp;
 
-impl<K: Eq + Hash + Clone> Dedupe<K> {
-    /// Creates a deduplicator that treats a key as a duplicate if it was last seen
-    /// within `window` of the current check.
-    #[must_use]
-    pub fn new(window: Duration) -> Self {
-        Self {
-            window,
-            seen: HashMap::new(),
-        }
-    }
-
-    /// Checks `key` at time `at`. Returns `true` if this is the first time `key` has
-    /// been seen within the trailing window (records it), or `false` if it's a
-    /// duplicate (seen within the window already — its expiry is *not* reset).
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use rune_dedupe::Dedupe;
-    /// use std::time::{Duration, Instant};
-    ///
-    /// let start = Instant::now();
-    /// let mut dedupe = Dedupe::new(Duration::from_secs(10));
-    /// assert!(dedupe.check("a", start));
-    /// assert!(!dedupe.check("a", start + Duration::from_secs(5)));
-    /// ```
-    pub fn check(&mut self, key: K, at: Instant) -> bool {
-        self.purge_expired(at);
-
-        match self.seen.get(&key) {
-            Some(&last_seen) if at.saturating_duration_since(last_seen) <= self.window => false,
-            _ => {
-                self.seen.insert(key, at);
-                true
-            }
-        }
-    }
-
-    /// Number of distinct keys currently tracked (i.e. seen within the trailing window
-    /// as of the last `check` call).
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.seen.len()
-    }
-
-    /// Whether no keys are currently tracked.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.seen.is_empty()
-    }
-
-    fn purge_expired(&mut self, now: Instant) {
-        let window = self.window;
-        self.seen
-            .retain(|_, &mut last_seen| now.saturating_duration_since(last_seen) <= window);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn first_occurrence_is_not_a_duplicate() {
-        let mut dedupe = Dedupe::new(Duration::from_secs(10));
-        assert!(dedupe.check("a", Instant::now()));
-    }
-
-    #[test]
-    fn immediate_repeat_is_a_duplicate() {
-        let start = Instant::now();
-        let mut dedupe = Dedupe::new(Duration::from_secs(10));
-        assert!(dedupe.check("a", start));
-        assert!(!dedupe.check("a", start + Duration::from_millis(1)));
-    }
-
-    #[test]
-    fn repeat_after_window_elapsed_is_not_a_duplicate() {
-        let start = Instant::now();
-        let mut dedupe = Dedupe::new(Duration::from_secs(10));
-        assert!(dedupe.check("a", start));
-        assert!(dedupe.check("a", start + Duration::from_secs(11)));
-    }
-
-    #[test]
-    fn repeat_exactly_at_window_boundary_is_still_a_duplicate() {
-        let start = Instant::now();
-        let mut dedupe = Dedupe::new(Duration::from_secs(10));
-        assert!(dedupe.check("a", start));
-        assert!(!dedupe.check("a", start + Duration::from_secs(10)));
-    }
-
-    #[test]
-    fn distinct_keys_tracked_independently() {
-        let start = Instant::now();
-        let mut dedupe = Dedupe::new(Duration::from_secs(10));
-        assert!(dedupe.check("a", start));
-        assert!(dedupe.check("b", start));
-        assert!(!dedupe.check("a", start + Duration::from_secs(1)));
-        assert!(!dedupe.check("b", start + Duration::from_secs(1)));
-    }
-
-    #[test]
-    fn duplicate_check_does_not_reset_expiry() {
-        let start = Instant::now();
-        let mut dedupe = Dedupe::new(Duration::from_secs(10));
-        assert!(dedupe.check("a", start));
-        assert!(
-            !dedupe.check("a", start + Duration::from_secs(5)),
-            "still a duplicate"
-        );
-        // Expiry should still be relative to the original `start`, not the check at +5s.
-        assert!(
-            dedupe.check("a", start + Duration::from_secs(11)),
-            "window elapsed from original insert"
-        );
-    }
-
-    #[test]
-    fn purge_keeps_memory_bounded_and_fresh_keys_unaffected() {
-        let start = Instant::now();
-        let mut dedupe = Dedupe::new(Duration::from_secs(10));
-
-        for i in 0..1000 {
-            dedupe.check(i, start);
-        }
-        assert_eq!(dedupe.len(), 1000);
-
-        // Long after the window: a fresh key still behaves correctly, and the purge
-        // sweeps out all the now-expired entries instead of growing forever.
-        let far_future = start + Duration::from_secs(1000);
-        assert!(dedupe.check(999_999, far_future));
-        assert_eq!(
-            dedupe.len(),
-            1,
-            "all expired entries purged, only the fresh key remains"
-        );
-    }
-
-    #[test]
-    fn empty_dedupe_reports_empty() {
-        let dedupe: Dedupe<&str> = Dedupe::new(Duration::from_secs(10));
-        assert!(dedupe.is_empty());
-        assert_eq!(dedupe.len(), 0);
-    }
-
-    // ── Window boundaries ────────────────────────────────────────────────────
-
-    #[test]
-    fn one_nanosecond_past_window_is_fresh() {
-        let start = Instant::now();
-        let window = Duration::from_secs(10);
-        let mut dedupe = Dedupe::new(window);
-        assert!(dedupe.check("a", start));
-        assert!(!dedupe.check("a", start + window));
-        assert!(dedupe.check("a", start + window + Duration::from_nanos(1)));
-    }
-
-    #[test]
-    fn zero_window_only_dedupes_same_instant() {
-        let start = Instant::now();
-        let mut dedupe = Dedupe::new(Duration::ZERO);
-        assert!(dedupe.check("a", start));
-        assert!(!dedupe.check("a", start));
-        assert!(dedupe.check("a", start + Duration::from_nanos(1)));
-    }
-
-    #[test]
-    fn earlier_timestamp_is_treated_as_duplicate() {
-        // Clock skew: a check "before" the recorded time is within the window.
-        let earlier = Instant::now();
-        let later = earlier + Duration::from_secs(50);
-        let mut dedupe = Dedupe::new(Duration::from_secs(1));
-        assert!(dedupe.check("a", later));
-        assert!(!dedupe.check("a", earlier));
-    }
-
-    #[test]
-    fn reaccepted_key_starts_a_new_window() {
-        let start = Instant::now();
-        let mut dedupe = Dedupe::new(Duration::from_secs(10));
-        assert!(dedupe.check("a", start));
-        let again = start + Duration::from_secs(11);
-        assert!(dedupe.check("a", again));
-        assert!(!dedupe.check("a", again + Duration::from_secs(10)));
-        assert!(dedupe.check("a", again + Duration::from_secs(11)));
-    }
-
-    #[test]
-    fn purge_is_per_key() {
-        let start = Instant::now();
-        let mut dedupe = Dedupe::new(Duration::from_secs(10));
-        dedupe.check("old", start);
-        dedupe.check("new", start + Duration::from_secs(8));
-        // At +12s "old" expired, "new" has not.
-        assert!(dedupe.check("other", start + Duration::from_secs(12)));
-        assert_eq!(dedupe.len(), 2);
-        assert!(!dedupe.check("new", start + Duration::from_secs(12)));
-    }
+/// Dedupe state paired with the input offset it covers, to be committed in
+/// one atomic write. See the crate docs for the full pattern.
+///
+/// `S` is usually a [`Snapshot`] or [`EventTimeSnapshot`].
+///
+/// # Example
+///
+/// ```rust
+/// use rune_dedupe::{Checkpoint, EventTimeDedupe};
+///
+/// let d: EventTimeDedupe<u32> = EventTimeDedupe::new(std::time::Duration::from_secs(1));
+/// let cp = Checkpoint { offset: 42, state: d.snapshot() };
+/// assert_eq!(cp.offset, 42);
+/// ```
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Checkpoint<S> {
+    /// The next input position to read after restoring.
+    pub offset: u64,
+    /// The dedupe state as of just before `offset`.
+    pub state: S,
 }

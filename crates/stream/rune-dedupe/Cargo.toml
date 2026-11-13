@@ -1,12 +1,12 @@
 [package]
 name = "rune-dedupe"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 description = "Idempotency/dedup filter over a keyed, windowed stream"
 license.workspace = true
-keywords = ["dedup", "idempotency", "streaming", "cache", "window"]
+keywords = ["dedup", "idempotency", "streaming", "bloom-filter", "exactly-once"]
 categories = ["data-structures", "algorithms"]
 repository.workspace = true
 readme = "README.md"
@@ -23,12 +23,18 @@ path = "src/lib.rs"
 
 [features]
 cli = ["dep:clap"]
+serde = ["dep:serde"]
 
 [dependencies]
 clap = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
