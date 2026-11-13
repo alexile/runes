@@ -899,6 +899,7 @@ impl Converter<'_> {
         let mut out = Map::new();
         let mut nullable = false;
         let mut alternatives: Vec<Value> = Vec::new();
+        let mut all_of = None;
         let declared = lower_type(map);
         for (key, value) in map {
             let here = at(pointer, key);
@@ -1006,11 +1007,8 @@ impl Converter<'_> {
                 "allOf" => match value.as_array().map(Vec::as_slice) {
                     Some([only]) => {
                         let mut p = at(&here, "0");
-                        if let Value::Object(merged) = self.gemini(only, &mut p, depth + 1) {
-                            for (k, v) in merged {
-                                out.entry(k).or_insert(v);
-                            }
-                        }
+                        // Merged once every sibling keyword is in place.
+                        all_of = Some((here, self.gemini(only, &mut p, depth + 1)));
                     }
                     _ => self.blocking(&here, key, "allOf is not supported by Gemini"),
                 },
@@ -1022,6 +1020,9 @@ impl Converter<'_> {
                 _ => self.push(&here, key, Severity::Rejected, Action::Removed,
                     "keyword not supported by Gemini"),
             }
+        }
+        if let Some((here, Value::Object(merged))) = all_of {
+            self.merge_all_of(&mut out, merged, &here);
         }
         match alternatives.len() {
             0 => {}
@@ -1040,6 +1041,52 @@ impl Converter<'_> {
             out.insert("nullable".to_owned(), Value::Bool(true));
         }
         Value::Object(out)
+    }
+
+    /// Merge a converted one-item `allOf` into its parent. Both sides'
+    /// `required` names and `properties` are kept; any other keyword the two
+    /// sides set differently cannot be expressed, so it blocks export.
+    fn merge_all_of(
+        &mut self,
+        out: &mut Map<String, Value>,
+        merged: Map<String, Value>,
+        here: &str,
+    ) {
+        let mut clash = false;
+        for (key, value) in merged {
+            match (key.as_str(), out.get_mut(&key), value) {
+                (_, None, value) => {
+                    out.insert(key, value);
+                }
+                ("required", Some(Value::Array(names)), Value::Array(more)) => {
+                    for name in more {
+                        if !names.contains(&name) {
+                            names.push(name);
+                        }
+                    }
+                }
+                ("properties", Some(Value::Object(props)), Value::Object(more)) => {
+                    for (name, schema) in more {
+                        match props.get(&name) {
+                            None => {
+                                props.insert(name, schema);
+                            }
+                            Some(existing) => clash |= *existing != schema,
+                        }
+                    }
+                }
+                // The parent's own annotations win.
+                ("description" | "title", Some(_), _) => {}
+                (_, Some(existing), value) => clash |= *existing != value,
+            }
+        }
+        if clash {
+            self.blocking(
+                here,
+                "allOf",
+                "allOf sets a keyword its parent also sets differently; Gemini cannot express both",
+            );
+        }
     }
 
     fn gemini_enum(
@@ -1459,6 +1506,45 @@ mod tests {
                 "format"
             ]
         );
+    }
+
+    /// A one-item `allOf` is merged into its parent. Required fields on
+    /// either side must survive, or validation silently gets weaker.
+    #[test]
+    fn gemini_single_all_of_keeps_both_sides_constraints() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "user": {
+                    "allOf": [{
+                        "type": "object",
+                        "properties": { "id": { "type": "string" } },
+                        "required": ["id"]
+                    }],
+                    "properties": { "name": { "type": "string" } },
+                    "required": ["name"]
+                }
+            }
+        });
+        let (out, findings) = convert(Dialect::Gemini, &schema);
+        let user = &out["properties"]["user"];
+        assert_eq!(user["type"], "OBJECT");
+        assert_eq!(user["required"], json!(["name", "id"]));
+        assert_eq!(
+            user["properties"],
+            json!({ "id": { "type": "STRING" }, "name": { "type": "STRING" } })
+        );
+        assert_eq!(blocking(&findings), [] as [&str; 0]);
+
+        // Two sides that disagree on the same keyword cannot be merged.
+        let clash = json!({
+            "type": "object",
+            "properties": {
+                "n": { "allOf": [{ "type": "integer", "maximum": 5 }], "maximum": 9 }
+            }
+        });
+        let (_, findings) = convert(Dialect::Gemini, &clash);
+        assert_eq!(blocking(&findings), ["/properties/n/allOf"]);
     }
 
     #[test]
