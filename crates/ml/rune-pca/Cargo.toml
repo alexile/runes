@@ -1,10 +1,10 @@
 [package]
 name = "rune-pca"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Principal component analysis — exact (eigen / Jacobi SVD) and randomized SVD, whitening, inverse transform"
+description = "Principal component analysis — exact, randomized and incremental (batched) PCA, whitening, inverse transform"
 license.workspace = true
 keywords = ["pca", "svd", "dimensionality", "machine-learning", "statistics"]
 categories = ["algorithms", "science", "mathematics", "command-line-utilities"]
@@ -28,6 +28,7 @@ serde = ["dep:serde"]
 [dependencies]
 clap = { workspace = true, optional = true }
 rayon.workspace = true
+rune-ml-core.workspace = true
 serde = { workspace = true, optional = true }
 thiserror.workspace = true
 

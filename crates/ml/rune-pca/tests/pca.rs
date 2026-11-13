@@ -6,7 +6,7 @@
     reason = "test sizes are tiny, so the f64 conversions are exact"
 )]
 
-use rune_pca::{Components, Pca, PcaError, PcaModel, Solver};
+use rune_pca::{Components, IncrementalPca, Pca, PcaError, PcaModel, Solver};
 
 const EXACT: [Solver; 2] = [Solver::Covariance, Solver::Svd];
 const ALL: [Solver; 3] = [Solver::Covariance, Solver::Svd, Solver::Randomized];
@@ -111,6 +111,162 @@ fn sklearn_docstring_example() {
         assert_eq!(m.noise_variance(), 0.0);
         assert_orthonormal(&m);
     }
+}
+
+/// Hand-computed: the rows (2, 2), (−2, −2), (1, −1), (−1, 1) have mean 0 and
+/// `XᵀX = [[10, 6], [6, 10]]`, with eigenvalues 16 along (1, 1)/√2 and 4 along
+/// (1, −1)/√2. So σ = (4, 2), explained variance = σ²/(n − 1) = (16/3, 4/3),
+/// ratio = (0.8, 0.2), and (2, 2) projects to (2√2, 0). The same numbers come
+/// out of `sklearn.decomposition.PCA(2).fit(X)` (up to the component signs,
+/// which scikit-learn fixes from U rather than V).
+fn hand_example() -> Vec<Vec<f64>> {
+    vec![
+        vec![2.0, 2.0],
+        vec![-2.0, -2.0],
+        vec![1.0, -1.0],
+        vec![-1.0, 1.0],
+    ]
+}
+
+fn assert_hand_model(m: &PcaModel, y: &[Vec<f64>], tol: f64) {
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    let sigma = [4.0, 2.0];
+    let variance = [16.0 / 3.0, 4.0 / 3.0];
+    let ratio = [0.8, 0.2];
+    for i in 0..2 {
+        assert!(close(m.singular_values()[i], sigma[i], tol), "{m:?}");
+        assert!(close(m.explained_variance()[i], variance[i], tol), "{m:?}");
+        assert!(
+            close(m.explained_variance_ratio()[i], ratio[i], tol),
+            "{m:?}"
+        );
+    }
+    // The second axis has loadings of equal magnitude, so which of them
+    // counts as "largest" (and hence its sign) is down to rounding.
+    let c = m.components();
+    assert!(close(c[0][0], h, tol) && close(c[0][1], h, tol));
+    assert!(close(c[1][0].abs(), h, tol) && close(c[1][0], -c[1][1], tol));
+    assert!(close(y[0][0], 8f64.sqrt(), tol) && y[0][1].abs() < tol);
+    assert!(close(y[2][1].abs(), 2f64.sqrt(), tol) && y[2][0].abs() < tol);
+}
+
+#[test]
+fn hand_computed_decomposition() {
+    for solver in ALL {
+        let m = Pca::new(2)
+            .with_solver(solver)
+            .fit(&hand_example())
+            .unwrap();
+        assert_hand_model(&m, &m.transform(&hand_example()).unwrap(), 1e-12);
+    }
+    let m = IncrementalPca::new(2)
+        .fit_batches(&hand_example(), 2)
+        .unwrap();
+    assert_hand_model(&m, &m.transform(&hand_example()).unwrap(), 1e-12);
+    // Whitening divides by √(16/3) and √(4/3).
+    let w = Pca::new(2).with_whiten(true).fit(&hand_example()).unwrap();
+    let y = w.transform(&hand_example()).unwrap();
+    assert!(close(y[0][0], 8f64.sqrt() / (16.0f64 / 3.0).sqrt(), 1e-12));
+    let back = w.inverse_transform(&y).unwrap();
+    for (r, s) in back.iter().zip(hand_example()) {
+        for (a, b) in r.iter().zip(&s) {
+            assert!((a - b).abs() < 1e-12);
+        }
+    }
+}
+
+// ------------------------------------------------------- incremental PCA
+
+#[test]
+fn incremental_matches_batch_with_all_components() {
+    let x = low_rank(60, 5, 3, 0.5);
+    let batch = Pca::new(5).with_solver(Solver::Svd).fit(&x).unwrap();
+    for size in [5, 7, 13, 60] {
+        let inc = IncrementalPca::new(5).fit_batches(&x, size).unwrap();
+        assert_eq!(inc.n_samples(), 60);
+        for i in 0..5 {
+            assert!(close(
+                inc.explained_variance()[i],
+                batch.explained_variance()[i],
+                1e-9
+            ));
+            assert!(close(
+                inc.explained_variance_ratio()[i],
+                batch.explained_variance_ratio()[i],
+                1e-9
+            ));
+            assert!(close(inc.mean()[i], batch.mean()[i], 1e-12));
+            let d = dot(&inc.components()[i], &batch.components()[i]);
+            assert!(
+                (d.abs() - 1.0).abs() < 1e-8,
+                "batch size {size}, component {i}: {d}"
+            );
+        }
+    }
+}
+
+#[test]
+fn incremental_truncated_tracks_the_leading_subspace() {
+    // Rank-2 signal plus small noise: two components from batches of 10
+    // should span the same plane as batch PCA.
+    let x = low_rank(80, 6, 2, 0.01);
+    let batch = Pca::new(2).fit(&x).unwrap();
+    let inc = IncrementalPca::new(2).fit_batches(&x, 10).unwrap();
+    for c in inc.components() {
+        let in_plane: f64 = batch.components().iter().map(|b| dot(b, c).powi(2)).sum();
+        assert!(in_plane > 1.0 - 1e-6, "{in_plane}");
+    }
+    for i in 0..2 {
+        assert!(close(
+            inc.explained_variance()[i],
+            batch.explained_variance()[i],
+            1e-4
+        ));
+    }
+    let total: f64 = inc.explained_variance_ratio().iter().sum();
+    assert!(total < 1.0 && total > 0.99);
+    assert!(inc.noise_variance() > 0.0);
+}
+
+#[test]
+fn incremental_validation() {
+    assert_eq!(
+        IncrementalPca::new(1).fit_batches(&hand_example(), 0),
+        Err(PcaError::InvalidBatchSize)
+    );
+    assert_eq!(
+        IncrementalPca::new(3).fit_batches(&hand_example(), 2),
+        Err(PcaError::InvalidComponents {
+            requested: 3,
+            max: 2
+        })
+    );
+    assert_eq!(
+        IncrementalPca::new(2).partial_fit(&[vec![1.0, 2.0]]),
+        Err(PcaError::BatchTooSmall {
+            rows: 1,
+            n_components: 2
+        })
+    );
+    let mut one = IncrementalPca::new(1);
+    one.partial_fit(&[vec![1.0, 2.0]]).unwrap();
+    assert_eq!(one.model(), Err(PcaError::TooFewSamples { n: 1 }));
+    assert_eq!(
+        one.partial_fit(&[vec![1.0, 2.0, 3.0]]),
+        Err(PcaError::DimensionMismatch {
+            index: 0,
+            expected: 2,
+            found: 3
+        })
+    );
+    assert_eq!(
+        one.partial_fit(&[vec![1.0, f64::NAN]]),
+        Err(PcaError::NonFiniteInput { index: 0 })
+    );
+    assert_eq!(
+        IncrementalPca::new(1).partial_fit(&[vec![], vec![]]),
+        Err(PcaError::NoFeatures)
+    );
 }
 
 #[test]

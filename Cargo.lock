@@ -4360,7 +4360,7 @@ dependencies = [
 
 [[package]]
 name = "rune-ml-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proptest",
  "rayon",
@@ -4493,11 +4493,12 @@ dependencies = [
 
 [[package]]
 name = "rune-pca"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "proptest",
  "rayon",
+ "rune-ml-core",
  "serde",
  "serde_json",
  "thiserror",
@@ -5182,11 +5183,13 @@ dependencies = [
 
 [[package]]
 name = "rune-tsne"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "proptest",
  "rayon",
+ "rune-ml-core",
+ "rune-pca",
  "thiserror",
 ]
 

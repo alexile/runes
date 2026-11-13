@@ -17,6 +17,7 @@ functions, PRNG and `Vec<Vec<f64>>` plumbing.
 | `Matrix<F>`, `MatrixView<'a, F>` | Owned / borrowed row-major dense matrix over one flat buffer |
 | `Metric` | `Euclidean`, `SqEuclidean`, `Manhattan`, `Cosine`, `Chebyshev`, with `distance`, `pairwise`, `cdist`, `nearest` |
 | `kernels` | Unrolled 8-lane slice kernels (`dot`, `sq_euclidean`, `manhattan`, `cosine`, …) that LLVM auto-vectorises |
+| `trustworthiness` | Neighbourhood-preservation score of an embedding (Venna & Kaski 2001), matching scikit-learn |
 | `Rng`, `SplitMix64` | Reproducible xoshiro256++ seeded by SplitMix64; `uniform`, `below`, `normal`, `shuffle`, `sample_indices`, `weighted_index`, `jump`, `fork` |
 | `Fit`, `Predict`, `Transform`, `FitPredict`, `FitTransform` | Estimator traits: configuration → `fit` → model |
 | `MlError` | Shared error enum, meant to be wrapped by each crate's own error |

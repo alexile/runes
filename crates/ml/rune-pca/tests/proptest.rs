@@ -1,10 +1,11 @@
 //! Property tests: `fit` never panics, and valid input always yields an
-//! orthonormal basis, consistent variances and an exact full reconstruction.
+//! orthonormal basis, consistent variances and an exact full reconstruction,
+//! and incremental PCA with every component kept agrees with batch PCA.
 
 #![allow(clippy::suboptimal_flops, reason = "test tolerances, not numerics")]
 
 use proptest::prelude::*;
-use rune_pca::{Components, Pca, Solver};
+use rune_pca::{Components, IncrementalPca, Pca, Solver};
 
 /// 2..=12 rows of 1..=6 finite values each.
 fn finite_rows() -> impl Strategy<Value = Vec<Vec<f64>>> {
@@ -75,5 +76,25 @@ proptest! {
             }
         }
         prop_assert_eq!(pca.fit(&rows).unwrap(), model);
+    }
+
+    #[test]
+    fn incremental_with_every_component_matches_batch(rows in finite_rows(), batch in 1usize..6) {
+        let d = rows[0].len();
+        prop_assume!(batch >= d && rows.len() >= d);
+        let full = Pca::new(d.min(rows.len())).with_solver(Solver::Svd).fit(&rows).unwrap();
+        let inc = IncrementalPca::new(d).fit_batches(&rows, batch).unwrap();
+        let mag = rows.iter().flatten().fold(1.0f64, |m, x| m.max(x.abs()));
+        let tol = 1e-8 * mag * mag;
+        for (a, b) in inc.explained_variance().iter().zip(full.explained_variance()) {
+            prop_assert!((a - b).abs() <= tol, "{} vs {}", a, b);
+        }
+        let projected = inc.transform(&rows).unwrap();
+        let back = inc.inverse_transform(&projected).unwrap();
+        for (r, s) in rows.iter().zip(&back) {
+            for (a, b) in r.iter().zip(s) {
+                prop_assert!((a - b).abs() <= 1e-8 * mag, "{} vs {}", a, b);
+            }
+        }
     }
 }

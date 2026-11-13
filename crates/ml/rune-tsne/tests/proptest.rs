@@ -1,8 +1,8 @@
-//! Property tests: `fit` never panics, and valid input always yields a finite,
+//! Property tests: `try_fit` never panics, and valid input always yields a finite,
 //! correctly shaped, reproducible embedding.
 
 use proptest::prelude::*;
-use rune_tsne::Tsne;
+use rune_tsne::{Init, Method, Tsne};
 
 /// 4..=16 points of 1..=4 finite coordinates each.
 fn finite_points() -> impl Strategy<Value = Vec<Vec<f64>>> {
@@ -24,14 +24,18 @@ proptest! {
         pts in any_points(),
         perp in any::<f64>(),
         lr in any::<f64>(),
-        nc in 0usize..4,
+        nc in 0usize..5,
+        theta in any::<f64>(),
+        bh in any::<bool>(),
     ) {
         let _ = Tsne::new()
+            .theta(theta)
+            .method(if bh { Method::BarnesHut } else { Method::Auto })
             .perplexity(perp)
             .learning_rate(lr)
             .n_components(nc)
             .n_iter(5)
-            .fit(&pts);
+            .try_fit(&pts);
     }
 
     #[test]
@@ -40,6 +44,8 @@ proptest! {
         frac in 0.0f64..1.0,
         nc in 1usize..4,
         seed in any::<u64>(),
+        bh in any::<bool>(),
+        random in any::<bool>(),
     ) {
         #[allow(clippy::cast_precision_loss, reason = "n is tiny")]
         let limit = pts.len() as f64 / 3.0;
@@ -49,12 +55,14 @@ proptest! {
             .perplexity(perp)
             .n_components(nc)
             .n_iter(40)
+            .method(if bh { Method::BarnesHut } else { Method::Exact })
+            .init(if random { Init::Random } else { Init::Pca })
             .random_seed(seed);
-        let r = tsne.fit(&pts).unwrap();
+        let r = tsne.try_fit(&pts).unwrap();
         prop_assert_eq!(r.embedding.len(), pts.len());
         prop_assert!(r.embedding.iter().all(|row| row.len() == nc));
         prop_assert!(r.embedding.iter().flatten().all(|x| x.is_finite()));
         prop_assert!(r.kl_divergence.is_finite());
-        prop_assert_eq!(tsne.fit(&pts).unwrap(), r);
+        prop_assert_eq!(tsne.try_fit(&pts).unwrap(), r);
     }
 }

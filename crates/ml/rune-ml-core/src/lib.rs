@@ -7,6 +7,7 @@
 //! | [`Matrix`], [`MatrixView`] | Owned / borrowed row-major dense matrix over a flat buffer |
 //! | [`Metric`] | Euclidean, squared Euclidean, Manhattan, cosine, Chebyshev; `pairwise`, `cdist`, `nearest` |
 //! | [`kernels`] | Unrolled, auto-vectorisable slice kernels (`dot`, `sq_euclidean`, …) |
+//! | [`trustworthiness`] | Neighbourhood-preservation score of an embedding (Venna & Kaski) |
 //! | [`Rng`], [`SplitMix64`] | Reproducible xoshiro256++ / `SplitMix64` generators |
 //! | [`Fit`], [`Predict`], [`Transform`], [`FitPredict`], [`FitTransform`] | Estimator vocabulary |
 //! | [`MlError`] | Shared error enum (wrap it in your crate's error) |
@@ -46,6 +47,7 @@ mod float;
 pub mod kernels;
 mod matrix;
 mod metric;
+mod quality;
 mod rng;
 mod traits;
 
@@ -53,6 +55,7 @@ pub use error::MlError;
 pub use float::Float;
 pub use matrix::{Matrix, MatrixView, Rows};
 pub use metric::Metric;
+pub use quality::trustworthiness;
 pub use rng::{Rng, SplitMix64};
 pub use traits::{
     Fit, FitPredict, FitTransform, Predict, Transform, fit_then_predict, fit_then_transform,

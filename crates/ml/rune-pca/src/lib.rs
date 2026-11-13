@@ -1,5 +1,5 @@
-//! Principal component analysis (PCA): exact and randomized solvers, whitening
-//! and inverse transform.
+//! Principal component analysis (PCA): exact, randomized and incremental
+//! solvers, whitening and inverse transform.
 //!
 //! PCA finds the orthonormal directions (principal components) along which
 //! centred data varies most. Projecting onto the first `k` components gives the
@@ -24,6 +24,17 @@
 //! Component signs are fixed deterministically (the largest-magnitude loading of
 //! every component is positive), so all solvers agree on the output and results
 //! are reproducible across runs and thread counts.
+//!
+//! [`IncrementalPca`] fits the same model one batch at a time (Ross et al.
+//! 2008), for data that does not fit in memory.
+//!
+//! The number of components is chosen by count ([`Pca::new`]), by the
+//! cumulative explained-variance ratio ([`Pca::with_variance_ratio`]) or kept
+//! in full ([`Pca::default`]).
+//!
+//! Every entry point validates its input: empty or ragged rows, NaN or
+//! infinite values, out-of-range settings and models that do not match the
+//! data are reported as a [`PcaError`]; nothing panics.
 //!
 //! # Example
 //!
@@ -60,8 +71,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+mod incremental;
 mod linalg;
-mod rng;
+
+pub use incremental::IncrementalPca;
 
 use linalg::NoConvergence;
 
@@ -127,6 +140,18 @@ pub enum PcaError {
     /// A (deserialized) model is internally inconsistent.
     #[error("inconsistent PCA model: {0}")]
     InvalidModel(&'static str),
+    /// [`IncrementalPca::fit_batches`] was given a batch size of zero.
+    #[error("batch size must be at least 1")]
+    InvalidBatchSize,
+    /// The first batch given to [`IncrementalPca::partial_fit`] has fewer
+    /// rows than the requested number of components.
+    #[error("the first batch has {rows} rows, need at least n_components = {n_components}")]
+    BatchTooSmall {
+        /// Rows in the batch.
+        rows: usize,
+        /// The requested number of components.
+        n_components: usize,
+    },
 }
 
 /// The algorithm used to compute the principal components.
@@ -199,6 +224,12 @@ impl Default for Pca {
 impl Pca {
     /// PCA keeping `n_components` components, with every other setting at
     /// its default (automatic solver, no whitening).
+    ///
+    /// ```
+    /// let model = rune_pca::Pca::new(1).fit(&[vec![0.0, 0.0], vec![1.0, 1.0], vec![2.0, 2.1]])?;
+    /// assert_eq!(model.n_components(), 1);
+    /// # Ok::<(), rune_pca::PcaError>(())
+    /// ```
     #[must_use]
     pub fn new(n_components: usize) -> Self {
         Self::default().with_components(Components::Count(n_components))
@@ -206,6 +237,14 @@ impl Pca {
 
     /// PCA keeping the fewest components that explain at least `ratio` of
     /// the variance (see [`Components::VarianceRatio`]).
+    ///
+    /// ```
+    /// // Almost all variance lies along the first axis.
+    /// let x = vec![vec![0.0, 0.0], vec![10.0, 0.1], vec![20.0, -0.1], vec![30.0, 0.0]];
+    /// let model = rune_pca::Pca::with_variance_ratio(0.95).fit(&x)?;
+    /// assert_eq!(model.n_components(), 1);
+    /// # Ok::<(), rune_pca::PcaError>(())
+    /// ```
     #[must_use]
     pub fn with_variance_ratio(ratio: f64) -> Self {
         Self::default().with_components(Components::VarianceRatio(ratio))
@@ -264,6 +303,15 @@ impl Pca {
     /// [`PcaError::InvalidVarianceRatio`] and [`PcaError::RandomizedNeedsCount`]
     /// for an invalid configuration; [`PcaError::NumericalOverflow`] and
     /// [`PcaError::NoConvergence`] for data the solvers cannot handle.
+    ///
+    /// ```
+    /// use rune_pca::{Pca, PcaError};
+    ///
+    /// assert_eq!(
+    ///     Pca::new(1).fit(&[vec![1.0, 2.0], vec![3.0]]),
+    ///     Err(PcaError::DimensionMismatch { index: 1, expected: 2, found: 1 }),
+    /// );
+    /// ```
     #[allow(
         clippy::cast_precision_loss,
         reason = "sample counts stay far below 2^52, so the f64 conversion is exact"
@@ -406,6 +454,13 @@ impl Pca {
     /// # Errors
     ///
     /// As [`Pca::fit`].
+    ///
+    /// ```
+    /// let x = vec![vec![2.0, 2.0], vec![-2.0, -2.0], vec![1.0, -1.0], vec![-1.0, 1.0]];
+    /// let (_, y) = rune_pca::Pca::new(1).fit_transform(&x)?;
+    /// assert!((y[0][0] - 8f64.sqrt()).abs() < 1e-12);
+    /// # Ok::<(), rune_pca::PcaError>(())
+    /// ```
     pub fn fit_transform(&self, data: &[Vec<f64>]) -> Result<(PcaModel, Vec<Vec<f64>>), PcaError> {
         let model = self.fit(data)?;
         let projected = model.transform(data)?;
@@ -437,9 +492,9 @@ impl Pca {
             } else {
                 4
             });
-        let mut rng = rng::Rng::new(self.random_seed);
+        let mut rng = rune_ml_core::Rng::new(self.random_seed);
         let omega: Vec<Vec<f64>> = (0..l)
-            .map(|_| (0..d).map(|_| rng.next_gaussian()).collect())
+            .map(|_| (0..d).map(|_| rng.normal()).collect())
             .collect();
         let mut y = linalg::mul_cols(a, &omega);
         for _ in 0..power {
@@ -650,6 +705,16 @@ impl PcaModel {
     /// [`PcaError::DimensionMismatch`] or [`PcaError::NonFiniteInput`] for a
     /// bad row, [`PcaError::InvalidModel`] for an inconsistent (deserialized)
     /// model.
+    ///
+    /// ```
+    /// let x = vec![vec![2.0, 2.0], vec![-2.0, -2.0], vec![1.0, -1.0], vec![-1.0, 1.0]];
+    /// let model = rune_pca::Pca::new(2).with_whiten(true).fit(&x)?;
+    /// let y = model.transform(&x)?;
+    /// // Whitened components have unit sample variance.
+    /// let var0: f64 = y.iter().map(|r| r[0] * r[0]).sum::<f64>() / 3.0;
+    /// assert!((var0 - 1.0).abs() < 1e-12);
+    /// # Ok::<(), rune_pca::PcaError>(())
+    /// ```
     pub fn transform(&self, data: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, PcaError> {
         self.check()?;
         validate_rows(data, self.n_features())?;
@@ -682,6 +747,15 @@ impl PcaModel {
     /// [`PcaError::DimensionMismatch`] if a row does not have
     /// [`PcaModel::n_components`] values, [`PcaError::NonFiniteInput`] for a
     /// non-finite value, [`PcaError::InvalidModel`] for an inconsistent model.
+    ///
+    /// ```
+    /// let x = vec![vec![2.0, 2.0], vec![-2.0, -2.0], vec![1.0, -1.0], vec![-1.0, 1.0]];
+    /// let model = rune_pca::Pca::new(1).fit(&x)?;
+    /// let back = model.inverse_transform(&model.transform(&x)?)?;
+    /// // Rank-1 approximation: the (1, -1) direction is dropped.
+    /// assert!((back[0][0] - 2.0).abs() < 1e-12 && back[2][0].abs() < 1e-12);
+    /// # Ok::<(), rune_pca::PcaError>(())
+    /// ```
     pub fn inverse_transform(&self, data: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, PcaError> {
         self.check()?;
         validate_rows(data, self.n_components())?;
@@ -732,6 +806,11 @@ fn whiten_scale(ev: f64) -> Option<f64> {
     let s = ev.sqrt();
     (s > 0.0 && s.is_finite()).then_some(s)
 }
+
+/// Compiles and runs the README examples.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
 
 #[cfg(test)]
 mod tests {
