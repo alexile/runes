@@ -27,6 +27,9 @@ subtle.workspace = true
 thiserror.workspace = true
 zeroize = { version = "1.8", optional = true, default-features = false, features = ["alloc"] }
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 rune-config.workspace = true

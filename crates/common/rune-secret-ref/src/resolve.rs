@@ -1,6 +1,6 @@
 //! Turning a [`SecretRef`] into a [`SecretValue`].
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -196,7 +196,9 @@ fn read_file(path: &Path, options: &ResolveOptions) -> Result<Vec<u8>, SecretErr
         path: path.to_path_buf(),
         source,
     };
-    let file = File::open(path).map_err(read_error)?;
+    let file = open_secret(path).map_err(read_error)?;
+    // Check the type on the open descriptor, not the path, so the file
+    // cannot be swapped in between.
     let metadata = file.metadata().map_err(read_error)?;
     if !metadata.is_file() {
         return Err(SecretError::NotAFile {
@@ -215,6 +217,25 @@ fn read_file(path: &Path, options: &ResolveOptions) -> Result<Vec<u8>, SecretErr
         return Err(read_error(source));
     }
     Ok(bytes)
+}
+
+/// Opens `path` for reading without blocking: opening a FIFO with no
+/// writer (or a device) would otherwise wait forever, before the caller can
+/// see that it is not a regular file.
+///
+/// `O_NONBLOCK` stays set on the descriptor. Clearing it would take an
+/// `fcntl` call, and it changes nothing for the regular files that are
+/// read from it afterwards.
+fn open_secret(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // O_NOCTTY: opening a terminal must not make it ours either.
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY);
+    }
+    options.open(path)
 }
 
 fn limit_plus_one(max_len: usize) -> u64 {

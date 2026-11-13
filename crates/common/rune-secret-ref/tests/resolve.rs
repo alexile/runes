@@ -112,6 +112,35 @@ fn file_errors() {
     assert_eq!(edge.resolve(&small, no_env).unwrap().expose().len(), 32);
 }
 
+/// A FIFO with no writer would block `open` forever.
+#[cfg(unix)]
+#[test]
+fn fifo_is_refused_without_blocking() {
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("fifo");
+    let made = std::process::Command::new("mkfifo")
+        .arg("-m")
+        .arg("600")
+        .arg(&fifo)
+        .status();
+    if !made.is_ok_and(|status| status.success()) {
+        eprintln!("skipping: mkfifo is not available");
+        return;
+    }
+    let (send, receive) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = SecretRef::File(fifo).resolve(&ResolveOptions::default(), no_env);
+        let _ = send.send(result);
+    });
+    let result = receive
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("resolving a FIFO blocked");
+    assert!(
+        matches!(result, Err(SecretError::NotAFile { .. })),
+        "{result:?}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn file_readable_by_others_is_refused_unless_allowed() {
