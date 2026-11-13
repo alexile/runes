@@ -454,3 +454,16 @@ async fn routers_compose_with_shared_models() {
     assert_eq!(ask(&outer).await.unwrap(), "shared");
     assert_eq!(outer.provider_names().collect::<Vec<_>>(), ["inner", "s2"]);
 }
+
+#[tokio::test]
+async fn huge_cooldown_does_not_panic() {
+    // A "never come back" cooldown must not overflow the clock.
+    let (a, _) = Mock::failing("a", LlmError::from_status(429, "slow down"));
+    let router = Router::new(Strategy::Ordered)
+        .breaker(BreakerConfig::default().with_rate_limit_cooldown(Duration::MAX))
+        .provider(Provider::new("a", a))
+        .provider(Provider::new("b", Mock::ok("b").0));
+    assert_eq!(ask(&router).await.unwrap(), "b");
+    // `a` stays benched.
+    assert_eq!(ask(&router).await.unwrap(), "b");
+}

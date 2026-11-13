@@ -245,6 +245,9 @@ impl Drop for ProbeGuard<'_> {
     }
 }
 
+/// Longest cooldown actually scheduled; longer ones are clamped to it.
+const FAR_FUTURE: Duration = Duration::from_secs(86_400 * 365 * 30);
+
 type Estimator = Arc<dyn Fn(&[Message]) -> usize + Send + Sync>;
 
 /// An [`Llm`] that routes each request across several providers, with
@@ -627,7 +630,9 @@ impl Router {
             if class == ErrorClass::RateLimited {
                 let d = retry_after(error).unwrap_or(self.breaker.rate_limit_cooldown);
                 if !d.is_zero() {
-                    h.cooldown_until = Some(now + d);
+                    // Clamp so a configured `Duration::MAX` cannot overflow
+                    // the clock; 30 years is "never" for a cooldown.
+                    h.cooldown_until = now.checked_add(d.min(FAR_FUTURE));
                     cooldown = Some(d);
                 }
             }
