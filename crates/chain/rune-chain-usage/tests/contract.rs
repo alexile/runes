@@ -128,3 +128,48 @@ fn hard_stop_refuses_before_the_provider_is_called() {
     assert_eq!(tags[0].0, "search");
     assert_eq!(tags[0].1.cost, Cost::from_micros(150));
 }
+
+/// Yields once before answering, so concurrent calls are all in flight at
+/// the same time.
+struct Slow(AtomicU32);
+
+#[async_trait]
+impl Llm for Slow {
+    async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        let mut yielded = false;
+        futures::future::poll_fn(|cx| {
+            if yielded {
+                std::task::Poll::Ready(())
+            } else {
+                yielded = true;
+                cx.waker().wake_by_ref();
+                std::task::Poll::Pending
+            }
+        })
+        .await;
+        Ok(GenerateResult::from_text("ok").with_tokens(TokenUsage::new(10, 140)))
+    }
+}
+
+#[test]
+fn concurrent_calls_cannot_all_pass_the_same_preflight() {
+    // Each call projects ~150 tokens; the cap leaves room for two of them.
+    let meter = UsageMeter::new(Budget::default().with_max_tokens(400));
+    let llm = MeteredLlm::new(
+        Slow(AtomicU32::new(0)),
+        meter.clone(),
+        "p",
+        "m",
+        Pricing::per_mtok(1, 1),
+    )
+    .expected_output_tokens(140);
+    let messages = [Message::human("hi")];
+    let calls = (0..5).map(|_| llm.generate(&messages));
+    let results = tokio_test::block_on(futures::future::join_all(calls));
+    assert_eq!(results.iter().filter(|r| r.is_ok()).count(), 2);
+    assert_eq!(llm.inner().0.load(Ordering::SeqCst), 2);
+    assert_eq!(meter.totals().total_tokens(), 300);
+    // Finished calls hand their reservations back.
+    meter.check(Cost::ZERO, 100).unwrap();
+}

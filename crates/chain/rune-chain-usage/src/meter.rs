@@ -299,6 +299,28 @@ struct State {
     seq: u64,
     warned: Vec<Limit>,
     exhausted: Option<Limit>,
+    /// Projected spend of calls that passed the preflight check and have not
+    /// been recorded yet, so concurrent calls cannot all claim the same room.
+    reserved_cost: u64,
+    reserved_tokens: u64,
+}
+
+/// Room held in the budget for one call in flight. Dropping it gives the
+/// room back; record the call's real usage first.
+pub struct Reservation {
+    state: Option<Arc<Mutex<State>>>,
+    cost: u64,
+    tokens: u64,
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if let Some(state) = &self.state {
+            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.reserved_cost = state.reserved_cost.saturating_sub(self.cost);
+            state.reserved_tokens = state.reserved_tokens.saturating_sub(self.tokens);
+        }
+    }
 }
 
 /// A cloneable, thread-safe ledger of token usage and cost, broken down by
@@ -496,7 +518,9 @@ impl UsageMeter {
 
     /// Check, before sending a call, that the budget allows it: the meter is
     /// not exhausted, and spending plus the call's `projected_cost` and
-    /// `projected_tokens` stays within every cap. A
+    /// `projected_tokens` stays within every cap. Calls a
+    /// [`MeteredLlm`](crate::MeteredLlm) has sent but not yet recorded count
+    /// against the caps with their projected spend. A
     /// [warn-only](Budget::with_warn_only) budget allows every call.
     ///
     /// # Errors
@@ -505,22 +529,46 @@ impl UsageMeter {
     /// [`UsageError::WouldExceed`] if this call would pass one. Either raises
     /// [`BudgetAlert::Refused`].
     pub fn check(&self, projected_cost: Cost, projected_tokens: u64) -> Result<(), UsageError> {
+        self.admit(projected_cost, projected_tokens, false)
+            .map(drop)
+    }
+
+    /// Like [`check`](Self::check), but on success hold the projected spend
+    /// until the returned reservation is dropped.
+    pub(crate) fn reserve(
+        &self,
+        projected_cost: Cost,
+        projected_tokens: u64,
+    ) -> Result<Reservation, UsageError> {
+        self.admit(projected_cost, projected_tokens, true)
+    }
+
+    fn admit(
+        &self,
+        projected_cost: Cost,
+        projected_tokens: u64,
+        reserve: bool,
+    ) -> Result<Reservation, UsageError> {
+        let unreserved = Reservation {
+            state: None,
+            cost: 0,
+            tokens: 0,
+        };
         if self.budget.is_warn_only() {
-            return Ok(());
+            return Ok(unreserved);
         }
         let result = {
-            let state = self.lock();
+            let mut state = self.lock();
             let spent = state.totals;
-            let exceeded = || {
-                self.budget.caps(&spent).find(|(limit, used, max)| {
-                    let extra = match limit {
-                        Limit::Cost(_) => projected_cost.picodollars(),
-                        Limit::Tokens(_) => projected_tokens,
-                    };
-                    used.saturating_add(extra) > *max
-                })
-            };
-            match (state.exhausted, exceeded()) {
+            let (held_cost, held_tokens) = (state.reserved_cost, state.reserved_tokens);
+            let exceeded = self.budget.caps(&spent).find(|(limit, used, max)| {
+                let (held, extra) = match limit {
+                    Limit::Cost(_) => (held_cost, projected_cost.picodollars()),
+                    Limit::Tokens(_) => (held_tokens, projected_tokens),
+                };
+                used.saturating_add(held).saturating_add(extra) > *max
+            });
+            let result = match (state.exhausted, exceeded) {
                 (Some(limit), _) => Err(UsageError::BudgetExhausted { limit, spent }),
                 (None, Some((limit, ..))) => Err(UsageError::WouldExceed {
                     limit,
@@ -528,8 +576,20 @@ impl UsageMeter {
                     projected_cost,
                     projected_tokens,
                 }),
-                (None, None) => Ok(()),
-            }
+                (None, None) if reserve => {
+                    let cost = projected_cost.picodollars();
+                    state.reserved_cost = held_cost.saturating_add(cost);
+                    state.reserved_tokens = held_tokens.saturating_add(projected_tokens);
+                    Ok(Reservation {
+                        state: Some(Arc::clone(&self.state)),
+                        cost,
+                        tokens: projected_tokens,
+                    })
+                }
+                (None, None) => Ok(unreserved),
+            };
+            drop(state);
+            result
         };
         if let Err(e) = &result {
             let (limit, spent) = e.parts();
@@ -647,7 +707,13 @@ impl UsageMeter {
     /// Clear the ledger and history and re-arm every alert, keeping the
     /// budget and settings.
     pub fn reset(&self) {
-        *self.lock() = State::default();
+        let mut state = self.lock();
+        // Calls still in flight keep their reservations.
+        *state = State {
+            reserved_cost: state.reserved_cost,
+            reserved_tokens: state.reserved_tokens,
+            ..State::default()
+        };
     }
 }
 

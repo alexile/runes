@@ -10,6 +10,7 @@ use rune_chain_core::{
 };
 
 use crate::estimate::{estimate_messages, estimate_reply, estimate_tools};
+use crate::meter::Reservation;
 use crate::{Usage, UsageMeter};
 
 type BoxStream = Pin<Box<dyn Stream<Item = Result<StreamData, LlmError>> + Send>>;
@@ -120,15 +121,16 @@ impl<L: Llm> MeteredLlm<L> {
         self.inner
     }
 
-    fn preflight(&self, input_tokens: u64) -> Result<(), LlmError> {
+    fn preflight(&self, input_tokens: u64) -> Result<Reservation, LlmError> {
         let cost = self
             .pricing
             .cost_of(input_tokens, self.expected_output_tokens);
         let tokens = input_tokens.saturating_add(self.expected_output_tokens);
-        self.meter.check(cost, tokens).map_err(LlmError::from)
+        self.meter.reserve(cost, tokens).map_err(LlmError::from)
     }
 
-    fn settle(&self, input_estimate: u64, result: &GenerateResult) {
+    /// Record the call, then release its reservation (dropped on return).
+    fn settle(&self, _reservation: Reservation, input_estimate: u64, result: &GenerateResult) {
         let usage = result.tokens.as_ref().map_or_else(
             || {
                 Usage::estimated(
@@ -154,9 +156,9 @@ impl<L: Llm> MeteredLlm<L> {
 impl<L: Llm> Llm for MeteredLlm<L> {
     async fn generate(&self, messages: &[Message]) -> Result<GenerateResult, LlmError> {
         let input = estimate_messages(messages);
-        self.preflight(input)?;
+        let reservation = self.preflight(input)?;
         let result = self.inner.generate(messages).await?;
-        self.settle(input, &result);
+        self.settle(reservation, input, &result);
         Ok(result)
     }
 
@@ -167,18 +169,18 @@ impl<L: Llm> Llm for MeteredLlm<L> {
         tool_choice: Option<ToolChoice>,
     ) -> Result<GenerateResult, LlmError> {
         let input = estimate_messages(messages).saturating_add(estimate_tools(tools));
-        self.preflight(input)?;
+        let reservation = self.preflight(input)?;
         let result = self
             .inner
             .generate_with_tools(messages, tools, tool_choice)
             .await?;
-        self.settle(input, &result);
+        self.settle(reservation, input, &result);
         Ok(result)
     }
 
     async fn stream(&self, messages: &[Message]) -> Result<BoxStream, LlmError> {
         let input = estimate_messages(messages);
-        self.preflight(input)?;
+        let reservation = self.preflight(input)?;
         let inner = self.inner.stream(messages).await?;
         Ok(Box::pin(MeteredStream {
             inner,
@@ -190,6 +192,7 @@ impl<L: Llm> Llm for MeteredLlm<L> {
                 pricing: self.pricing,
                 input_tokens: input,
                 output_chars: 0,
+                _reservation: reservation,
             }),
         }))
     }
@@ -207,6 +210,8 @@ struct Pending {
     /// costs no memory; it is turned into tokens the way
     /// [`estimate_text`](crate::estimate_text) does.
     output_chars: u64,
+    /// Released when the stream settles, after its usage is recorded.
+    _reservation: Reservation,
 }
 
 impl Pending {
