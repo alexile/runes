@@ -418,10 +418,21 @@ pub fn record_error(span: &Span, error_type: &str, description: &str) {
 /// its [`kind`](LlmError::kind), `http.response.status_code` when the
 /// provider answered with an HTTP error, and the `ERROR` status.
 pub fn record_llm_error(span: &Span, error: &LlmError) {
+    record_llm_error_described(span, error, &error.to_string());
+}
+
+/// [`record_llm_error`] with the error text passed through `policy`
+/// (redacted and capped, whether or not content capture is on): provider
+/// errors often quote the request they rejected.
+pub fn record_llm_error_with(span: &Span, error: &LlmError, policy: &ContentPolicy) {
+    record_llm_error_described(span, error, &policy.apply(&error.to_string()));
+}
+
+fn record_llm_error_described(span: &Span, error: &LlmError, description: &str) {
     if let Some(status) = error.status() {
         span.record("http.response.status_code", u64::from(status));
     }
-    record_error(span, llm_error_type(error), &error.to_string());
+    record_error(span, llm_error_type(error), description);
 }
 
 /// The `error.type` value for an [`LlmError`]: its [`LlmErrorKind`] in

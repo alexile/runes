@@ -106,7 +106,13 @@ impl<T: Tool> TracedTool<T> {
                 );
             }
             Ok(_) => {}
-            Err(e) => record_error(span, tool_error_type(e), &e.to_string()),
+            // Tool errors often quote the input they rejected, so the text goes
+            // through the redactor and size cap even with capture off.
+            Err(e) => record_error(
+                span,
+                tool_error_type(e),
+                &self.content.apply(&e.to_string()),
+            ),
         }
     }
 }

@@ -26,6 +26,10 @@ pub const TRUNCATED_MARKER: &str = "…[truncated]";
 /// only the last [`max_messages`](Self::with_max_messages) input messages
 /// are recorded. Image parts are never recorded, only their presence.
 ///
+/// Error descriptions that [`TracedLlm`](crate::TracedLlm) and
+/// [`TracedTool`](crate::TracedTool) record are always redacted and cut the
+/// same way, even with capture off, since they often quote the input.
+///
 /// # Examples
 ///
 /// ```

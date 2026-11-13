@@ -72,7 +72,9 @@ Redaction runs before truncation, so a secret that straddles the cap is
 never half-recorded. With the `redact` feature,
 `ContentPolicy::with_default_redaction()` uses `rune-redact` (emails, phone
 and card numbers, API keys and other credentials). `TracedTool` takes the
-same policy for tool arguments and results.
+same policy for tool arguments and results. Error descriptions on failed
+spans always go through the redactor and size cap, even with capture off,
+since provider and tool errors often quote the input they rejected.
 
 ## Installation
 

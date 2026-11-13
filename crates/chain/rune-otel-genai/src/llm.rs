@@ -15,7 +15,7 @@ use serde_json::json;
 use tracing::{Instrument, Span};
 
 use crate::span::{
-    GenAiConfig, assistant_json, llm_error_type, model_span, record_input, record_llm_error,
+    GenAiConfig, assistant_json, llm_error_type, model_span, record_input, record_llm_error_with,
     record_result, record_usage, report_metrics, result_usage, token_usage,
 };
 
@@ -130,7 +130,7 @@ impl<L: Llm> TracedLlm<L> {
                 report_metrics(&self.config, start, Some((&usage, estimated)), None);
             }
             Err(e) => {
-                record_llm_error(span, e);
+                record_llm_error_with(span, e, &self.config.content);
                 report_metrics(&self.config, start, None, Some(llm_error_type(e)));
             }
         }
@@ -179,7 +179,7 @@ impl<L: Llm> Llm for TracedLlm<L> {
                 finished: false,
             })),
             Err(e) => {
-                record_llm_error(&span, &e);
+                record_llm_error_with(&span, &e, &self.config.content);
                 report_metrics(&self.config, start, None, Some(llm_error_type(&e)));
                 Err(e)
             }
@@ -270,7 +270,7 @@ impl Stream for TracedStream {
                 }
             }
             Poll::Ready(Some(Err(e))) => {
-                record_llm_error(&this.span, e);
+                record_llm_error_with(&this.span, e, &this.config.content);
                 this.error_type = Some(llm_error_type(e));
             }
             Poll::Ready(None) => this.finish(),

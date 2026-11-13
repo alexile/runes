@@ -570,3 +570,56 @@ fn otel_metrics_follow_the_conventions() {
         2
     );
 }
+
+#[test]
+fn error_descriptions_are_redacted_and_capped() {
+    struct Echo;
+
+    #[async_trait]
+    impl Tool for Echo {
+        fn name(&self) -> &'static str {
+            "echo"
+        }
+        fn description(&self) -> &'static str {
+            "Rejects its input, quoting it back."
+        }
+        async fn run(&self, input: &str) -> Result<String, ToolError> {
+            Err(ToolError::InvalidInput(format!("cannot use {input}")))
+        }
+    }
+
+    struct Leaky;
+
+    #[async_trait]
+    impl Llm for Leaky {
+        async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
+            Err(LlmError::provider(format!(
+                "echoed sk-secret {}",
+                "x".repeat(100_000)
+            )))
+        }
+    }
+
+    // Capture stays off: the redactor and the size cap still apply to
+    // error text, which often quotes the input it choked on.
+    let policy = ContentPolicy::off()
+        .with_max_chars(64)
+        .with_redactor(|t| t.replace("sk-secret", "[KEY]"));
+    let tool = TracedTool::new(Echo).with_content_policy(policy.clone());
+    let llm = TracedLlm::new(
+        Leaky,
+        GenAiConfig::new("openai", "gpt-x").with_content_policy(policy),
+    );
+    let spans = run_and_export(|| async {
+        assert!(tool.run("key sk-secret").await.is_err());
+        assert!(llm.generate(&[Message::human("hi")]).await.is_err());
+    });
+    for name in ["execute_tool echo", "chat gpt-x"] {
+        let Status::Error { description } = &find(&spans, name).status else {
+            panic!("{name} did not fail");
+        };
+        assert!(!description.contains("sk-secret"), "{description}");
+        assert!(description.contains("[KEY]"), "{description}");
+        assert!(description.chars().count() <= 64 + "…[truncated]".chars().count());
+    }
+}
