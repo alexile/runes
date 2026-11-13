@@ -349,3 +349,50 @@ fn followed_symlinks_cannot_reach_excluded_or_hidden_entries() {
         .unwrap();
     assert_eq!(sorted_relative(&docs), ["ok.txt"]);
 }
+
+#[test]
+fn csv_header_repetition_cannot_amplify_output() {
+    // A 64 KiB header repeated into each of 20,000 one-byte rows would
+    // produce about 1.3 GB of content from roughly 100 KB of input.
+    let header = (0..8_000)
+        .map(|i| format!("c{i:05}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut input = header;
+    input.push('\n');
+    input.push_str(&"x\n".repeat(20_000));
+
+    let mut produced = 0usize;
+    let mut rejected = false;
+    for doc in CsvLoader::new().iter(input.as_bytes()) {
+        match doc {
+            Ok(doc) => produced += doc.content.len(),
+            Err(err) => {
+                assert!(matches!(err, LoadError::OutputTooLarge { .. }), "{err}");
+                rejected = true;
+                break;
+            }
+        }
+    }
+    assert!(
+        rejected,
+        "produced {produced} bytes without hitting a limit"
+    );
+    assert!(produced <= Limits::DEFAULT.max_total_bytes);
+
+    // A tight limit is honoured exactly, and legitimate input below it is unchanged.
+    let limits = Limits::default().with_max_total_bytes(10);
+    let ok = CsvLoader::new()
+        .limits(limits)
+        .load_str("a,b\n1,2\n")
+        .unwrap();
+    assert_eq!(ok[0].content, "a: 1\nb: 2");
+    let err = CsvLoader::new()
+        .limits(limits)
+        .load_str("a,b\n1,2\n3,4\n")
+        .unwrap_err();
+    assert!(
+        matches!(err, LoadError::OutputTooLarge { limit: 10 }),
+        "{err}"
+    );
+}

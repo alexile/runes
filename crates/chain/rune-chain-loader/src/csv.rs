@@ -5,7 +5,9 @@
 //! lenient about stray quotes inside unquoted fields (kept literally) but an
 //! unterminated quoted field at end of input is a [`LoadError::Parse`].
 //! Each row is capped at [`Limits::max_record_bytes`], so a missing closing
-//! quote cannot swallow unbounded memory.
+//! quote cannot swallow unbounded memory, and the content of all rows
+//! together is capped at [`Limits::max_total_bytes`], so a long header row
+//! repeated into many short rows cannot blow up either.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -112,7 +114,8 @@ impl CsvLoader {
         self
     }
 
-    /// Replace the limits (`max_record_bytes` and `max_records` apply).
+    /// Replace the limits (`max_record_bytes`, `max_records` and
+    /// `max_total_bytes` apply).
     #[must_use]
     pub const fn limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
@@ -139,6 +142,7 @@ impl CsvLoader {
             headers: None,
             source: None,
             rows: 0,
+            produced: 0,
             done: false,
         }
     }
@@ -282,6 +286,7 @@ pub struct CsvIter<R> {
     headers: Option<Vec<String>>,
     source: Option<String>,
     rows: u64,
+    produced: usize,
     done: bool,
 }
 
@@ -390,6 +395,13 @@ impl<R: BufRead> Iterator for CsvIter<R> {
             }
             self.rows += 1;
             let mut doc = self.build(&values);
+            self.produced = self.produced.saturating_add(doc.content.len());
+            if self.produced > self.config.limits.max_total_bytes {
+                self.done = true;
+                return Some(Err(LoadError::OutputTooLarge {
+                    limit: self.config.limits.max_total_bytes,
+                }));
+            }
             meta::default_source(&mut doc, self.source.as_deref());
             meta::stamp_position(
                 &mut doc,

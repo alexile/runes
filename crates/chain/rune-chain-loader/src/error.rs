@@ -39,6 +39,12 @@ pub enum LoadError {
         /// The limit that was exceeded.
         limit: usize,
     },
+    /// The documents produced from one input hold more than
+    /// [`Limits::max_total_bytes`](crate::Limits::max_total_bytes) bytes of content.
+    OutputTooLarge {
+        /// The limit that was exceeded, in bytes.
+        limit: usize,
+    },
     /// A directory walk matched more than [`Limits::max_files`](crate::Limits::max_files) files.
     TooManyFiles {
         /// The limit that was exceeded.
@@ -123,6 +129,9 @@ impl fmt::Display for LoadError {
                 write!(f, "record at line {line} exceeds {limit} bytes")
             }
             Self::TooManyRecords { limit } => write!(f, "more than {limit} records"),
+            Self::OutputTooLarge { limit } => {
+                write!(f, "documents exceed {limit} bytes of content in total")
+            }
             Self::TooManyFiles { limit } => {
                 write!(f, "directory walk matched more than {limit} files")
             }
@@ -164,6 +173,7 @@ impl From<LoadError> for io::Error {
             LoadError::TooLarge { .. }
             | LoadError::RecordTooLarge { .. }
             | LoadError::TooManyRecords { .. }
+            | LoadError::OutputTooLarge { .. }
             | LoadError::TooManyFiles { .. } => io::ErrorKind::FileTooLarge,
             LoadError::OutsideRoot { .. } => io::ErrorKind::PermissionDenied,
             LoadError::NotRegularFile { .. } | LoadError::InvalidPattern { .. } => {

@@ -75,7 +75,7 @@ let rows = csv::CsvLoader::new()
 
 Loaders assume their input is hostile.
 
-- **Limits on by default** (`Limits::DEFAULT`): 16 MiB per file, 1 MiB per JSON line / CSV row, 1,000,000 records per input, 10,000 files and depth 32 per directory walk. An over-long line is skipped without being buffered; an unterminated CSV quote stops at the row cap.
+- **Limits on by default** (`Limits::DEFAULT`): 16 MiB per file, 1 MiB per JSON line / CSV row, 1,000,000 records and 256 MiB of document content per input, 10,000 files and depth 32 per directory walk. An over-long line is skipped without being buffered; an unterminated CSV quote stops at the row cap.
 - **Jail**: `Jail::new(root)` canonicalises paths (resolving `..` and symlinks) and rejects anything outside the root. The check is path based, so it cannot stop an attacker who can swap directories for symlinks concurrently; use OS sandboxing for that.
 - **Directory walks** never leave the root: symlinks are skipped unless `follow_symlinks(true)`, and then followed only to targets inside the root, each directory once (loops terminate). Hidden entries (`.git`, `.env`) are skipped by default. The walk uses an explicit stack, not recursion.
 - **Special files** (FIFOs, sockets, devices) are refused or skipped before they are opened.

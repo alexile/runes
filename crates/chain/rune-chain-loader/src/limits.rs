@@ -23,6 +23,14 @@ pub struct Limits {
     pub max_record_bytes: usize,
     /// Most documents produced from one input. Default 1,000,000.
     pub max_records: usize,
+    /// Most content bytes produced from one input, summed over all of its
+    /// documents. Default 256 MiB.
+    ///
+    /// Only CSV can produce more content than it reads (every row repeats
+    /// the column names), so only the CSV loader checks it. Without it a
+    /// long header row and many tiny rows would expand a few hundred KB of
+    /// input into gigabytes.
+    pub max_total_bytes: usize,
     /// Most files a directory walk yields. Default 10,000.
     pub max_files: usize,
     /// Deepest subdirectory a walk descends into (0 = only the root
@@ -36,6 +44,7 @@ impl Limits {
         max_file_bytes: 16 * 1024 * 1024,
         max_record_bytes: 1024 * 1024,
         max_records: 1_000_000,
+        max_total_bytes: 256 * 1024 * 1024,
         max_files: 10_000,
         max_depth: 32,
     };
@@ -47,6 +56,7 @@ impl Limits {
             max_file_bytes: u64::MAX,
             max_record_bytes: usize::MAX,
             max_records: usize::MAX,
+            max_total_bytes: usize::MAX,
             max_files: usize::MAX,
             max_depth: usize::MAX,
         }
@@ -70,6 +80,13 @@ impl Limits {
     #[must_use]
     pub const fn with_max_records(mut self, records: usize) -> Self {
         self.max_records = records;
+        self
+    }
+
+    /// Set [`Limits::max_total_bytes`].
+    #[must_use]
+    pub const fn with_max_total_bytes(mut self, bytes: usize) -> Self {
+        self.max_total_bytes = bytes;
         self
     }
 
