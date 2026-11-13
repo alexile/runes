@@ -83,7 +83,7 @@ use rune_chain_core::{FunctionDefinition, Message};
 let llm = OpenAi::from_env()?;
 let tools = [FunctionDefinition::single_input("search", "Search the web.")];
 let events = llm.stream_events(&[Message::human("Find rust news")], &tools, None).await?;
-let result = collect_events(events).await?; // text + tool calls + usage
+let result = collect_events(events).await?; // text, reasoning, tool calls, finish reason, usage
 ```
 
 Structured output:

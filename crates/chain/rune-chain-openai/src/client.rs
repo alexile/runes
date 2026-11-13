@@ -499,9 +499,11 @@ impl OpenAi {
     }
 }
 
-fn content_to_api(content: &MessageContent) -> Option<ApiMessageContent> {
+/// `null` content is only valid on an assistant turn that carries tool calls;
+/// every other role gets `""` so the request isn't rejected.
+fn content_to_api(content: &MessageContent, null_if_empty: bool) -> Option<ApiMessageContent> {
     match content {
-        MessageContent::Text(s) if s.is_empty() => None,
+        MessageContent::Text(s) if s.is_empty() && null_if_empty => None,
         MessageContent::Text(s) => Some(ApiMessageContent::Text(s.clone())),
         MessageContent::Parts(parts) => {
             let api_parts: Vec<ApiContentPart> = parts
@@ -553,7 +555,7 @@ fn map_messages(messages: &[Message]) -> Vec<ApiMessage> {
                 Role::Ai => "assistant",
                 Role::Tool => "tool",
             },
-            content: content_to_api(&m.content),
+            content: content_to_api(&m.content, m.role == Role::Ai && !m.tool_calls.is_empty()),
             tool_calls: m
                 .tool_calls
                 .iter()
@@ -669,8 +671,7 @@ fn parse_response(chat: ChatResponse) -> GenerateResult {
                     ApiContentPart::Text { text } => Some(text),
                     _ => None,
                 })
-                .collect::<Vec<_>>()
-                .join(" "),
+                .collect::<String>(),
         })
         .unwrap_or_default();
 

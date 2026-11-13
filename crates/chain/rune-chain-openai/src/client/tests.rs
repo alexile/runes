@@ -861,3 +861,160 @@ fn debug_hides_custom_header_and_query_values() {
     assert!(shown.contains("X-Gateway-Token"), "{shown}");
     assert!(shown.contains("token"), "{shown}");
 }
+
+// ── review fixes ──────────────────────────────────────────────────────────────
+
+fn collect(body: &str) -> Result<GenerateResult, LlmError> {
+    let s = stream::assemble_events(
+        futures::stream::iter([Ok::<_, std::io::Error>(body.as_bytes().to_vec())]),
+        1 << 20,
+    );
+    futures::executor::block_on(crate::collect_events(s))
+}
+
+#[test]
+fn parallel_calls_sharing_an_index_stay_separate() {
+    let mut asm = stream::Assembler::default();
+    asm.push(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{\"p\":0}"}}]}}]}"#).unwrap();
+    asm.push(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b","function":{"name":"write","arguments":"{\"p\":"}}]}}]}"#).unwrap();
+    // An id-less continuation at the same index belongs to the newest call.
+    let out = asm
+        .push(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1}"}}]},"finish_reason":"tool_calls"}]}"#)
+        .unwrap();
+    let StreamEvent::ToolCalls(calls) = &out[0] else {
+        panic!("{out:?}")
+    };
+    let got: Vec<_> = calls
+        .iter()
+        .map(|c| (c.id.as_str(), c.name.as_str(), c.arguments.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [("a", "read", r#"{"p":0}"#), ("b", "write", r#"{"p":1}"#)]
+    );
+}
+
+#[test]
+fn remapped_index_does_not_collide_with_a_later_index() {
+    let mut asm = stream::Assembler::default();
+    asm.push(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"f","arguments":"{}"}}]}}]}"#).unwrap();
+    asm.push(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"b","function":{"name":"g","arguments":"{}"}}]}}]}"#).unwrap();
+    asm.push(r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c","function":{"name":"h","arguments":"{}"}}]}}]}"#).unwrap();
+    let out = asm.push("[DONE]").unwrap();
+    let StreamEvent::ToolCalls(calls) = &out[0] else {
+        panic!("{out:?}")
+    };
+    let ids: Vec<_> = calls.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["a", "b", "c"]);
+}
+
+#[test]
+fn collected_stream_keeps_the_finish_reason() {
+    let r = collect(concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c\",\"function\":{\"name\":\"f\",\"arguments\":\"{\\\"q\\\":\\\"abc\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ))
+    .unwrap();
+    assert_eq!(r.finish_reason, Some(FinishReason::Length));
+    assert!(r.is_truncated());
+}
+
+#[test]
+fn null_or_negative_usage_counts_are_tolerated() {
+    let out = push(r#"{"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":-35,"total_tokens":null,"prompt_tokens_details":{"cached_tokens":null},"completion_tokens_details":{"reasoning_tokens":-1}}}"#).unwrap();
+    let [StreamEvent::Usage(u)] = &out[..] else {
+        panic!("{out:?}")
+    };
+    assert_eq!(
+        (u.prompt_tokens, u.completion_tokens, u.total_tokens),
+        (5, 0, 5)
+    );
+
+    let r = decode_response(
+        br#"{"choices":[{"message":{"role":"assistant","content":"x"}}],"usage":{"prompt_tokens":null,"completion_tokens":2.0}}"#,
+    )
+    .unwrap();
+    assert_eq!(r.generation, "x");
+    assert_eq!(r.tokens.unwrap().completion_tokens, 2);
+}
+
+#[test]
+fn mid_stream_error_with_top_level_message_is_an_error() {
+    let err = collect(concat!(
+        "data: {\"object\":\"error\",\"message\":\"rate limited\",\"type\":\"error\"}\n\n",
+        "data: [DONE]\n\n",
+    ))
+    .unwrap_err();
+    assert!(err.message().contains("rate limited"), "{err:?}");
+
+    assert!(push(r#"{"detail":"backend went away"}"#).is_err());
+    // An ordinary empty keep-alive chunk is still fine.
+    assert!(
+        push(r#"{"id":"x","object":"chat.completion.chunk","choices":[]}"#)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn null_delta_and_index_decode_as_defaults() {
+    let out = push(r#"{"choices":[{"index":null,"delta":null,"finish_reason":"stop"}]}"#).unwrap();
+    assert!(matches!(&out[..], [StreamEvent::Finished { reason }] if reason == "stop"));
+}
+
+#[test]
+fn null_tool_call_id_and_arguments_decode() {
+    let r = decode_response(br#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":null,"type":"function","function":{"name":"f","arguments":null}}]}}]}"#).unwrap();
+    assert_eq!(r.tool_calls.len(), 1);
+    assert_eq!(r.tool_calls[0].id, "call_0");
+    assert_eq!(r.tool_calls[0].name, "f");
+}
+
+#[test]
+fn streamed_reasoning_is_collected() {
+    let r = collect(concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thi\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning\":\"nk\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ans\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ))
+    .unwrap();
+    assert_eq!(r.reasoning_text(), "think");
+    assert_eq!(r.generation, "ans");
+}
+
+#[test]
+fn streamed_refusal_is_collected() {
+    let r = collect(concat!(
+        "data: {\"choices\":[{\"delta\":{\"refusal\":\"I can't\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"refusal\":\" help.\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    ))
+    .unwrap();
+    assert_eq!(r.generation, "I can't help.");
+    assert_eq!(r.finish_reason, Some(FinishReason::Refusal));
+}
+
+#[test]
+fn empty_tool_and_user_content_is_an_empty_string() {
+    let v = body(
+        &OpenAi::new("k"),
+        &[
+            Message::human(""),
+            Message::ai_with_tool_calls("", vec![ToolCall::new("c", "f", "{}")]),
+            Message::tool_result("c", ""),
+        ],
+        &[],
+        None,
+    );
+    assert_eq!(v["messages"][0]["content"], "");
+    assert!(v["messages"][1]["content"].is_null());
+    assert_eq!(v["messages"][2]["content"], "");
+}
+
+#[test]
+fn text_parts_are_concatenated() {
+    let r = decode_response(br#"{"choices":[{"message":{"role":"assistant","content":[{"type":"text","text":"Hel"},{"type":"text","text":"lo"}]}}]}"#).unwrap();
+    assert_eq!(r.generation, "Hello");
+}

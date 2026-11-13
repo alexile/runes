@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::pin::Pin;
 
 use futures::{Stream, StreamExt};
-use rune_chain_core::{GenerateResult, LlmError, StreamData, TokenUsage, ToolCall};
+use rune_chain_core::{
+    FinishReason, GenerateResult, LlmError, ReasoningBlock, StreamData, TokenUsage, ToolCall,
+};
 
 use crate::types::{ChatChunk, ToolCallDelta, error_message};
 
@@ -15,15 +17,22 @@ const MAX_TOOL_CALLS: usize = 128;
 /// One event of a streamed chat completion, from
 /// [`OpenAi::stream_events`](crate::OpenAi::stream_events).
 ///
-/// A well-formed stream yields any number of [`Text`](Self::Text) events,
-/// then at most one [`ToolCalls`](Self::ToolCalls), one
-/// [`Finished`](Self::Finished), optionally [`Usage`](Self::Usage), and ends
-/// with [`Done`](Self::Done). Errors end the stream.
+/// A well-formed stream yields any number of [`Text`](Self::Text),
+/// [`Reasoning`](Self::Reasoning) and [`Refusal`](Self::Refusal) events,
+/// then at most one [`ToolCalls`](Self::ToolCalls) and one
+/// [`Finished`](Self::Finished), and ends with [`Done`](Self::Done).
+/// [`Usage`](Self::Usage) usually comes once near the end, but some servers
+/// report it on every chunk. Errors end the stream.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum StreamEvent {
     /// A non-empty fragment of the assistant's text.
     Text(String),
+    /// A non-empty fragment of the model's reasoning (`reasoning_content` or
+    /// `reasoning` on compatible servers).
+    Reasoning(String),
+    /// A non-empty fragment of a refusal message.
+    Refusal(String),
     /// Tool calls, fully assembled from their streamed deltas, in index order.
     ToolCalls(Vec<ToolCall>),
     /// The model stopped; `reason` is the provider's `finish_reason`
@@ -41,8 +50,12 @@ pub enum StreamEvent {
 /// A boxed stream of [`StreamEvent`]s.
 pub type EventStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, LlmError>> + Send>>;
 
-/// Drain an [`EventStream`] into a [`GenerateResult`]: the concatenated text,
-/// the assembled tool calls and the reported usage (if any).
+/// Drain an [`EventStream`] into a [`GenerateResult`].
+///
+/// The result holds the concatenated text and reasoning, the assembled tool
+/// calls, the finish reason and the reported usage (if any). A stream that
+/// only carries a refusal yields the refusal as text with
+/// [`FinishReason::Refusal`].
 ///
 /// ```rust,no_run
 /// use rune_chain_core::Message;
@@ -64,14 +77,27 @@ where
     S: Stream<Item = Result<StreamEvent, LlmError>> + Unpin,
 {
     let mut result = GenerateResult::from_text("");
+    let mut reasoning = String::new();
+    let mut refusal = String::new();
     while let Some(event) = events.next().await {
         match event? {
             StreamEvent::Text(t) => result.generation.push_str(&t),
+            StreamEvent::Reasoning(t) => reasoning.push_str(&t),
+            StreamEvent::Refusal(t) => refusal.push_str(&t),
             StreamEvent::ToolCalls(calls) => result.tool_calls.extend(calls),
             StreamEvent::Usage(u) => result.tokens = Some(u),
-            StreamEvent::Finished { .. } => {}
+            StreamEvent::Finished { reason } => {
+                result.finish_reason = Some(crate::types::finish_reason(&reason));
+            }
             StreamEvent::Done => break,
         }
+    }
+    if !reasoning.is_empty() {
+        result.reasoning = vec![ReasoningBlock::new(reasoning)];
+    }
+    if result.generation.is_empty() && result.tool_calls.is_empty() && !refusal.is_empty() {
+        result.generation = refusal;
+        result.finish_reason = Some(FinishReason::Refusal);
     }
     Ok(result)
 }
@@ -87,6 +113,9 @@ struct PartialCall {
 #[derive(Debug, Default)]
 pub struct Assembler {
     calls: BTreeMap<usize, PartialCall>,
+    /// Wire `index` → key in `calls`. Usually the identity, but a server that
+    /// reuses an index for a second call (new id) gets a fresh slot.
+    slots: BTreeMap<usize, usize>,
     finished: bool,
     done: bool,
 }
@@ -119,11 +148,25 @@ impl Assembler {
                 error_event(&value).unwrap_or_else(|| LlmError::provider("error event in stream"))
             );
         }
+        if chunk.choices.is_empty()
+            && chunk.usage.is_none()
+            && chunk.x_groq.is_none()
+            && let Some(err) = bare_error(data)
+        {
+            return Err(err);
+        }
         for choice in chunk.choices.into_iter().filter(|c| c.index == 0) {
-            if let Some(text) = choice.delta.content.filter(|t| !t.is_empty()) {
+            let delta = choice.delta;
+            if let Some(text) = delta.reasoning_content.filter(|t| !t.is_empty()) {
+                out.push(StreamEvent::Reasoning(text));
+            }
+            if let Some(text) = delta.content.filter(|t| !t.is_empty()) {
                 out.push(StreamEvent::Text(text));
             }
-            for (pos, delta) in choice.delta.tool_calls.into_iter().enumerate() {
+            if let Some(text) = delta.refusal.filter(|t| !t.is_empty()) {
+                out.push(StreamEvent::Refusal(text));
+            }
+            for (pos, delta) in delta.tool_calls.into_iter().enumerate() {
                 self.merge(pos, delta)?;
             }
             if let Some(reason) = choice.finish_reason.filter(|r| !r.is_empty()) {
@@ -158,11 +201,12 @@ impl Assembler {
 
     /// Merge one tool-call delta. `OpenAI` sends `index` on every delta and
     /// `id`/`name` only on the first; some compatible servers omit `index`
-    /// and send whole calls, which are keyed by `id` instead.
+    /// and send whole calls, which are keyed by `id` instead. A new id at an
+    /// index that already holds a different call starts a new call.
     fn merge(&mut self, pos: usize, delta: ToolCallDelta) -> Result<(), LlmError> {
         let id = delta.id.filter(|s| !s.is_empty());
         let index = match delta.index {
-            Some(i) => i,
+            Some(i) => self.slot_for(i, id.as_deref()),
             None => match &id {
                 Some(id) => self
                     .calls
@@ -196,6 +240,28 @@ impl Assembler {
         Ok(())
     }
 
+    /// The `calls` key for wire index `wire`, given the delta's id (if any).
+    fn slot_for(&mut self, wire: usize, id: Option<&str>) -> usize {
+        let current = self.slots.get(&wire).copied();
+        let slot = match current {
+            Some(slot) => {
+                let taken_by_other = id.is_some_and(|id| {
+                    self.calls
+                        .get(&slot)
+                        .is_some_and(|c| !c.id.is_empty() && c.id != id)
+                });
+                if !taken_by_other {
+                    return slot;
+                }
+                self.next_index()
+            }
+            None if self.calls.contains_key(&wire) => self.next_index(),
+            None => wire,
+        };
+        self.slots.insert(wire, slot);
+        slot
+    }
+
     fn next_index(&self) -> usize {
         self.calls.keys().next_back().map_or(0, |i| i + 1)
     }
@@ -204,6 +270,7 @@ impl Assembler {
         if self.calls.is_empty() {
             return Ok(());
         }
+        self.slots.clear();
         let calls = std::mem::take(&mut self.calls)
             .into_iter()
             .map(|(index, c)| {
@@ -314,6 +381,22 @@ fn error_event(value: &serde_json::Value) -> Option<LlmError> {
         Some(kind) => err.with_kind(kind),
         None => err,
     })
+}
+
+/// A chunk with no choices or usage that is really an error object with only
+/// top-level fields (`{"object":"error","message":…}`, `{"detail":…}`).
+fn bare_error(data: &str) -> Option<LlmError> {
+    let value: serde_json::Value = serde_json::from_str(data).ok()?;
+    let is_error = |k: &str| value.get(k).and_then(serde_json::Value::as_str) == Some("error");
+    if is_error("object") || is_error("type") {
+        return Some(
+            error_event(&value).unwrap_or_else(|| LlmError::provider("error event in stream")),
+        );
+    }
+    if value.get("message").is_some() || value.get("detail").is_some() {
+        return error_event(&value);
+    }
+    None
 }
 
 /// Describe an event-stream failure, including its underlying cause.

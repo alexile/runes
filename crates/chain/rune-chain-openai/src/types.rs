@@ -136,7 +136,7 @@ pub struct ApiToolCall {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApiFunctionCall {
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub arguments: String,
 }
 
@@ -171,7 +171,7 @@ pub struct ResponseMessage {
 
 #[derive(Debug, Deserialize)]
 pub struct ResponseToolCall {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub id: String,
     pub function: ApiFunctionCall,
 }
@@ -179,11 +179,11 @@ pub struct ResponseToolCall {
 /// Token usage; `total_tokens` is derived when a server omits it.
 #[derive(Debug, Deserialize)]
 pub struct UsageReport {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_count")]
     pub prompt_tokens: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_count")]
     pub completion_tokens: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_count")]
     pub total_tokens: u32,
     #[serde(default)]
     pub prompt_tokens_details: Option<PromptTokensDetails>,
@@ -194,7 +194,7 @@ pub struct UsageReport {
 /// `usage.prompt_tokens_details`: the cached part of `prompt_tokens`.
 #[derive(Debug, Default, Deserialize)]
 pub struct PromptTokensDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_opt_count")]
     pub cached_tokens: Option<u32>,
 }
 
@@ -202,7 +202,7 @@ pub struct PromptTokensDetails {
 /// `completion_tokens`.
 #[derive(Debug, Default, Deserialize)]
 pub struct CompletionTokensDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_opt_count")]
     pub reasoning_tokens: Option<u32>,
 }
 
@@ -256,9 +256,9 @@ pub struct XGroq {
 
 #[derive(Debug, Deserialize)]
 pub struct ChunkChoice {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub index: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub delta: Delta,
     pub finish_reason: Option<String>,
 }
@@ -266,6 +266,10 @@ pub struct ChunkChoice {
 #[derive(Debug, Default, Deserialize)]
 pub struct Delta {
     pub content: Option<String>,
+    /// Reasoning text from compatible servers, as on [`ResponseMessage`].
+    #[serde(default, alias = "reasoning")]
+    pub reasoning_content: Option<String>,
+    pub refusal: Option<String>,
     #[serde(default, deserialize_with = "null_as_default")]
     pub tool_calls: Vec<ToolCallDelta>,
 }
@@ -289,6 +293,43 @@ where
     T: Default + Deserialize<'de>,
 {
     Ok(Option::<T>::deserialize(de)?.unwrap_or_default())
+}
+
+/// A token count that tolerates what some servers send: `null` or a
+/// non-number becomes `None`, negatives clamp to 0, huge values to
+/// `u32::MAX`, and floats are truncated.
+fn lenient_opt_count<'de, D>(de: D) -> Result<Option<u32>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(de)?;
+    let Value::Number(n) = value else {
+        return Ok(None);
+    };
+    // Every count up to `u32::MAX` is exact as an f64.
+    let f = n.as_f64().unwrap_or(0.0);
+    let count = if f.is_nan() || f <= 0.0 {
+        0
+    } else if f >= f64::from(u32::MAX) {
+        u32::MAX
+    } else {
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "range checked above"
+        )]
+        let c = f as u32;
+        c
+    };
+    Ok(Some(count))
+}
+
+/// Like [`lenient_opt_count`], with a missing value read as 0.
+fn lenient_count<'de, D>(de: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(lenient_opt_count(de)?.unwrap_or(0))
 }
 
 // ── error response ────────────────────────────────────────────────────────────
