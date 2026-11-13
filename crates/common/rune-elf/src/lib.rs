@@ -508,7 +508,10 @@ pub struct Elf {
 /// cut short, header tables with undersized entries are ignored, the
 /// dynamic section stops at `DT_NULL`, the interpreter path must end inside
 /// its `PT_INTERP` segment, and names longer than 4096 bytes (or
-/// unterminated) are reported as empty. Without section headers, `DT_NEEDED`
+/// unterminated) are reported as empty. Section, symbol and library names
+/// together are at most twice the size of the file; once that is used up,
+/// further names are reported as empty too (and those symbols and libraries
+/// are left out). Without section headers, `DT_NEEDED`
 /// and the binding flags are read from the `PT_DYNAMIC` segment.
 ///
 /// # Examples
@@ -671,8 +674,8 @@ pub fn parse(bytes: &[u8]) -> Result<Elf, ElfError> {
         })
         .unwrap_or(0);
 
-    // The NUL-terminated string at `start`, capped at `MAX_NAME_LEN` bytes.
-    let read_cstring = |start: usize| -> String { read_cstr(bytes, start) };
+    // Section, symbol and library names, capped per name and in total.
+    let mut names = Names::new(bytes);
 
     // ── Sections ──────────────────────────────────────────────────────────
     let mut sections = Vec::new();
@@ -714,7 +717,7 @@ pub fn parse(bytes: &[u8]) -> Result<Elf, ElfError> {
         let name = if strtab_offset > 0 {
             strtab_offset
                 .checked_add(sh_name_idx)
-                .map(read_cstring)
+                .map(|start| names.read(start))
                 .unwrap_or_default()
         } else {
             String::new()
@@ -819,7 +822,7 @@ pub fn parse(bytes: &[u8]) -> Result<Elf, ElfError> {
                 // The path must end within the segment, not merely somewhere
                 // later in the file.
                 let path = file_range(p_offset, p_filesz, bytes.len())
-                    .map(|(start, end)| read_cstr(&bytes[..end], start))
+                    .map(|(start, end)| read_cstr(&bytes[..end], start).to_string())
                     .unwrap_or_default();
                 interpreter = Some(path);
                 SegmentType::Interp
@@ -881,7 +884,7 @@ pub fn parse(bytes: &[u8]) -> Result<Elf, ElfError> {
 
             let name = dstr_off
                 .checked_add(st_name)
-                .map(read_cstring)
+                .map(|start| names.read(start))
                 .unwrap_or_default();
             if name.is_empty() {
                 continue;
@@ -953,7 +956,7 @@ pub fn parse(bytes: &[u8]) -> Result<Elf, ElfError> {
             let lib = usize::try_from(d_val)
                 .ok()
                 .and_then(|v| dstr_off.checked_add(v))
-                .map(read_cstring)
+                .map(|start| names.read(start))
                 .unwrap_or_default();
             if !lib.is_empty() {
                 needed_libs.push(lib);
@@ -1015,14 +1018,47 @@ const MAX_NAME_LEN: usize = 4096;
 
 /// The NUL-terminated UTF-8 string at `start`, or `""` if it is out of
 /// bounds, unterminated within [`MAX_NAME_LEN`] bytes, or not UTF-8.
-fn read_cstr(bytes: &[u8], start: usize) -> String {
+fn read_cstr(bytes: &[u8], start: usize) -> &str {
     bytes
         .get(start..)
         .map(|s| &s[..s.len().min(MAX_NAME_LEN + 1)])
         .and_then(|s| s.iter().position(|&b| b == 0).map(|end| &s[..end]))
         .and_then(|s| core::str::from_utf8(s).ok())
         .unwrap_or("")
-        .to_string()
+}
+
+/// Copies names out of the file, at most twice the file's size in total.
+///
+/// Every symbol, section and `DT_NEEDED` entry can point at the same
+/// string, so the per-name cap alone still lets a small file expand into
+/// hundreds of megabytes of copies. Real files name each entry with its own
+/// string (or share suffixes), so they stay far below the budget; past it,
+/// names are reported as empty.
+struct Names<'a> {
+    bytes: &'a [u8],
+    left: usize,
+}
+
+impl<'a> Names<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes,
+            left: bytes.len().saturating_mul(2),
+        }
+    }
+
+    /// The name at `start`, as [`read_cstr`] reads it, or `""` once the
+    /// budget is spent.
+    fn read(&mut self, start: usize) -> String {
+        let name = read_cstr(self.bytes, start);
+        match self.left.checked_sub(name.len()) {
+            Some(left) => {
+                self.left = left;
+                name.to_string()
+            }
+            None => String::new(),
+        }
+    }
 }
 
 /// `(start, end)` of `size` bytes at `offset`, clamped to a file of `len`

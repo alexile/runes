@@ -335,7 +335,7 @@ rune-dns-records = { path = "crates/net/rune-dns-records", version = "0.1.0" }
 rune-dns-wire = { path = "crates/net/rune-dns-wire", version = "0.1.0" }
 rune-dns-zone = { path = "crates/net/rune-dns-zone", version = "0.1.0" }
 rune-egress-proxy = { path = "crates/net/rune-egress-proxy", version = "0.1.0" }
-rune-elf = { path = "crates/common/rune-elf", version = "0.4.1" }
+rune-elf = { path = "crates/common/rune-elf", version = "0.4.2" }
 rune-elf-deps = { path = "crates/common/rune-elf-deps", version = "0.2.0" }
 rune-epoch = { path = "crates/common/rune-epoch", version = "0.2.2" }
 rune-entropy = { path = "crates/common/rune-entropy", version = "0.4.1" }

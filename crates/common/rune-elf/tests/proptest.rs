@@ -20,10 +20,10 @@ fn check(elf: &Elf, len: usize) {
         .map(|s| s.name.as_str())
         .chain(elf.dynamic_symbols.iter().map(|s| s.name.as_str()))
         .chain(elf.needed_libs.iter().map(String::as_str))
-        .chain(elf.interpreter.as_deref());
-    for name in names {
-        assert!(name.len() <= 4096);
-    }
+        .collect::<Vec<_>>();
+    assert!(names.iter().all(|name| name.len() <= 4096));
+    assert!(elf.interpreter.as_ref().is_none_or(|i| i.len() <= 4096));
+    assert!(names.iter().map(|name| name.len()).sum::<usize>() <= 2 * len);
     assert!(elf.dynamic_symbols.iter().all(|s| !s.name.is_empty()));
     assert!(elf.needed_libs.iter().all(|l| !l.is_empty()));
     assert!(elf.security.score() <= 6);
