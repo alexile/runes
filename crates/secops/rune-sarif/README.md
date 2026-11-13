@@ -24,7 +24,10 @@ as findings.
 - **`read`**: a log to findings, as far as the log allows. Tested on real
   CodeQL, Semgrep, Trivy and Gitleaks output: rules in tool extensions,
   `security-severity` or levels, precision and confidence tags, CWE and
-  OWASP tags, Trivy's CVSS properties, code flows.
+  OWASP tags, Trivy's CVSS properties, code flows. Findings copy text
+  from the rule and run many results share, so `read` caps their total
+  size (256 MiB by default, `read_with` + `ReadOptions` to change it) and
+  a small log cannot build gigabytes of findings.
 - **Round trips**: what SARIF has no slot for (evidence, CVSS,
   remediation, ambiguous locations) is kept in property bags, so
   `read(write(findings)) == findings`.
@@ -79,7 +82,7 @@ fn main() -> Result<(), rune_sarif::Error> {
     let json = log.to_json_pretty()?;
 
     // SARIF from any tool to findings.
-    let imported: Vec<Finding<Imported>> = read(&Log::from_json(&json)?);
+    let imported: Vec<Finding<Imported>> = read(&Log::from_json(&json)?)?;
     assert_eq!(imported[0].tool, "sast-tool");
     assert_eq!(imported[0].clone().into_parts().0, finding);
     Ok(())

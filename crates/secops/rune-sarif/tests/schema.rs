@@ -226,7 +226,8 @@ fn written_logs_read_back() {
     let findings = sast_findings();
     let log = write(&findings, &Options::default());
     let json = log.to_json().unwrap_or_default();
-    let read_back: Vec<Finding<Imported>> = read(&Log::from_json(&json).unwrap_or_default());
+    let read_back: Vec<Finding<Imported>> =
+        read(&Log::from_json(&json).unwrap_or_default()).unwrap_or_default();
     assert_eq!(read_back.len(), findings.len());
     for (back, original) in read_back.into_iter().zip(findings) {
         let (core, imported) = back.into_parts();

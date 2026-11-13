@@ -55,12 +55,21 @@ impl Batch {
     /// Code flow steps and related locations go to [`Source::flow`],
     /// `partialFingerprints` to [`Source::partial_fingerprints`], and an
     /// accepted suppression sets [`Source::suppressed`].
-    pub fn add_sarif(&mut self, log: &Log) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Sarif`] when the findings would be larger than
+    /// [`rune_sarif::read`]'s default budget; nothing is added then.
+    pub fn add_sarif(&mut self, log: &Log) -> Result<usize, Error> {
         self.add_sarif_with(log, None)
     }
 
     /// [`add_sarif`](Self::add_sarif), with every result of `kind`.
-    pub fn add_sarif_as(&mut self, log: &Log, kind: Kind) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// As [`add_sarif`](Self::add_sarif).
+    pub fn add_sarif_as(&mut self, log: &Log, kind: Kind) -> Result<usize, Error> {
         self.add_sarif_with(log, Some(kind))
     }
 
@@ -68,23 +77,25 @@ impl Batch {
     ///
     /// # Errors
     ///
-    /// [`Error::Sarif`] when the text is not a SARIF 2.1.0 log.
+    /// [`Error::Sarif`] when the text is not a SARIF 2.1.0 log, or as
+    /// [`add_sarif`](Self::add_sarif).
     pub fn add_sarif_json(&mut self, json: &str) -> Result<usize, Error> {
-        Ok(self.add_sarif(&Log::from_json(json)?))
+        self.add_sarif(&Log::from_json(json)?)
     }
 
     /// Parse SARIF 2.1.0 JSON and [`add_sarif_as`](Self::add_sarif_as) it.
     ///
     /// # Errors
     ///
-    /// [`Error::Sarif`] when the text is not a SARIF 2.1.0 log.
+    /// [`Error::Sarif`] when the text is not a SARIF 2.1.0 log, or as
+    /// [`add_sarif`](Self::add_sarif).
     pub fn add_sarif_json_as(&mut self, json: &str, kind: Kind) -> Result<usize, Error> {
-        Ok(self.add_sarif_as(&Log::from_json(json)?, kind))
+        self.add_sarif_as(&Log::from_json(json)?, kind)
     }
 
-    fn add_sarif_with(&mut self, log: &Log, kind: Option<Kind>) -> usize {
+    fn add_sarif_with(&mut self, log: &Log, kind: Option<Kind>) -> Result<usize, Error> {
         let before = self.findings.len();
-        for finding in rune_sarif::read::<Imported>(log) {
+        for finding in rune_sarif::read::<Imported>(log)? {
             let (core, imported) = finding.into_parts();
             let tool = if imported.tool.is_empty() {
                 UNNAMED_TOOL
@@ -107,7 +118,7 @@ impl Batch {
             }
             self.findings.push(core.with_ext(Provenance::new(source)));
         }
-        self.findings.len() - before
+        Ok(self.findings.len() - before)
     }
 
     /// Add native findings reported by `tool`; each one's kind comes from
@@ -218,8 +229,8 @@ mod tests {
         );
         let mut batch = Batch::new();
         assert!(batch.is_empty());
-        assert_eq!(batch.add_sarif(&log), 2);
-        assert_eq!(batch.add_sarif_as(&log, Kind::Other), 2);
+        assert_eq!(batch.add_sarif(&log).unwrap(), 2);
+        assert_eq!(batch.add_sarif_as(&log, Kind::Other).unwrap(), 2);
         assert_eq!(batch.len(), 4);
         let first = &batch.findings()[0];
         let source = &first.ext.sources[0];

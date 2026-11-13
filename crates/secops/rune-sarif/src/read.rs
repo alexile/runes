@@ -15,7 +15,7 @@ use crate::model::{
     ToolComponent,
 };
 use crate::write::ToSarif;
-use crate::{keys, location};
+use crate::{Error, keys, location};
 
 /// Result properties the reader maps onto finding members. The others are
 /// "unknown" and go to the extension.
@@ -35,10 +35,93 @@ const MAPPED: [&str; 5] = [
 pub trait FromSarif: Sized {
     /// Build the extension for one result.
     fn from_sarif(context: &ResultContext<'_>) -> Self;
+
+    /// Roughly how many bytes of text the extension holds, counted against
+    /// [`ReadOptions::with_max_text_bytes`]. Count at least everything
+    /// copied from the rule or the run: those are shared by many results,
+    /// so they are what can make the findings much larger than the log.
+    /// [`json_len`] measures anything serializable.
+    fn text_len(&self) -> usize;
 }
 
 impl FromSarif for () {
     fn from_sarif(_: &ResultContext<'_>) -> Self {}
+
+    fn text_len(&self) -> usize {
+        0
+    }
+}
+
+/// Limits for [`read_with`].
+///
+/// # Examples
+///
+/// ```
+/// use rune_sarif::ReadOptions;
+///
+/// let options = ReadOptions::default().with_max_text_bytes(1 << 20);
+/// assert_eq!(options.max_text_bytes(), 1 << 20);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReadOptions {
+    max_text_bytes: usize,
+}
+
+impl ReadOptions {
+    /// The default budget: 256 MiB.
+    pub const DEFAULT_MAX_TEXT_BYTES: usize = 256 << 20;
+
+    /// Cap the total size of the findings read, measured as the length of
+    /// each finding's JSON form plus its extension's
+    /// [`FromSarif::text_len`]. The total is checked after each finding is
+    /// built, so reading stops before it goes far past the cap.
+    /// `usize::MAX` turns the cap off.
+    #[must_use]
+    pub const fn with_max_text_bytes(mut self, bytes: usize) -> Self {
+        self.max_text_bytes = bytes;
+        self
+    }
+
+    /// The cap set by [`with_max_text_bytes`](Self::with_max_text_bytes).
+    #[must_use]
+    pub const fn max_text_bytes(&self) -> usize {
+        self.max_text_bytes
+    }
+}
+
+impl Default for ReadOptions {
+    fn default() -> Self {
+        Self {
+            max_text_bytes: Self::DEFAULT_MAX_TEXT_BYTES,
+        }
+    }
+}
+
+/// The length of `value`'s compact JSON form, without building it.
+///
+/// A helper for [`FromSarif::text_len`].
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(rune_sarif::json_len(&vec!["ab", "c"]), 10);
+/// ```
+#[must_use]
+pub fn json_len<T: Serialize + ?Sized>(value: &T) -> usize {
+    struct Counter(usize);
+    impl std::io::Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.saturating_add(bytes.len());
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    // A value that fails to serialize part way still counts what it wrote.
+    let _ = serde_json::to_writer(&mut counter, value);
+    counter.0
 }
 
 /// The SARIF a finding is read from, for [`FromSarif`].
@@ -224,6 +307,10 @@ impl FromSarif for Imported {
                 .collect(),
         }
     }
+
+    fn text_len(&self) -> usize {
+        json_len(self)
+    }
 }
 
 /// Writing an imported finding back keeps its code flows, related
@@ -318,17 +405,15 @@ impl ToSarif for Imported {
 ///   properties and the remediation from the first fix's description;
 /// - **extension**: [`FromSarif::from_sarif`].
 ///
-/// Reading never fails: a member that does not parse is left out of the
-/// finding, and stays available to the extension.
+/// A member that does not parse is left out of the finding, and stays
+/// available to the extension.
 ///
-/// # Untrusted input
+/// Reads with [`ReadOptions::default`]; see [`read_with`].
 ///
-/// Each finding owns copies of what it takes from its rule and run (rule
-/// id, short description, tags, help URI, tool name). A log can give
-/// thousands of tiny results one rule with megabytes of such text, so the
-/// memory `read` needs grows with results × rule size, not with the size of
-/// the log. Bound the input size and the number of results before reading
-/// logs from untrusted sources.
+/// # Errors
+///
+/// [`Error::TooLarge`] when the findings would hold more than
+/// [`ReadOptions::DEFAULT_MAX_TEXT_BYTES`] of text.
 ///
 /// # Examples
 ///
@@ -347,31 +432,76 @@ impl ToSarif for Imported {
 ///
 /// let json = write(&[finding.clone()], &Options::default()).to_json()?;
 /// let log = Log::from_json(&json)?;
-/// assert_eq!(read::<()>(&log), [finding]);
+/// assert_eq!(read::<()>(&log)?, [finding]);
 ///
-/// let imported: Vec<Finding<Imported>> = read(&log);
+/// let imported: Vec<Finding<Imported>> = read(&log)?;
 /// assert_eq!(imported[0].tool, "rune-sarif");
 /// # Ok::<(), rune_sarif::Error>(())
 /// ```
-#[must_use]
-pub fn read<X: FromSarif>(log: &Log) -> Vec<Finding<X>> {
-    log.runs
-        .iter()
-        .flat_map(|run| {
-            run.results
-                .iter()
-                .filter(|result| {
-                    !matches!(
-                        result.kind,
-                        Some(ResultKind::Pass | ResultKind::NotApplicable)
-                    )
-                })
-                .map(move |result| read_result(run, result))
-        })
-        .collect()
+pub fn read<X: FromSarif>(log: &Log) -> Result<Vec<Finding<X>>, Error> {
+    read_with(log, &ReadOptions::default())
 }
 
-fn read_result<X: FromSarif>(run: &Run, result: &model::Result) -> Finding<X> {
+/// [`read`] with a size budget for the findings.
+///
+/// Each finding owns copies of what it takes from its rule and run (rule
+/// id, short description, tags, taxonomy names, help URI, tool name), so a
+/// log that gives thousands of tiny results one rule with megabytes of
+/// text would make findings far larger than the log. The budget
+/// ([`ReadOptions::with_max_text_bytes`]) caps their total size, checked
+/// as each finding is built.
+///
+/// # Errors
+///
+/// [`Error::TooLarge`] when the findings would go over the budget.
+///
+/// # Examples
+///
+/// ```
+/// use rune_finding::{Confidence, Finding, Location, Severity};
+/// use rune_sarif::{Error, Log, Options, ReadOptions, read_with, write};
+///
+/// let finding = Finding::<()>::new(
+///     "py.sqli",
+///     "SQL injection",
+///     Severity::High,
+///     Confidence::Firm,
+///     Location::file("src/app.py"),
+/// );
+/// let log = write(&[finding.clone(), finding], &Options::default());
+///
+/// let roomy = ReadOptions::default().with_max_text_bytes(1 << 20);
+/// assert_eq!(read_with::<()>(&log, &roomy)?.len(), 2);
+///
+/// let tight = ReadOptions::default().with_max_text_bytes(10);
+/// assert!(matches!(read_with::<()>(&log, &tight), Err(Error::TooLarge { .. })));
+/// # Ok::<(), rune_sarif::Error>(())
+/// ```
+pub fn read_with<X: FromSarif>(log: &Log, options: &ReadOptions) -> Result<Vec<Finding<X>>, Error> {
+    let limit = options.max_text_bytes;
+    let mut total: usize = 0;
+    let mut findings = Vec::new();
+    for run in &log.runs {
+        for result in &run.results {
+            if matches!(
+                result.kind,
+                Some(ResultKind::Pass | ResultKind::NotApplicable)
+            ) {
+                continue;
+            }
+            let (finding, size) = read_result::<X>(run, result);
+            total = total.saturating_add(size);
+            if total > limit {
+                return Err(Error::TooLarge { limit });
+            }
+            findings.push(finding);
+        }
+    }
+    Ok(findings)
+}
+
+/// One finding and its size for the budget.
+fn read_result<X: FromSarif>(run: &Run, result: &model::Result) -> (Finding<X>, usize) {
     let rule = find_rule(run, result);
     let properties = &result.properties;
     let rule_properties = rule.map(|rule| &rule.properties);
@@ -487,14 +617,15 @@ fn read_result<X: FromSarif>(run: &Run, result: &model::Result) -> Finding<X> {
         rule,
         mapped,
     };
-    let mut finding = Finding::<()>::new(check_id, title, severity, confidence, location)
+    let mut core = Finding::<()>::new(check_id, title, severity, confidence, location)
         .with_evidence(evidence.unwrap_or_default())
         .with_taxonomy(taxonomy)
-        .with_remediation_refs(remediation_refs.unwrap_or_default())
-        .with_ext(X::from_sarif(&context));
-    finding.remediation = remediation;
-    finding.cvss = cvss;
-    finding
+        .with_remediation_refs(remediation_refs.unwrap_or_default());
+    core.remediation = remediation;
+    core.cvss = cvss;
+    let ext = X::from_sarif(&context);
+    let size = json_len(&core).saturating_add(ext.text_len());
+    (core.with_ext(ext), size)
 }
 
 fn parse_property<T: serde::de::DeserializeOwned>(value: Option<&Value>) -> Option<T> {
@@ -697,7 +828,7 @@ mod tests {
             log.runs[0].tool.driver.rules[0].properties.tags[1],
             "external/cwe/cwe-79"
         );
-        assert_eq!(read::<()>(&log), [with, without]);
+        assert_eq!(read::<()>(&log).unwrap(), [with, without]);
     }
 
     #[test]

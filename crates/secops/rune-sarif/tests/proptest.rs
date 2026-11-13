@@ -197,6 +197,10 @@ impl FromSarif for Flow {
             .unwrap_or_default();
         Self { steps }
     }
+
+    fn text_len(&self) -> usize {
+        rune_sarif::json_len(&self.steps)
+    }
 }
 
 /// Serialize and parse again, as a consumer of the file would.
@@ -208,7 +212,7 @@ proptest! {
     #[test]
     fn write_then_read_round_trips(findings in vec(finding(), 0..6)) {
         let log = through_json(&write(&findings, &Options::default()));
-        prop_assert_eq!(read::<()>(&log), findings);
+        prop_assert_eq!(read::<()>(&log).unwrap(), findings);
     }
 
     #[test]
@@ -220,13 +224,13 @@ proptest! {
             .map(|(finding, steps)| finding.with_ext(Flow { steps }))
             .collect();
         let log = through_json(&write(&findings, &Options::default()));
-        prop_assert_eq!(read::<Flow>(&log), findings);
+        prop_assert_eq!(read::<Flow>(&log).unwrap(), findings);
     }
 
     #[test]
     fn without_details_the_core_identity_survives(findings in vec(finding(), 0..6)) {
         let log = through_json(&write(&findings, &Options::default().with_details(false)));
-        let back = read::<()>(&log);
+        let back = read::<()>(&log).unwrap();
         prop_assert_eq!(back.len(), findings.len());
         for (back, original) in back.iter().zip(&findings) {
             prop_assert_eq!(&back.check_id, &original.check_id);
@@ -283,8 +287,8 @@ proptest! {
             "runs": [{ "tool": { "driver": { "name": "t" } }, "results": [result] }],
         });
         let log = Log::from_json(&log.to_string()).unwrap();
-        let first = read::<()>(&log);
-        let again = read::<()>(&through_json(&write(&first, &Options::default())));
+        let first = read::<()>(&log).unwrap();
+        let again = read::<()>(&through_json(&write(&first, &Options::default()))).unwrap();
         prop_assert_eq!(again, first);
     }
 }

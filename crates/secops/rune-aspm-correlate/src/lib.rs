@@ -57,7 +57,7 @@
 //!     .push_taxonomy(TaxonomyRef::cwe(89));
 //!
 //! let mut batch = Batch::new();
-//! batch.add_sarif(&sarif);
+//! batch.add_sarif(&sarif)?;
 //! batch.add_findings("dast-scanner", [dast]);
 //! let options = Options::default()
 //!     .with_route(Route::new("/users/{id}", "src/users.py")?.with_lines(1, 60));

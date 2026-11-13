@@ -32,7 +32,7 @@ const TRIVY: &str = include_str!("fixtures/trivy.sarif");
 const GITLEAKS: &str = include_str!("fixtures/gitleaks.sarif");
 
 fn findings(json: &str) -> Vec<Finding<Imported>> {
-    read(&Log::from_json(json).unwrap())
+    read(&Log::from_json(json).unwrap()).unwrap()
 }
 
 fn by_id<'a>(findings: &'a [Finding<Imported>], id: &str) -> &'a Finding<Imported> {
@@ -261,7 +261,7 @@ fn imported_findings_rewrite_and_read_back() {
         assert_eq!(validator.validate(&value), Ok(()));
         assert!(github::accepts(&log), "{:#?}", github::check(&log));
 
-        let again: Vec<Finding<Imported>> = read(&log);
+        let again: Vec<Finding<Imported>> = read(&log).unwrap();
         let core = |findings: &[Finding<Imported>]| -> Vec<Finding> {
             findings.iter().map(|f| f.clone().into_parts().0).collect()
         };

@@ -55,7 +55,7 @@
 //!
 //! // SARIF JSON (from this crate or any other tool) to findings.
 //! let log = Log::from_json(&json)?;
-//! let back: Vec<Finding<Imported>> = read(&log);
+//! let back: Vec<Finding<Imported>> = read(&log)?;
 //! assert_eq!(back[0].tool, "sast-tool");
 //! let (core, _imported) = back[0].clone().into_parts();
 //! assert_eq!(core, finding);
@@ -72,7 +72,7 @@ mod read;
 mod write;
 
 pub use model::Log;
-pub use read::{FromSarif, Imported, ResultContext, Step, read};
+pub use read::{FromSarif, Imported, ReadOptions, ResultContext, Step, json_len, read, read_with};
 pub use rune_finding;
 pub use write::{Options, ToSarif, level, write};
 
@@ -105,6 +105,13 @@ pub enum Error {
     /// The log is not SARIF 2.1.0.
     #[error("unsupported SARIF version `{0}`; expected 2.1.0")]
     UnsupportedVersion(String),
+    /// Reading the log would build findings larger than the budget set
+    /// with [`ReadOptions::with_max_text_bytes`].
+    #[error("the findings in this log hold more than {limit} bytes of text")]
+    TooLarge {
+        /// The budget, in bytes.
+        limit: usize,
+    },
 }
 
 impl Log {
