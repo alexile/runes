@@ -94,6 +94,26 @@ proptest! {
     }
 
     #[test]
+    fn lookup_walk_fetches_a_bounded_number_of_records(
+        records in prop::collection::vec(prop::collection::vec(term(), 0..12), 1..6),
+    ) {
+        // Every domain a hostile zone names answers with one of these
+        // records, so includes can fan out and loop.
+        let texts: Vec<String> = records
+            .iter()
+            .map(|terms| format!("v=spf1 {}", terms.join(" ")))
+            .collect();
+        let Ok(root) = Spf::parse(&texts[0]) else { return Ok(()) };
+        let mut fetches = 0usize;
+        let report = root.count_lookups("example.com", |domain| {
+            fetches += 1;
+            Some(texts[domain.len() % texts.len()].clone())
+        });
+        prop_assert!(fetches <= rune_dns_records::spf::MAX_DNS_LOOKUPS + 1, "{fetches}");
+        prop_assert!(report.lookups >= fetches);
+    }
+
+    #[test]
     fn spf_round_trips(terms in prop::collection::vec(term(), 0..12)) {
         let text = format!("v=spf1 {}", terms.join(" "));
         let spf = Spf::parse(&text).map_err(|e| TestCaseError::fail(format!("{text}: {e}")))?;
