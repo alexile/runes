@@ -32,6 +32,14 @@ the server checks everything a client sends before a handler sees it.
 - **`ToolPolicy`**, on both sides, decides which tools are listed and which
   calls run: `AllowAll`, `MaxSafety`, `AllowNames`, `DenyNames`, `AllOf`,
   or any `Fn(&ToolCall) -> Decision` closure.
+- **`export_tools`** (also `McpToolset::export_tools` and
+  `McpClient::export_tools`) turns the gathered tools into OpenAI (plain
+  or strict), Anthropic or Gemini tool definitions, with a warning for
+  every schema keyword that had to be removed or rewritten.
+
+Schema validation, hidden-character rules and provider dialects come from
+[`rune-tool-schema`](../rune-tool-schema); this crate adds the MCP
+policies on top (size caps, allowlists, namespaces, fencing).
 
 ## Security model
 
@@ -41,8 +49,10 @@ Client side (consuming servers):
 | --- | --- | --- |
 | Tool shadowing / name collisions across servers | `McpToolset` namespaces every tool as `<ns>__<tool>`; namespaces cannot contain `__` | on |
 | Duplicate name inside one server | both copies dropped (or listing fails when `strict`) | on |
-| Malformed definitions | MCP name rules, object schemas, schema ≤ 64 KiB and ≤ 32 levels | on |
-| Tool poisoning in descriptions | invisible / bidi / Unicode-tag characters stripped, descriptions capped at 1 KiB | on |
+| Malformed definitions | MCP name rules, object schemas, schema ≤ 64 KiB and ≤ 32 levels, input schema must compile (well-typed keywords, only local `$ref`s, usable `pattern`s) | on |
+| Hostile schemas (`$ref` cycles, `anyOf` explosions) | argument checks stop at 200 000 steps or 128 subschema levels and refuse the call ("too complex to check within the limits"); values deeper than 32 levels or over 10 000 nodes refused up front | on |
+| Tool poisoning in descriptions | invisible / bidi / Unicode-tag characters stripped from descriptions, titles, tags and schema annotations, descriptions capped at 1 KiB; tools with such characters in property names or `enum` values rejected | on |
+| Arguments that do not fit the schema | checked against the listed input schema before the call is sent; an `isError` result names each violation by JSON Pointer | on |
 | "Rug pull" (definition changes after review) | a `RemoteTool` refuses calls once the server's definition differs (`Error::DefinitionChanged`) | on |
 | Unwanted tools | `with_allowed_tools([...])` per server, plus `ToolPolicy` | off / allow all |
 | Self-declared "read-only" tools | safety claims ignored unless `ServerTrust::Trusted` | untrusted |
@@ -53,9 +63,12 @@ Client side (consuming servers):
 | Secrets leaking to stdio servers | `StdioServer`: no shell, **cleared environment** plus only the variables you pass, stderr discarded, killed on drop | on |
 | Credentials over plain HTTP | `HttpClientConfig`: `https://` unless loopback, no `user:pass@` URLs; token and header values `[REDACTED]` in `Debug` | on |
 
-Server side (serving tools): arguments are validated against the tool's
-input schema before the handler runs (`validate_arguments`: types, required,
-`additionalProperties: false`, enums, bounds, nested objects and arrays);
+Server side (serving tools): each tool's input schema is compiled into a
+`rune_tool_schema::Validator` at registration (a schema that does not
+compile is refused), and arguments are checked against it before the
+handler runs (types, required, `additionalProperties: false`, enums,
+`const`, bounds, `pattern`, `multipleOf`, combinators, local `$ref`,
+nested objects and arrays), within the same limits as the client;
 handlers run in their own task, so a panic becomes the fixed message "the
 tool failed with an internal error"; `with_call_timeout` bounds them;
 `ChainTool` hides `ExecutionFailed`/`Other` messages ("tool execution
@@ -84,7 +97,7 @@ manifest.
 
 ```toml
 [dependencies]
-rune-mcp = { version = "0.1", features = ["stdio", "chain"] }
+rune-mcp = { version = "0.2", features = ["stdio", "chain"] }
 ```
 
 ## Usage
@@ -146,7 +159,65 @@ async fn tools() -> Result<Vec<rune_mcp::RemoteTool>, rune_mcp::Error> {
 Watch for `notifications/tools/list_changed` with `client.subscribe()` and
 list again when it fires; tools that changed must be reviewed again.
 
-## Migration from the unreleased 0.1 development API
+### Exporting tools for a model provider
+
+Hand the gathered tools to a model API in its own format. Every keyword
+the provider would reject or ignore is removed or rewritten and reported,
+and tools the provider cannot take (a `.` in the name for OpenAI, a
+schema it rejects outright) are skipped with a reason:
+
+```rust,no_run
+use rune_mcp::{Dialect, ExportOptions, McpToolset};
+
+async fn openai_tools(toolset: &McpToolset) -> Result<Vec<serde_json::Value>, rune_mcp::Error> {
+    let export = toolset
+        .export_tools(Dialect::OpenAiStrict, &ExportOptions::default())
+        .await?;
+    for warning in &export.warnings {
+        // e.g. "docs__search: /properties/q/maxLength: ... (maxLength, removed)"
+        eprintln!("schema change: {warning}");
+    }
+    for skipped in &export.skipped {
+        eprintln!("not exported: {}: {}", skipped.name, skipped.reason);
+    }
+    Ok(export.definitions())
+}
+```
+
+Calls still go through `toolset.call_tool(name, args)`, and arguments are
+checked against the server's original schema, so a constraint removed for
+the provider is still enforced. With `Dialect::OpenAiStrict`, optional
+properties come back as `null`; run
+`rune_tool_schema::drop_optional_nulls(&tool.input_schema, &mut args)`
+first.
+
+## Migrating from 0.1
+
+- `rune_mcp::validate_arguments(schema, args)` is gone. Use
+  `rune_tool_schema::Validator::new(schema)?.validate(&args)` (or
+  `ToolDescriptor::validate_arguments`), which returns `Violations` with a
+  JSON Pointer per problem; `rune_mcp::schema_limits()` gives the limits
+  this crate uses.
+- Invalid-argument results now list every violation, one per line, in
+  `rune-tool-schema`'s wording (`/port: less than the minimum 1` instead of
+  `/port: below the minimum`). Match on `is_error`, not on the text.
+- `McpServer::tool` / `add_tool` refuse an input schema that does not
+  compile (`Error::Descriptor(rune_tool_schema::Error::InvalidSchema { .. })`):
+  a `$ref` outside the document, a `pattern` the `regex` crate cannot
+  build (look-around, backreferences), a keyword with a value of the wrong
+  type.
+- The client rejects listed tools for the same reasons, and for hidden
+  characters in property names or `enum` values. They show up in
+  `McpClient::rejected()` (or fail the listing when strict).
+- The client checks arguments before sending a call; invalid ones come
+  back as an `isError` result and never reach the server.
+- `sanitize::strip_hidden` is now `rune_tool_schema::strip_hidden`
+  re-exported: it returns `Cow<str>`, removes a wider set of characters
+  (variation selectors, Hangul fillers, Mongolian vowel separator and
+  others) and turns U+2028/U+2029 into `\n`. `sanitize::clean_text` still
+  returns `String`.
+
+## Migrating from the unreleased 0.1 development API
 
 - `McpClient::connect_child_process(Command, …)` → `McpClient::spawn(&StdioServer, …)`
   (the environment is now cleared; pass the variables the server needs).

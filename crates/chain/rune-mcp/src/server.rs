@@ -15,7 +15,7 @@ use rmcp::model::{
 use rmcp::service::{MaybeSendFuture, RequestContext, RunningService};
 use rmcp::transport::IntoTransport;
 use rmcp::{ErrorData, RoleServer, ServerHandler, ServiceExt};
-use rune_tool_schema::{ToolDescriptor, validate_name};
+use rune_tool_schema::{ToolDescriptor, Validator, validate_name};
 use serde_json::{Map, Value};
 
 use crate::convert::descriptor_to_tool;
@@ -23,7 +23,7 @@ use crate::output::to_call_tool_result;
 use crate::policy::{AllowAll, Decision, Side, ToolCall, ToolPolicy, gate};
 use crate::resource::{PromptHandler, PromptInfo, ResourceHandler, ResourceInfo};
 use crate::sanitize::clean_text;
-use crate::schema::validate_arguments;
+use crate::schema;
 use crate::{Error, ToolHandler, ToolOutput};
 
 /// The message a caller sees when a handler panics or is aborted.
@@ -32,6 +32,7 @@ const INTERNAL_FAILURE: &str = "the tool failed with an internal error";
 struct Entry {
     descriptor: ToolDescriptor,
     tool: Tool,
+    validator: Validator,
     handler: Arc<dyn ToolHandler>,
 }
 
@@ -74,9 +75,10 @@ struct Inner {
 /// 1. answers an unknown or hidden tool with a protocol error
 ///    (`invalid params`);
 /// 2. runs the policy gate;
-/// 3. checks the arguments against the tool's input schema
-///    ([`validate_arguments`](crate::validate_arguments)), so the handler
-///    only ever sees arguments that fit it;
+/// 3. checks the arguments against the tool's input schema with a
+///    [`Validator`] compiled at registration (limits from
+///    [`schema_limits`](crate::schema_limits)), so the handler only ever
+///    sees arguments that fit it;
 /// 4. runs the handler in its own task, with the optional
 ///    [`call timeout`](McpServer::with_call_timeout).
 ///
@@ -158,8 +160,11 @@ impl McpServer {
     ///
     /// # Errors
     ///
-    /// [`Error::Descriptor`] if the descriptor breaks the MCP rules, or
-    /// [`Error::Duplicate`] if the name is taken.
+    /// [`Error::Descriptor`] if the descriptor breaks the MCP rules or its
+    /// input schema cannot be compiled for argument checking
+    /// ([`rune_tool_schema::Error::InvalidSchema`]: a `$ref` outside the
+    /// document, an unusable `pattern`, a keyword with a value of the wrong
+    /// type), or [`Error::Duplicate`] if the name is taken.
     pub fn tool(
         mut self,
         descriptor: ToolDescriptor,
@@ -180,6 +185,7 @@ impl McpServer {
         handler: impl ToolHandler + 'static,
     ) -> Result<(), Error> {
         let tool = descriptor_to_tool(&descriptor)?;
+        let validator = schema::compile(&descriptor.input_schema)?;
         let tools = &mut self.inner_mut().tools;
         if tools.contains_key(&descriptor.name) {
             return Err(Error::Duplicate {
@@ -192,6 +198,7 @@ impl McpServer {
             Arc::new(Entry {
                 descriptor,
                 tool,
+                validator,
                 handler: Arc::new(handler),
             }),
         );
@@ -301,7 +308,7 @@ impl McpServer {
         if let Decision::Deny(reason) = gate(self.inner.policy.as_ref(), &call) {
             return ToolOutput::error(format!("tool {name:?} denied by policy: {reason}"));
         }
-        if let Err(reason) = validate_arguments(&entry.descriptor.input_schema, &arguments) {
+        if let Err(reason) = schema::check(&entry.validator, &arguments) {
             return ToolOutput::error(format!("invalid arguments for tool {name:?}: {reason}"));
         }
         let handler = Arc::clone(&entry.handler);

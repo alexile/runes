@@ -24,7 +24,7 @@ use rune_mcp::{
     PromptMessage, PromptRole, ResourceContent, ResourceInfo, ServerTrust, ToolError, ToolOutput,
     prompt_fn, resource_fn, tool_fn,
 };
-use rune_tool_schema::{ToolDescriptor, single_input_schema};
+use rune_tool_schema::{Dialect, ExportOptions, ToolDescriptor, single_input_schema};
 use serde_json::{Map, Value, json};
 
 fn args(value: Value) -> Map<String, Value> {
@@ -228,6 +228,298 @@ async fn calls_time_out_and_results_are_capped() {
     assert!(out.truncated);
     assert!(out.text_content().contains("[truncated 99000 bytes]"));
     assert!(matches!(&out.content[1], Content::Text(t) if t.contains("dropped")));
+}
+
+fn schema_tool(name: &str, schema: Value) -> Tool {
+    Tool::new(name.to_owned(), "d".to_owned(), Arc::new(args(schema)))
+}
+
+/// Schemas a hostile server might list to exhaust a client: too deep, too
+/// wide, `$ref` cycles and an `anyOf` web whose naive check is 2^40 steps.
+fn hostile_schemas() -> Vec<Tool> {
+    // 60 levels of JSON: under serde's recursion limit, over ours.
+    let mut deep = json!({"type": "string"});
+    for _ in 0..30 {
+        deep = json!({"type": "object", "properties": {"a": deep}});
+    }
+    // An `anyOf` with thousands of branches: over the 64 KiB cap.
+    let wide: Vec<Value> = (0..4000)
+        .map(|i| json!({"type": "string", "minLength": i}))
+        .collect();
+    // Two definitions referring to each other, and the root to itself.
+    let cycle = json!({
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/x"}},
+        "$defs": {"x": {"$ref": "#/$defs/y"}, "y": {"$ref": "#/$defs/x"}}
+    });
+    let self_ref = json!({"type": "object", "$ref": "#"});
+    // l0 = anyOf[l1, l1], l1 = anyOf[l2, l2], ... l40 = string.
+    let mut defs = Map::new();
+    for i in 0..40 {
+        let next = format!("#/$defs/l{}", i + 1);
+        defs.insert(
+            format!("l{i}"),
+            json!({"anyOf": [{"$ref": next}, {"$ref": next}]}),
+        );
+    }
+    defs.insert("l40".to_owned(), json!({"type": "string"}));
+    let blowup = json!({
+        "type": "object",
+        "properties": {"a": {"$ref": "#/$defs/l0"}},
+        "$defs": defs
+    });
+    vec![
+        schema_tool("deep", deep),
+        schema_tool(
+            "wide",
+            json!({"type": "object", "properties": {"a": {"anyOf": wide}}}),
+        ),
+        schema_tool(
+            "dangling",
+            json!({"type": "object", "properties": {"a": {"$ref": "#/$defs/nope"}}}),
+        ),
+        schema_tool("cycle", cycle),
+        schema_tool("self_ref", self_ref),
+        schema_tool("blowup", blowup),
+        raw_tool("fine", "d"),
+    ]
+}
+
+#[tokio::test]
+async fn hostile_schemas_are_rejected_within_limits() {
+    let (client, _running) =
+        connect_with(Hostile::new(hostile_schemas()), ClientOptions::default()).await;
+    let started = std::time::Instant::now();
+    let names: Vec<_> = client
+        .list_tools()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|t| t.name)
+        .collect();
+    // Too deep, too big and unresolvable schemas never make it into the
+    // tool list.
+    assert_eq!(names, ["blowup", "cycle", "fine", "self_ref"]);
+    let rejected = client.rejected();
+    let reason = |name: &str| {
+        rejected
+            .iter()
+            .find(|r| r.name == name)
+            .map(|r| r.reason.clone())
+            .unwrap_or_default()
+    };
+    assert!(
+        reason("deep").contains("nested deeper than 32"),
+        "{rejected:?}"
+    );
+    assert!(
+        reason("wide").contains("over the 65536-byte limit"),
+        "{rejected:?}"
+    );
+    assert!(
+        reason("dangling").contains("does not resolve"),
+        "{rejected:?}"
+    );
+
+    // Schemas that compile but cannot be satisfied in bounded work refuse
+    // the call: the check stops at the step or depth limit and nothing is
+    // sent (the server would have answered "ran <name>").
+    for (name, arguments) in [
+        ("cycle", json!({"a": 1})),
+        ("self_ref", json!({})),
+        ("blowup", json!({"a": 1})),
+    ] {
+        let out = client.call_tool(name, args(arguments)).await.unwrap();
+        assert!(out.is_error, "{name}");
+        assert!(
+            out.text_content()
+                .contains("too complex to check within the limits"),
+            "{name}: {}",
+            out.text_content()
+        );
+    }
+    // A deep argument value is refused before the schema is even walked.
+    let mut value = json!(1);
+    for _ in 0..40 {
+        value = json!([value]);
+    }
+    let out = client
+        .call_tool("fine", args(json!({"x": value})))
+        .await
+        .unwrap();
+    assert!(out.text_content().contains("nested deeper than 32"));
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "took {:?}",
+        started.elapsed()
+    );
+
+    // Strict mode fails the listing on the first of them instead.
+    let (strict, _running) = connect_with(
+        Hostile::new(hostile_schemas()),
+        ClientOptions::default().with_strict(true),
+    )
+    .await;
+    assert!(matches!(
+        strict.list_tools().await,
+        Err(Error::Rejected { .. })
+    ));
+}
+
+#[tokio::test]
+async fn server_refuses_uncompilable_schemas_and_bounds_hostile_ones() {
+    let bad = ToolDescriptor::new("bad", "d").with_input_schema(json!({
+        "type": "object",
+        "properties": {"a": {"$ref": "https://evil.example/schema.json"}}
+    }));
+    let err = McpServer::new("srv", "1")
+        .tool(bad, tool_fn(|_| async { Ok(ToolOutput::text("ran")) }))
+        .unwrap_err();
+    assert!(matches!(err, Error::Descriptor(_)), "{err}");
+
+    let looped = ToolDescriptor::new("looped", "d")
+        .with_input_schema(json!({"type": "object", "$ref": "#"}));
+    let server = McpServer::new("srv", "1")
+        .tool(looped, tool_fn(|_| async { Ok(ToolOutput::text("ran")) }))
+        .unwrap();
+    let out = server.call("looped", Map::new()).await.unwrap();
+    assert!(out.is_error);
+    assert!(
+        out.text_content().contains("too complex"),
+        "{}",
+        out.text_content()
+    );
+}
+
+#[tokio::test]
+async fn hidden_characters_in_schemas_are_stripped_or_refused() {
+    let (client, _running) = connect_with(
+        Hostile::new(vec![
+            schema_tool(
+                "annotated",
+                json!({
+                    "type": "object",
+                    "properties": {"q": {
+                        "type": "string",
+                        "description": "Query.\u{e0049}\u{e0067}\u{202e}"
+                    }}
+                }),
+            ),
+            schema_tool(
+                "smuggled",
+                json!({
+                    "type": "object",
+                    "properties": {"mode": {"enum": ["read", "write\u{200b}"]}}
+                }),
+            ),
+        ]),
+        ClientOptions::default(),
+    )
+    .await;
+    let tools = client.list_tools().await.unwrap();
+    assert_eq!(tools.len(), 1);
+    assert_eq!(
+        tools[0].input_schema["properties"]["q"]["description"],
+        "Query."
+    );
+    assert!(
+        client.rejected()[0]
+            .reason
+            .contains("hidden character U+200B")
+    );
+}
+
+#[tokio::test]
+async fn client_checks_arguments_before_sending() {
+    let (client, _running) = connect_with(
+        Hostile::new(vec![schema_tool(
+            "typed",
+            json!({
+                "type": "object",
+                "properties": {"n": {"type": "integer", "maximum": 3}},
+                "required": ["n"],
+                "additionalProperties": false
+            }),
+        )]),
+        ClientOptions::default(),
+    )
+    .await;
+    let out = client
+        .call_tool("typed", args(json!({"n": 9, "x": 1})))
+        .await
+        .unwrap();
+    assert!(out.is_error);
+    assert_eq!(
+        out.text_content(),
+        "invalid arguments for tool \"typed\": /n: greater than the maximum 3\n/x: unknown property"
+    );
+    let out = client
+        .call_tool("typed", args(json!({"n": 2})))
+        .await
+        .unwrap();
+    assert_eq!(out.text_content(), "ran typed");
+}
+
+#[tokio::test]
+async fn toolset_exports_provider_dialects_with_warnings() {
+    let (docs, _a) = connect_with(
+        Hostile::new(vec![
+            schema_tool(
+                "search",
+                json!({
+                    "type": "object",
+                    "properties": {
+                        "q": {"type": "string", "maxLength": 100},
+                        "limit": {"type": "integer"}
+                    },
+                    "required": ["q"]
+                }),
+            ),
+            raw_tool("files.read", "Read."),
+        ]),
+        ClientOptions::default(),
+    )
+    .await;
+    let toolset = McpToolset::new().with_server("docs", docs).unwrap();
+
+    let strict = toolset
+        .export_tools(Dialect::OpenAiStrict, &ExportOptions::default())
+        .await
+        .unwrap();
+    let defs = strict.definitions();
+    assert_eq!(defs.len(), 1);
+    assert_eq!(defs[0]["function"]["name"], "docs__search");
+    let params = &defs[0]["function"]["parameters"];
+    assert_eq!(params["additionalProperties"], false);
+    assert_eq!(params["required"], json!(["limit", "q"]));
+    assert!(params["properties"]["q"].get("maxLength").is_none());
+    let warnings: Vec<_> = strict.warnings.iter().map(ToString::to_string).collect();
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert!(warnings.iter().all(|w| w.starts_with("docs__search: ")));
+    // `.` is fine for MCP but not for OpenAI tool names.
+    assert_eq!(strict.skipped[0].name, "docs__files.read");
+
+    let anthropic = toolset
+        .export_tools(Dialect::Anthropic, &ExportOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(anthropic.warnings, Vec::new());
+    assert_eq!(
+        anthropic.definitions()[0]["input_schema"]["required"],
+        json!(["q"])
+    );
+
+    let gemini = toolset
+        .export_tools(Dialect::Gemini, &ExportOptions::default())
+        .await
+        .unwrap();
+    let names: Vec<_> = gemini
+        .definitions()
+        .iter()
+        .map(|d| d["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["docs__files.read", "docs__search"]);
+    assert_eq!(gemini.definitions()[1]["parameters"]["type"], "OBJECT");
 }
 
 #[tokio::test]

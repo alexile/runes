@@ -14,15 +14,17 @@ use rmcp::model::{
 use rmcp::service::{NotificationContext, RunningService};
 use rmcp::transport::IntoTransport;
 use rmcp::{ClientHandler, RoleClient, ServiceExt};
-use rune_tool_schema::ToolDescriptor;
+use rune_tool_schema::{Dialect, ExportOptions, ToolDescriptor, Validator};
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 
 use crate::convert::{ImportLimits, ServerTrust, import_tool};
+use crate::export::{DialectExport, export_tools};
 use crate::output::from_call_tool_result;
 use crate::policy::{AllowAll, Decision, Side, ToolCall, ToolPolicy, gate};
 use crate::resource::{PromptInfo, PromptMessage, PromptResult, ResourceContent, ResourceInfo};
 use crate::sanitize::{clean_text, qualified_name, validate_namespace};
+use crate::schema;
 use crate::{Error, ToolError, ToolHandler, ToolOutput};
 
 /// Default for [`ClientOptions::call_timeout`].
@@ -278,9 +280,17 @@ pub struct ListChanges {
     pub prompts: u64,
 }
 
+/// A tool as listed: its imported descriptor and the compiled validator
+/// for its input schema.
+#[derive(Clone)]
+struct Listed {
+    descriptor: ToolDescriptor,
+    validator: Arc<Validator>,
+}
+
 /// State shared between the client and its notification handler.
 struct Shared {
-    tools: Mutex<Option<BTreeMap<String, ToolDescriptor>>>,
+    tools: Mutex<Option<BTreeMap<String, Listed>>>,
     rejected: Mutex<Vec<Rejection>>,
     changes: watch::Sender<ListChanges>,
 }
@@ -353,12 +363,18 @@ where
 /// Everything the server sends is treated as untrusted:
 ///
 /// - Tool definitions are validated (MCP name rules, object schemas within
-///   [`max_schema_bytes`](ClientOptions::max_schema_bytes) and 32 levels),
-///   descriptions are stripped of invisible characters and capped, and a
-///   name listed twice is dropped entirely, so neither copy can shadow the
+///   [`max_schema_bytes`](ClientOptions::max_schema_bytes) and
+///   [`MAX_SCHEMA_DEPTH`](crate::MAX_SCHEMA_DEPTH) levels, input schemas
+///   that compile into a [`Validator`] with only local `$ref`s), text is
+///   stripped of invisible characters and descriptions capped, and a name
+///   listed twice is dropped entirely, so neither copy can shadow the
 ///   other. Rejected definitions are skipped and reported by
 ///   [`rejected`](Self::rejected), or fail the listing when
 ///   [`strict`](ClientOptions::strict).
+/// - Arguments are checked against the listed input schema before a call
+///   is sent, within [`schema_limits`](crate::schema_limits), so a hostile
+///   schema costs bounded work and invalid arguments never reach the
+///   server.
 /// - Safety claims are ignored unless the server is
 ///   [`Trusted`](ServerTrust::Trusted); every call passes the
 ///   [`ToolPolicy`] and the [allowlist](ClientOptions::allowed_tools).
@@ -597,8 +613,8 @@ impl McpClient {
                 push_rejection(&mut rejected, err);
                 continue;
             }
-            let descriptor = match import_tool(tool, self.options.import_limits()) {
-                Ok(descriptor) => descriptor,
+            let (descriptor, validator) = match import_tool(tool, self.options.import_limits()) {
+                Ok(imported) => imported,
                 Err(err) if self.options.strict => return Err(err),
                 Err(err) => {
                     push_rejection(&mut rejected, err);
@@ -614,9 +630,15 @@ impl McpClient {
             {
                 continue;
             }
-            tools.insert(descriptor.name.clone(), descriptor);
+            tools.insert(
+                descriptor.name.clone(),
+                Listed {
+                    descriptor,
+                    validator: Arc::new(validator),
+                },
+            );
         }
-        let out = tools.values().cloned().collect();
+        let out = tools.values().map(|t| t.descriptor.clone()).collect();
         *self
             .shared
             .tools
@@ -634,6 +656,10 @@ impl McpClient {
     /// [`Error::UnknownTool`] if the server does not list it, or the policy
     /// or allowlist hides it; otherwise as [`Self::list_tools`].
     pub async fn tool(&self, name: &str) -> Result<ToolDescriptor, Error> {
+        self.listed(name).await.map(|listed| listed.descriptor)
+    }
+
+    async fn listed(&self, name: &str) -> Result<Listed, Error> {
         if let Some(found) = self.cached(name) {
             return found;
         }
@@ -642,8 +668,8 @@ impl McpClient {
             .unwrap_or_else(|| Err(Error::UnknownTool(clean_text(name, 128))))
     }
 
-    /// `Some` once tools have been listed: the descriptor, or `UnknownTool`.
-    fn cached(&self, name: &str) -> Option<Result<ToolDescriptor, Error>> {
+    /// `Some` once tools have been listed: the tool, or `UnknownTool`.
+    fn cached(&self, name: &str) -> Option<Result<Listed, Error>> {
         let guard = self
             .shared
             .tools
@@ -658,11 +684,13 @@ impl McpClient {
     }
 
     /// Call a tool by its remote name, after checking it against the
-    /// policy. The result is capped to
-    /// [`max_result_bytes`](ClientOptions::max_result_bytes).
+    /// policy and its arguments against the listed input schema. The result
+    /// is capped to [`max_result_bytes`](ClientOptions::max_result_bytes).
     ///
     /// A tool that runs and fails is `Ok` with
-    /// [`is_error`](ToolOutput::is_error) set.
+    /// [`is_error`](ToolOutput::is_error) set, and so are arguments that do
+    /// not fit the schema (nothing is sent), so a model sees why and can
+    /// correct its call.
     ///
     /// # Errors
     ///
@@ -674,21 +702,31 @@ impl McpClient {
         name: &str,
         arguments: Map<String, Value>,
     ) -> Result<ToolOutput, Error> {
-        let descriptor = self.tool(name).await?;
-        self.call_listed(descriptor, arguments).await
+        let listed = self.listed(name).await?;
+        self.call_listed(listed, arguments).await
     }
 
     async fn call_listed(
         &self,
-        descriptor: ToolDescriptor,
+        listed: Listed,
         arguments: Map<String, Value>,
     ) -> Result<ToolOutput, Error> {
+        let Listed {
+            descriptor,
+            validator,
+        } = listed;
         let call = ToolCall::new(&descriptor, &arguments, Side::Client);
         if let Decision::Deny(reason) = gate(self.options.policy.as_ref(), &call) {
             return Err(Error::Denied {
                 tool: descriptor.name,
                 reason,
             });
+        }
+        if let Err(reason) = schema::check(&validator, &arguments) {
+            return Ok(ToolOutput::error(format!(
+                "invalid arguments for tool {:?}: {reason}",
+                descriptor.name
+            )));
         }
         let params = CallToolRequestParams::new(descriptor.name).with_arguments(arguments);
         let result = with_timeout(
@@ -722,6 +760,25 @@ impl McpClient {
         self: &Arc<Self>,
         namespace: Option<&str>,
     ) -> Result<Vec<RemoteTool>, Error> {
+        Ok(self
+            .exposed_tools(namespace)
+            .await?
+            .into_iter()
+            .map(|(remote, exposed)| RemoteTool {
+                client: Arc::clone(self),
+                namespace: namespace.map(str::to_owned),
+                remote,
+                descriptor: exposed,
+            })
+            .collect())
+    }
+
+    /// Every listed tool as `(remote, exposed)` descriptors: the exposed one
+    /// is renamed into `namespace` and given a description if it had none.
+    pub(crate) async fn exposed_tools(
+        &self,
+        namespace: Option<&str>,
+    ) -> Result<Vec<(ToolDescriptor, ToolDescriptor)>, Error> {
         let mut out = Vec::new();
         for remote in self.list_tools().await? {
             let mut exposed = remote.clone();
@@ -739,14 +796,33 @@ impl McpClient {
                     .filter(|title| !title.trim().is_empty())
                     .unwrap_or_else(|| format!("Remote MCP tool {:?}.", remote.name));
             }
-            out.push(RemoteTool {
-                client: Arc::clone(self),
-                namespace: namespace.map(str::to_owned),
-                remote,
-                descriptor: exposed,
-            });
+            out.push((remote, exposed));
         }
         Ok(out)
+    }
+
+    /// Every listed tool as a tool definition for one model provider, with
+    /// the lint findings of the conversion; see [`DialectExport`]. Names
+    /// are the exposed ones (`<namespace>__<tool>` when the client has a
+    /// [`namespace`](ClientOptions::namespace)), the same names
+    /// [`remote_tools`](Self::remote_tools) uses.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::list_tools`]. A tool the provider cannot take is skipped
+    /// and reported in [`DialectExport::skipped`], not an error.
+    pub async fn export_tools(
+        &self,
+        dialect: Dialect,
+        options: &ExportOptions,
+    ) -> Result<DialectExport, Error> {
+        let namespace = self.options.namespace.clone();
+        let tools = self.exposed_tools(namespace.as_deref()).await?;
+        Ok(export_tools(
+            tools.iter().map(|(_, exposed)| exposed),
+            dialect,
+            options,
+        ))
     }
 
     /// List the server's resources (following pagination). Names and
@@ -959,8 +1035,8 @@ impl RemoteTool {
     /// [`Error::DefinitionChanged`] if the server changed the tool since
     /// this handle was made; otherwise as [`McpClient::call_tool`].
     pub async fn call(&self, arguments: Map<String, Value>) -> Result<ToolOutput, Error> {
-        let current = self.client.tool(&self.remote.name).await?;
-        if current != self.remote {
+        let current = self.client.listed(&self.remote.name).await?;
+        if current.descriptor != self.remote {
             return Err(Error::DefinitionChanged(self.descriptor.name.clone()));
         }
         self.client.call_listed(current, arguments).await

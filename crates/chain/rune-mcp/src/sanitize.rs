@@ -1,9 +1,20 @@
 //! Text hygiene for what an MCP server sends: invisible-character
 //! stripping, length caps, namespacing and untrusted-content fencing.
 //!
+//! The character rules are `rune-tool-schema`'s, re-exported here:
+//! [`is_hidden_char`] covers C0/C1 controls other than newline and tab,
+//! zero-width and other format characters, bidirectional overrides and
+//! isolates, variation selectors and Unicode tag characters, which hide
+//! instructions from a human reviewer while a model still reads them
+//! ("tool poisoning"). [`strip_hidden`] removes them and normalises line
+//! breaks. The byte caps, namespaces and the `<mcp_result>` fence are MCP
+//! policy and live here.
+//!
 //! Everything here is pure string handling with no I/O.
 
 use std::fmt::Write as _;
+
+pub use rune_tool_schema::{find_hidden, is_hidden_char, strip_hidden};
 
 /// Tag of the fence [`fence`] puts around remote content.
 pub const FENCE_TAG: &str = "mcp_result";
@@ -19,41 +30,6 @@ pub const NAMESPACE_SEPARATOR: &str = "__";
 
 /// Longest namespace [`validate_namespace`] accepts.
 pub const MAX_NAMESPACE_LEN: usize = 32;
-
-/// Whether `c` is invisible or reorders text: C0/C1 controls other than
-/// newline and tab, zero-width characters, bidirectional overrides and
-/// isolates, and Unicode tag characters. These hide instructions from a
-/// human reviewer while a model still reads them ("tool poisoning").
-const fn is_hidden(c: char) -> bool {
-    matches!(c,
-        '\u{0}'..='\u{8}'
-        | '\u{b}'..='\u{1f}'
-        | '\u{7f}'..='\u{9f}'
-        | '\u{ad}'
-        | '\u{180e}'
-        | '\u{200b}'..='\u{200f}'
-        | '\u{202a}'..='\u{202e}'
-        | '\u{2060}'..='\u{2064}'
-        | '\u{2066}'..='\u{206f}'
-        | '\u{feff}'
-        | '\u{fff9}'..='\u{fffb}'
-        | '\u{e0000}'..='\u{e007f}'
-    )
-}
-
-/// Remove invisible and direction-changing characters (see the module
-/// docs) and turn `\r\n` / `\r` into `\n`.
-///
-/// ```
-/// use rune_mcp::sanitize::strip_hidden;
-///
-/// assert_eq!(strip_hidden("read\u{200b}\u{e0041}me\r\n"), "readme\n");
-/// ```
-#[must_use]
-pub fn strip_hidden(text: &str) -> String {
-    let text = text.replace("\r\n", "\n").replace('\r', "\n");
-    text.chars().filter(|&c| !is_hidden(c)).collect()
-}
 
 /// Cut `text` to at most `max_bytes` bytes on a character boundary,
 /// appending `…` when anything was cut. Returns whether it was cut.
@@ -98,7 +74,7 @@ pub(crate) fn truncate_with_marker(text: &mut String, max_bytes: usize) -> bool 
 /// title from a server gets before anything else sees it.
 #[must_use]
 pub fn clean_text(text: &str, max_bytes: usize) -> String {
-    let mut out = strip_hidden(text.trim());
+    let mut out = strip_hidden(text.trim()).into_owned();
     truncate(&mut out, max_bytes);
     out
 }

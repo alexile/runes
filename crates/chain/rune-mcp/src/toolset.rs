@@ -4,10 +4,12 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::sync::Arc;
 
+use rune_tool_schema::{Dialect, ExportOptions};
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 
 use crate::client::ListChanges;
+use crate::export::{DialectExport, export_tools};
 use crate::sanitize::{split_qualified, validate_namespace};
 use crate::{Error, McpClient, RemoteTool, ToolOutput};
 
@@ -158,6 +160,67 @@ impl McpToolset {
         }
         out.sort_by(|a, b| a.descriptor().name.cmp(&b.descriptor().name));
         Ok(out)
+    }
+
+    /// Every server's tools, namespaced and sorted by exposed name, as tool
+    /// definitions for one model provider, with the lint findings of the
+    /// conversion; see [`DialectExport`].
+    ///
+    /// ```
+    /// # use rune_mcp::{tool_fn, ClientOptions, McpClient, McpServer, McpToolset, ToolOutput};
+    /// # use rune_tool_schema::ToolDescriptor;
+    /// use rune_tool_schema::{Dialect, ExportOptions};
+    /// # tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+    /// # let server = McpServer::new("docs", "1").tool(
+    /// #     ToolDescriptor::new("search", "Search.").with_input_schema(serde_json::json!({
+    /// #         "type": "object",
+    /// #         "properties": {"q": {"type": "string"}, "limit": {"type": "integer"}},
+    /// #         "required": ["q"]
+    /// #     })),
+    /// #     tool_fn(|_| async { Ok(ToolOutput::text("hit")) }),
+    /// # )?;
+    /// # let (a, b) = tokio::io::duplex(4096);
+    /// # tokio::spawn(async move { server.serve(a).await?.waiting().await });
+    /// # let client = McpClient::connect(b, ClientOptions::default()).await?;
+    /// let toolset = McpToolset::new().with_server("docs", client)?;
+    /// let export = toolset
+    ///     .export_tools(Dialect::OpenAiStrict, &ExportOptions::default())
+    ///     .await?;
+    /// assert_eq!(export.definitions()[0]["function"]["name"], "docs__search");
+    /// for warning in &export.warnings {
+    ///     // "docs__search: /properties/limit: ... (required, rewritten)"
+    ///     eprintln!("{warning}");
+    /// }
+    /// assert_eq!(export.warnings.len(), 1);
+    /// # Ok::<(), rune_mcp::Error>(())
+    /// # })?;
+    /// # Ok::<(), rune_mcp::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Server`] naming the first server whose listing failed. A
+    /// tool the provider cannot take is skipped and reported in
+    /// [`DialectExport::skipped`], not an error.
+    pub async fn export_tools(
+        &self,
+        dialect: Dialect,
+        options: &ExportOptions,
+    ) -> Result<DialectExport, Error> {
+        let mut exposed = Vec::new();
+        for (namespace, client) in &self.servers {
+            let tools =
+                client
+                    .exposed_tools(Some(namespace))
+                    .await
+                    .map_err(|err| Error::Server {
+                        namespace: namespace.clone(),
+                        source: Box::new(err),
+                    })?;
+            exposed.extend(tools.into_iter().map(|(_, tool)| tool));
+        }
+        exposed.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(export_tools(&exposed, dialect, options))
     }
 
     /// Call a tool by its exposed name, `<namespace>__<tool>`.

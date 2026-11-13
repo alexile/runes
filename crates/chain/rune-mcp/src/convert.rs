@@ -3,11 +3,11 @@
 //! goes through that JSON and loses nothing either way.
 
 use rmcp::model::Tool;
-use rune_tool_schema::{McpTool, SafetyLevel, ToolDescriptor};
+use rune_tool_schema::{McpTool, SafetyLevel, ToolDescriptor, Validator};
 
 use crate::Error;
 use crate::sanitize::clean_text;
-use crate::schema::{MAX_SCHEMA_DEPTH, depth};
+use crate::schema::{self, MAX_SCHEMA_DEPTH, deeper_than};
 
 /// How far a client believes what a remote server says about its tools.
 ///
@@ -69,14 +69,21 @@ pub struct ImportLimits {
 }
 
 /// Import a tool listed by a remote server: check it, apply `trust`, strip
-/// hidden characters from its description and title and cap their length,
-/// and refuse oversized or over-deep schemas.
-pub fn import_tool(tool: &Tool, limits: ImportLimits) -> Result<ToolDescriptor, Error> {
+/// hidden characters from its text (description, title, tags, and the
+/// `description`/`title` strings inside its schemas) and cap the
+/// description and title, refuse oversized or over-deep schemas, input
+/// schemas the validator cannot compile, and hidden characters left where
+/// stripping them would change the interface (property names, `enum`
+/// values). Returns the descriptor and the compiled input-schema validator.
+pub fn import_tool(
+    tool: &Tool,
+    limits: ImportLimits,
+) -> Result<(ToolDescriptor, Validator), Error> {
     let rejected = |reason: String| Error::Rejected {
         name: clean_text(&tool.name, 128),
         reason,
     };
-    let mut descriptor = tool_to_mcp(tool)
+    let descriptor = tool_to_mcp(tool)
         .and_then(|mcp| mcp.to_descriptor().map_err(Error::from))
         .map_err(|err| rejected(err.to_string()))?;
     for (field, schema) in [
@@ -84,7 +91,7 @@ pub fn import_tool(tool: &Tool, limits: ImportLimits) -> Result<ToolDescriptor, 
         ("outputSchema", descriptor.output_schema.as_ref()),
     ] {
         let Some(schema) = schema else { continue };
-        if depth(schema) > MAX_SCHEMA_DEPTH {
+        if deeper_than(schema, MAX_SCHEMA_DEPTH) {
             return Err(rejected(format!(
                 "{field} is nested deeper than {MAX_SCHEMA_DEPTH}"
             )));
@@ -97,16 +104,22 @@ pub fn import_tool(tool: &Tool, limits: ImportLimits) -> Result<ToolDescriptor, 
             )));
         }
     }
+    let validator = schema::compile(&descriptor.input_schema)
+        .map_err(|err| rejected(format!("inputSchema: {err}")))?;
+    let mut descriptor = descriptor.sanitized();
     descriptor.description = clean_text(&descriptor.description, limits.max_description_bytes);
     descriptor.title = descriptor
         .title
         .as_deref()
         .map(|title| clean_text(title, 256))
         .filter(|title| !title.is_empty());
+    descriptor
+        .check_hygiene(usize::MAX)
+        .map_err(|err| rejected(err.to_string()))?;
     if limits.trust == ServerTrust::Untrusted {
         descriptor.safety = SafetyLevel::Intrusive;
     }
-    Ok(descriptor)
+    Ok((descriptor, validator))
 }
 
 #[cfg(test)]
@@ -142,14 +155,14 @@ mod tests {
             tool.annotations.as_ref().unwrap().read_only_hint,
             Some(true)
         );
-        let back = import_tool(&tool, limits(ServerTrust::Trusted)).unwrap();
+        let (back, _) = import_tool(&tool, limits(ServerTrust::Trusted)).unwrap();
         assert_eq!(back, sample());
     }
 
     #[test]
     fn untrusted_import_is_intrusive() {
         let tool = descriptor_to_tool(&sample()).unwrap();
-        let back = import_tool(&tool, limits(ServerTrust::Untrusted)).unwrap();
+        let (back, _) = import_tool(&tool, limits(ServerTrust::Untrusted)).unwrap();
         assert_eq!(back.safety, SafetyLevel::Intrusive);
         assert_eq!(back.hints, ToolHints::PURE);
     }
@@ -167,7 +180,7 @@ mod tests {
     fn import_cleans_and_caps_descriptions() {
         let desc = format!("Adds.\u{e0049}\u{200b}{}", "x".repeat(5000));
         let tool = descriptor_to_tool(&ToolDescriptor::new("add", desc)).unwrap();
-        let back = import_tool(&tool, limits(ServerTrust::Untrusted)).unwrap();
+        let (back, _) = import_tool(&tool, limits(ServerTrust::Untrusted)).unwrap();
         assert!(back.description.starts_with("Adds.xxx"));
         assert!(back.description.len() <= 1024 + '…'.len_utf8());
     }
@@ -193,5 +206,44 @@ mod tests {
         let deep =
             descriptor_to_tool(&ToolDescriptor::new("deep", "d").with_input_schema(deep)).unwrap();
         assert!(import_tool(&deep, limits(ServerTrust::Trusted)).is_err());
+    }
+
+    #[test]
+    fn import_strips_schema_annotations_and_refuses_hidden_names() {
+        let schema = json!({
+            "type": "object",
+            "properties": {"q": {"type": "string", "description": "Query.\u{e0041}\u{200b}"}}
+        });
+        let tool =
+            descriptor_to_tool(&ToolDescriptor::new("s", "d").with_input_schema(schema)).unwrap();
+        let (back, _) = import_tool(&tool, limits(ServerTrust::Untrusted)).unwrap();
+        assert_eq!(
+            back.input_schema["properties"]["q"]["description"],
+            "Query."
+        );
+
+        let schema = json!({"type": "object", "properties": {"q\u{200b}": {"type": "string"}}});
+        let tool =
+            descriptor_to_tool(&ToolDescriptor::new("s", "d").with_input_schema(schema)).unwrap();
+        let err = import_tool(&tool, limits(ServerTrust::Untrusted)).unwrap_err();
+        assert!(err.to_string().contains("hidden character U+200B"), "{err}");
+    }
+
+    #[test]
+    fn import_refuses_schemas_the_validator_cannot_compile() {
+        for schema in [
+            json!({"type": "object", "properties": {"a": {"$ref": "https://evil.example/s"}}}),
+            json!({"type": "object", "properties": {"a": {"$ref": "#/$defs/missing"}}}),
+            json!({"type": "object", "properties": {"a": {"type": "string", "pattern": "(?=x)"}}}),
+            json!({"type": "object", "required": "a"}),
+        ] {
+            let tool = descriptor_to_tool(&ToolDescriptor::new("s", "d").with_input_schema(schema))
+                .unwrap();
+            let err = import_tool(&tool, limits(ServerTrust::Trusted)).unwrap_err();
+            assert!(
+                err.to_string().contains("inputSchema: invalid schema"),
+                "{err}"
+            );
+        }
     }
 }

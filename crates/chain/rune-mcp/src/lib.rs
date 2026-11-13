@@ -19,6 +19,14 @@
 //!   each other.
 //! - A [`ToolPolicy`] on either side, and a per-server allowlist on the
 //!   client, decide which tools are listed and which calls run.
+//! - Arguments are checked on both sides with
+//!   [`rune_tool_schema::Validator`] (JSON Pointer errors, local `$ref`,
+//!   bounded depth, size and work; see [`schema_limits`]), compiled once
+//!   per tool when it is registered or listed.
+//! - [`McpToolset::export_tools`] and [`McpClient::export_tools`] turn the
+//!   gathered tools into `OpenAI` (plain or strict), Anthropic or Gemini
+//!   tool definitions, listing every schema keyword that had to be removed
+//!   or rewritten ([`DialectExport`]).
 //!
 //! Transports are rmcp's: any `AsyncRead + AsyncWrite` stream (in-process
 //! `tokio::io::duplex`, sockets, pipes) out of the box; stdio, and local
@@ -83,6 +91,7 @@ mod chain;
 mod client;
 mod convert;
 mod error;
+mod export;
 mod handler;
 #[cfg(feature = "http-client")]
 mod http;
@@ -105,6 +114,7 @@ pub use client::{
 };
 pub use convert::{ServerTrust, mcp_to_tool, tool_to_mcp};
 pub use error::{BoxError, Error};
+pub use export::{DialectExport, ExportWarning, export_tools};
 pub use handler::{FnHandler, ToolHandler, tool_fn};
 #[cfg(feature = "http-client")]
 pub use http::HttpClientConfig;
@@ -116,7 +126,7 @@ pub use resource::{
     FnSource, PromptArgument, PromptHandler, PromptInfo, PromptMessage, PromptResult, PromptRole,
     ResourceBody, ResourceContent, ResourceHandler, ResourceInfo, prompt_fn, resource_fn,
 };
-pub use schema::{MAX_SCHEMA_DEPTH, validate_arguments};
+pub use schema::{MAX_SCHEMA_DEPTH, MAX_VALIDATION_STEPS, schema_limits};
 pub use server::{McpServer, RunningServer};
 #[cfg(feature = "stdio")]
 pub use stdio::StdioServer;
@@ -126,4 +136,4 @@ pub use toolset::McpToolset;
 /// wire types.
 pub use rmcp;
 pub use rune_tool_schema;
-pub use rune_tool_schema::ToolDescriptor;
+pub use rune_tool_schema::{Dialect, ExportOptions, ToolDescriptor};
