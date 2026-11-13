@@ -150,15 +150,50 @@ fn scope_options() -> Options {
         .with_remove_fragment(true)
 }
 
+fn same_origin_parts(prefix: &Url, url: &Url) -> bool {
+    prefix.scheme() == url.scheme()
+        && prefix.host_str() == url.host_str()
+        && prefix.port_or_known_default() == url.port_or_known_default()
+}
+
 fn prefix_matches(prefix: &Url, url: &Url) -> bool {
-    if prefix.scheme() != url.scheme()
-        || prefix.host_str() != url.host_str()
-        || prefix.port_or_known_default() != url.port_or_known_default()
-    {
-        return false;
+    same_origin_parts(prefix, url) && path_under(prefix.path(), url.path())
+}
+
+/// Whether `url` matches `rule` as an exclusion. A prefix rule also
+/// catches the spellings many servers treat as the same path: repeated
+/// slashes, `;` path parameters and `%2F`. Excluding too much is the safe
+/// side; an exclusion that misses `//logout` is not.
+fn excludes(rule: &ScopeRule, url: &Url) -> bool {
+    match rule {
+        ScopeRule::Prefix(prefix) => {
+            prefix_matches(prefix, url)
+                || (same_origin_parts(prefix, url)
+                    && path_under(&loose_path(prefix.path()), &loose_path(url.path())))
+        }
+        _ => rule.matches(url),
     }
-    let base = prefix.path();
-    let path = url.path();
+}
+
+/// `path` with `%2F` read as `/`, `;` parameters dropped from every
+/// segment and runs of slashes merged.
+fn loose_path(path: &str) -> String {
+    let path = path.replace("%2F", "/").replace("%2f", "/");
+    let mut out = String::with_capacity(path.len());
+    for segment in path.split('/') {
+        let segment = segment.split(';').next().unwrap_or_default();
+        if !segment.is_empty() {
+            out.push('/');
+            out.push_str(segment);
+        }
+    }
+    if out.is_empty() || path.ends_with('/') {
+        out.push('/');
+    }
+    out
+}
+
+fn path_under(base: &str, path: &str) -> bool {
     if base.ends_with('/') {
         return path.starts_with(base) || path == base.trim_end_matches('/');
     }
@@ -173,7 +208,10 @@ fn prefix_matches(prefix: &Url, url: &Url) -> bool {
 ///
 /// URLs are canonicalized before matching (dot segments, percent-encoding,
 /// trailing dots, IPv4-mapped IPv6), so `http://example.com./admin/%2e%2e/x`
-/// is judged as `http://example.com/x`.
+/// is judged as `http://example.com/x`. Exclude prefixes also catch
+/// repeated slashes, `;` path parameters and `%2F`, so excluding
+/// `https://example.com/logout` keeps out `//logout` and `/logout;x` too.
+/// Paths are compared case-sensitively.
 ///
 /// ```
 /// use rune_url::{Scope, Url};
@@ -288,7 +326,7 @@ impl Scope {
         }
         let url = canonicalize_url(url, &scope_options());
         self.include.iter().any(|rule| rule.matches(&url))
-            && !self.exclude.iter().any(|rule| rule.matches(&url))
+            && !self.exclude.iter().any(|rule| excludes(rule, &url))
     }
 
     /// Whether `input` parses as an absolute URL that is in scope.
@@ -409,5 +447,30 @@ mod tests {
         assert!(internal.contains_str("ftp://8.8.8.8/"));
         assert!(!internal.contains_str("http://127.0.0.1/"));
         assert!(!Scope::default().contains_str("http://example.com/"));
+    }
+
+    #[test]
+    fn exclusions_survive_path_spellings_servers_merge() {
+        let scope = Scope::parse(
+            [".example.com"],
+            ["https://example.com/logout", "https://example.com/admin/"],
+        )
+        .unwrap();
+        for url in [
+            "https://example.com//logout",
+            "https://example.com/logout;jsessionid=1",
+            "https://example.com/logout%2F",
+            "https://example.com///admin//users",
+            "https://example.com/admin;x/users",
+            "https://example.com/admin%2fusers",
+        ] {
+            assert!(!scope.contains_str(url), "{url}");
+        }
+        assert!(scope.contains_str("https://example.com/logouts"));
+        assert!(scope.contains_str("https://example.com/administrator"));
+        // Include rules keep matching the path exactly as written.
+        let strict = Scope::parse(["https://h/app/"], Vec::<&str>::new()).unwrap();
+        assert!(!strict.contains_str("https://h//app/x"));
+        assert!(!strict.contains_str("https://h/app;x/y"));
     }
 }
