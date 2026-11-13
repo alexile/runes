@@ -313,3 +313,58 @@ async fn json_keys_that_collide_after_cleaning_are_rejected() {
     let (status, _, body) = send(app(SanitizeConfig::new()), request).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
 }
+
+#[tokio::test]
+async fn form_content_types_axum_accepts_are_cleaned() {
+    for content_type in [
+        "application/x-www-form-urlencodedx",
+        "application/x-www-form-urlencoded, text/plain",
+        "application/x-www-form-urlencoded/x",
+    ] {
+        let (status, _, body) = send(
+            app(SanitizeConfig::default()),
+            post_with(
+                "/form",
+                content_type,
+                "q=%3Cscript%3Ealert(1)%3C%2Fscript%3Eok",
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{content_type}");
+        let form: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(form, json!({"q": "ok"}), "{content_type}");
+    }
+}
+
+#[tokio::test]
+async fn compressed_bodies_are_refused() {
+    for (uri, content_type) in [
+        ("/raw", "text/plain"),
+        ("/form", "application/x-www-form-urlencoded"),
+        ("/json", "application/json"),
+    ] {
+        let request = Request::post(uri)
+            .header("content-type", content_type)
+            .header("content-encoding", "deflate")
+            .body(Body::from("x^ascii-only-deflate-bytes"))
+            .unwrap();
+        let (status, _, _) = send(app(SanitizeConfig::default()), request).await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE, "{content_type}");
+    }
+    let request = Request::post("/raw")
+        .header("content-type", "text/plain")
+        .header("content-encoding", " Identity ")
+        .body(Body::from("<b>hi</b>"))
+        .unwrap();
+    let (status, _, body) = send(app(SanitizeConfig::default()), request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "hi");
+    // Bodies the layer does not inspect are left alone.
+    let request = Request::post("/raw")
+        .header("content-type", "application/octet-stream")
+        .header("content-encoding", "gzip")
+        .body(Body::from(&b"\x1f\x8b"[..]))
+        .unwrap();
+    let (status, _, _) = send(app(SanitizeConfig::default()), request).await;
+    assert_eq!(status, StatusCode::OK);
+}

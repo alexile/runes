@@ -1,6 +1,6 @@
 [package]
 name = "rune-axum-sanitize"
-version = "0.3.1"
+version = "0.3.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -21,7 +21,7 @@ allowlist = ["dep:ammonia"]
 [dependencies]
 # MIT OR Apache-2.0. The de facto HTML allowlist sanitizer; hand-rolling one
 # is how sanitizers get bypassed.
-ammonia = { version = "4", optional = true }
+ammonia = { version = "4.2.4", optional = true }
 axum.workspace = true
 # Already in every axum build through url/serde_urlencoded. Using it means the
 # middleware decodes query and form values exactly as axum's extractors do.

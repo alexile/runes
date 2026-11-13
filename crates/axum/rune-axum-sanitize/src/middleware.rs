@@ -11,7 +11,7 @@ use std::{
 use axum::body::{Body, Bytes, HttpBody};
 use http::{
     HeaderMap, HeaderValue, Request, Response, StatusCode, Uri,
-    header::{CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING},
+    header::{CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, TRANSFER_ENCODING},
     uri::PathAndQuery,
 };
 use http_body_util::{BodyExt, LengthLimitError, Limited};
@@ -161,8 +161,10 @@ enum BodyKind {
 }
 
 /// Classifies the body the way axum's extractors do: `Json` wants
-/// `application/json` or `application/*+json`, `Form` wants
-/// `application/x-www-form-urlencoded`.
+/// `application/json` or `application/*+json`, `Form` takes any
+/// Content-Type that starts with `application/x-www-form-urlencoded`.
+/// Anything a handler's extractor would parse must land in a cleaned kind,
+/// so the checks here are at least as loose as axum's.
 fn body_kind(headers: &HeaderMap) -> BodyKind {
     let Some(content_type) = headers
         .get(CONTENT_TYPE)
@@ -170,6 +172,11 @@ fn body_kind(headers: &HeaderMap) -> BodyKind {
     else {
         return BodyKind::Other;
     };
+    // axum's `Form` and `RawForm` only check this prefix, so
+    // `application/x-www-form-urlencodedx` or `..., text/plain` still parse.
+    if content_type.starts_with("application/x-www-form-urlencoded") {
+        return BodyKind::Form;
+    }
     let essence = content_type
         .split(';')
         .next()
@@ -269,6 +276,19 @@ async fn sanitize_request(
         }
         return Ok(Request::from_parts(parts, body));
     }
+    // Compressed bytes can't be inspected, and a decompression layer further
+    // in would hand the handler content nobody looked at.
+    if parts
+        .headers
+        .get_all(CONTENT_ENCODING)
+        .iter()
+        .any(|value| !is_identity(value))
+    {
+        return Err(reject(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "compressed request bodies must be decompressed before SanitizeLayer",
+        ));
+    }
 
     let bytes = read_body(&parts.headers, body, config.max_body_bytes).await?;
     let Ok(text) = std::str::from_utf8(&bytes) else {
@@ -305,6 +325,14 @@ async fn sanitize_request(
         }
     };
     Ok(Request::from_parts(parts, body))
+}
+
+fn is_identity(value: &HeaderValue) -> bool {
+    value.to_str().is_ok_and(|value| {
+        value
+            .split(',')
+            .all(|coding| coding.trim().eq_ignore_ascii_case("identity"))
+    })
 }
 
 async fn read_body(headers: &HeaderMap, body: Body, limit: usize) -> Result<Bytes, Rejection> {

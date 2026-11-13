@@ -182,12 +182,30 @@ Be clear about what this does not cover:
   matters and encode them on output.
 - **Bodies are buffered** (up to `max_body_bytes`) when cleaned. That cap is
   separate from axum's `DefaultBodyLimit`; keep both sensible.
+- **Compressed bodies are refused.** A JSON, form or text body with a
+  `Content-Encoding` other than `identity` gets 415, since compressed bytes
+  can't be inspected. If you accept compressed requests, put tower-http's
+  `RequestDecompressionLayer` outside this one (call `.layer()` with it
+  after `SanitizeLayer`), so the body is already decompressed here.
+- **Values are decoded once**, exactly as axum's `Query` and `Form` do.
+  `%253C` reaches the handler as `%3C`; a handler that percent-decodes it
+  again gets a raw `<` that was never checked.
+- **`exempt_field(route, "/")` exempts the whole body**, not the empty key
+  as RFC 6901 would read it.
 
 Tests include a corpus of known filter-evasion vectors (nested and split
 tags, unclosed tags, `>` in attributes, comment and CDATA tricks, SVG and
 MathML payloads, null bytes inside tag names, entity-encoded and fullwidth
 markup) and property tests for panics, UTF-8 validity, idempotence, JSON
 structure preservation and agreement with `serde_json` on what is valid.
+
+## Changes in 0.3.2
+
+Two fail-closed fixes. Bodies whose Content-Type merely starts with
+`application/x-www-form-urlencoded` (which axum's `Form` accepts) are now
+cleaned as forms instead of passed through. Cleaned body kinds sent with a
+non-identity `Content-Encoding` now get 415 instead of being forwarded (or
+400 for JSON).
 
 ## Migrating from 0.2
 
