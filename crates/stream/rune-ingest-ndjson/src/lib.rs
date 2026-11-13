@@ -107,18 +107,27 @@ impl std::error::Error for ReplayError {}
 ///
 /// Malformed lines yield `Err` without stopping the iterator or advancing the
 /// internal clock — the next successful record's delay is still computed against
-/// the last successfully parsed timestamp.
+/// the last successfully parsed timestamp. A line that isn't valid UTF-8, or is
+/// longer than [`max_line_bytes`](Self::max_line_bytes), yields
+/// [`ReplayError::Io`] with [`io::ErrorKind::InvalidData`] and is skipped the
+/// same way. Any other read error ends the iterator after it is returned, so a
+/// reader that fails on every call can't make a `for` loop spin forever.
 pub struct NdjsonReplay<R> {
     reader: R,
     ts_field: String,
     speed: f64,
     prev_ts: Option<i64>,
-    line_buf: String,
+    line_buf: Vec<u8>,
+    max_line_bytes: usize,
+    finished: bool,
 }
 
 impl<R: BufRead> NdjsonReplay<R> {
     /// Creates a replay iterator over `reader`, reading the timestamp from field
     /// `ts_field` on each JSON line, at `speed` times real-time.
+    ///
+    /// Lines are not length-limited by default; see
+    /// [`max_line_bytes`](Self::max_line_bytes) for untrusted input.
     ///
     /// # Example
     ///
@@ -134,8 +143,69 @@ impl<R: BufRead> NdjsonReplay<R> {
             ts_field: ts_field.into(),
             speed,
             prev_ts: None,
-            line_buf: String::new(),
+            line_buf: Vec::new(),
+            max_line_bytes: usize::MAX,
+            finished: false,
         }
+    }
+
+    /// Caps how many bytes a single line may hold (not counting its `\n`).
+    ///
+    /// A longer line is drained from the reader without being buffered and is
+    /// reported as an [`io::ErrorKind::InvalidData`] error, so a file with no
+    /// newlines can't make the reader hold it all in memory.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rune_ingest_ndjson::{NdjsonReplay, ReplayError};
+    /// use std::io::Cursor;
+    ///
+    /// let data = "{\"ts\":0,\"pad\":\"xxxxxxxxxxxxxxxx\"}\n{\"ts\":0}\n";
+    /// let mut replay = NdjsonReplay::new(Cursor::new(data), "ts", 1.0).max_line_bytes(16);
+    /// assert!(matches!(replay.next(), Some(Err(ReplayError::Io(_)))));
+    /// assert!(replay.next().unwrap().is_ok());
+    /// ```
+    #[must_use]
+    pub const fn max_line_bytes(mut self, max: usize) -> Self {
+        self.max_line_bytes = max;
+        self
+    }
+
+    /// Reads the next line into `line_buf`, without its `\n`. Returns
+    /// `Ok(None)` at end of input, otherwise whether the line went over the cap
+    /// (in which case nothing of it is kept).
+    fn read_line(&mut self) -> io::Result<Option<bool>> {
+        self.line_buf.clear();
+        let mut read_any = false;
+        let mut too_long = false;
+        loop {
+            let available = match self.reader.fill_buf() {
+                Ok(buf) => buf,
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(err) => return Err(err),
+            };
+            if available.is_empty() {
+                break;
+            }
+            read_any = true;
+            let newline = available.iter().position(|&b| b == b'\n');
+            let content = &available[..newline.unwrap_or(available.len())];
+            if !too_long {
+                if content.len() > self.max_line_bytes - self.line_buf.len() {
+                    too_long = true;
+                    self.line_buf = Vec::new();
+                } else {
+                    self.line_buf.extend_from_slice(content);
+                }
+            }
+            let used = newline.map_or(available.len(), |i| i + 1);
+            self.reader.consume(used);
+            if newline.is_some() {
+                break;
+            }
+        }
+        Ok(read_any.then_some(too_long))
     }
 }
 
@@ -143,17 +213,29 @@ impl<R: BufRead> Iterator for NdjsonReplay<R> {
     type Item = Result<serde_json::Value, ReplayError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            self.line_buf.clear();
-            let bytes_read = match self.reader.read_line(&mut self.line_buf) {
-                Ok(n) => n,
-                Err(err) => return Some(Err(ReplayError::Io(err))),
+        while !self.finished {
+            let too_long = match self.read_line() {
+                Ok(Some(too_long)) => too_long,
+                Ok(None) => return None,
+                Err(err) => {
+                    self.finished = true;
+                    return Some(Err(ReplayError::Io(err)));
+                }
             };
-            if bytes_read == 0 {
-                return None;
+            if too_long {
+                return Some(Err(ReplayError::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("line longer than {} bytes", self.max_line_bytes),
+                ))));
             }
+            let Ok(line) = std::str::from_utf8(&self.line_buf) else {
+                return Some(Err(ReplayError::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "line is not valid UTF-8",
+                ))));
+            };
 
-            let trimmed = self.line_buf.trim();
+            let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;
             }
@@ -177,6 +259,7 @@ impl<R: BufRead> Iterator for NdjsonReplay<R> {
 
             return Some(Ok(value));
         }
+        None
     }
 }
 
@@ -270,5 +353,70 @@ mod tests {
         assert_eq!(delay_for(0, 1000, f64::NAN), Duration::ZERO);
         assert_eq!(delay_for(0, 1000, f64::INFINITY), Duration::ZERO);
         assert_eq!(delay_for(0, i64::MAX, f64::MIN_POSITIVE), Duration::MAX);
+    }
+
+    struct BrokenReader;
+
+    impl io::Read for BrokenReader {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("disk on fire"))
+        }
+    }
+
+    #[test]
+    fn a_persistent_read_error_ends_the_stream() {
+        let replay = NdjsonReplay::new(io::BufReader::new(BrokenReader), "ts", 1.0);
+        let results: Vec<_> = replay.take(5).collect();
+        assert_eq!(results.len(), 1);
+        assert!(matches!(results[0], Err(ReplayError::Io(_))));
+    }
+
+    #[test]
+    fn invalid_utf8_line_is_reported_and_skipped() {
+        let data = b"{\"ts\":0,\"v\":1}\n\xff\xfe\n{\"ts\":0,\"v\":2}\n";
+        let results: Vec<_> = NdjsonReplay::new(Cursor::new(&data[..]), "ts", 1.0).collect();
+        assert_eq!(results.len(), 3);
+        assert!(
+            matches!(&results[1], Err(ReplayError::Io(e)) if e.kind() == io::ErrorKind::InvalidData)
+        );
+        assert_eq!(results[2].as_ref().unwrap()["v"], 2);
+    }
+
+    #[test]
+    fn overlong_line_is_reported_and_skipped() {
+        let long = format!("{{\"ts\":0,\"pad\":\"{}\"}}", "x".repeat(10_000));
+        let data = format!("{long}\n{{\"ts\":0,\"v\":2}}");
+        let reader = io::BufReader::with_capacity(64, Cursor::new(data.into_bytes()));
+        let mut replay = NdjsonReplay::new(reader, "ts", 1.0).max_line_bytes(100);
+        assert!(
+            matches!(replay.next(), Some(Err(ReplayError::Io(e))) if e.kind() == io::ErrorKind::InvalidData)
+        );
+        assert!(replay.line_buf.capacity() <= 200);
+        assert_eq!(replay.next().unwrap().unwrap()["v"], 2);
+        assert!(replay.next().is_none());
+    }
+
+    #[test]
+    fn line_exactly_at_the_cap_is_accepted() {
+        let line = "{\"ts\":0}";
+        let data = format!("{line}\r\n");
+        let mut replay = NdjsonReplay::new(Cursor::new(data.into_bytes()), "ts", 1.0)
+            .max_line_bytes(line.len() + 1);
+        assert!(replay.next().unwrap().is_ok());
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn never_panics_on_arbitrary_bytes(
+            bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512),
+            cap in 0usize..64,
+        ) {
+            let reader = io::BufReader::with_capacity(7, Cursor::new(bytes));
+            for r in NdjsonReplay::new(reader, "ts", 0.0).max_line_bytes(cap).take(600) {
+                let _ = r;
+            }
+        }
     }
 }

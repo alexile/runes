@@ -360,7 +360,7 @@ rune-idna = { path = "crates/net/rune-idna", version = "0.1.1" }
 rune-ip = { path = "crates/net/rune-ip", version = "0.1.0" }
 rune-ip-intel = { path = "crates/net/rune-ip-intel", version = "0.1.0" }
 rune-ja = { path = "crates/net/rune-ja", version = "0.1.0" }
-rune-ingest-ndjson = { path = "crates/stream/rune-ingest-ndjson", version = "0.1.2" }
+rune-ingest-ndjson = { path = "crates/stream/rune-ingest-ndjson", version = "0.1.3" }
 rune-jwt = { path = "crates/common/rune-jwt", version = "0.2.1" }
 rune-kmeans = { path = "crates/ml/rune-kmeans", version = "0.1.1" }
 rune-ml-core = { path = "crates/ml/rune-ml-core", version = "0.1.1" }
