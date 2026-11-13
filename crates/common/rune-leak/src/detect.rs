@@ -2,6 +2,8 @@
 //! false-positive filters (data URIs, UUIDs, subresource-integrity hashes).
 
 /// Number of leading characters of a secret kept in redacted evidence.
+use std::collections::BTreeMap;
+
 const REDACT_PREFIX: usize = 4;
 
 /// Minimum length of a token considered by entropy detection.
@@ -75,18 +77,64 @@ pub fn is_path_like(token: &str) -> bool {
             .any(|seg| seg.len() >= 5 && seg.bytes().all(|b| b.is_ascii_lowercase() || b == b'-'))
 }
 
-/// Whether the token starting at byte `start` of `line` is part of a URL's
-/// host or path: a `://` precedes it with no whitespace, quote or `?` in
-/// between. Secrets in query strings are still reported.
-pub fn in_url_path(line: &str, start: usize) -> bool {
-    let Some(before) = line.get(..start) else {
-        return false;
-    };
-    before.rfind("://").is_some_and(|scheme| {
-        !before[scheme..].bytes().any(|b| {
-            b.is_ascii_whitespace() || matches!(b, b'"' | b'\'' | b'?' | b'#' | b'<' | b'>')
-        })
-    })
+/// Answers "is the token starting at byte `start` part of a URL's host or
+/// path?" for one line: a `://` precedes it with no whitespace, quote, `?`,
+/// `#` or angle bracket in between. Secrets in query strings are still
+/// reported.
+///
+/// Queries must come in non-decreasing `start` order (as tokens are found);
+/// the line is then walked once in total, so a long line with many tokens
+/// costs linear time instead of one backward search per token.
+pub struct UrlPaths<'a> {
+    bytes: &'a [u8],
+    /// Bytes before this have been looked at.
+    pos: usize,
+    /// Start of the last `://` seen.
+    scheme: Option<usize>,
+    /// Index of the last URL-ending byte seen.
+    stop: Option<usize>,
+}
+
+impl<'a> UrlPaths<'a> {
+    pub const fn new(line: &'a str) -> Self {
+        Self {
+            bytes: line.as_bytes(),
+            pos: 0,
+            scheme: None,
+            stop: None,
+        }
+    }
+
+    pub fn contains(&mut self, start: usize) -> bool {
+        if start < self.pos {
+            *self = Self {
+                bytes: self.bytes,
+                ..Self::new("")
+            };
+        }
+        let start = start.min(self.bytes.len());
+        while self.pos < start {
+            let i = self.pos;
+            if self.bytes.get(i..i + 3) == Some(b"://") {
+                if i + 3 > start {
+                    // The `://` runs past `start`, so it does not precede it
+                    // yet; its bytes cannot end a URL either.
+                    break;
+                }
+                self.scheme = Some(i);
+            }
+            if self.bytes.get(i).copied().is_some_and(ends_url) {
+                self.stop = Some(i);
+            }
+            self.pos += 1;
+        }
+        self.scheme
+            .is_some_and(|scheme| self.stop.is_none_or(|stop| stop < scheme))
+    }
+}
+
+const fn ends_url(b: u8) -> bool {
+    b.is_ascii_whitespace() || matches!(b, b'"' | b'\'' | b'?' | b'#' | b'<' | b'>')
 }
 
 /// Whether `token` is a subresource-integrity digest (`sha512-<base64>`), as
@@ -103,13 +151,19 @@ pub fn is_sri_digest(token: &str) -> bool {
 pub fn data_uri_payloads(line: &str, out: &mut Vec<(usize, usize)>) {
     out.clear();
     let bytes = line.as_bytes();
+    // Only where the first `data:` ends matters, so find it once instead of
+    // searching the line again for every `;base64,`.
+    let Some(first_data) = bytes
+        .windows(5)
+        .position(|w| w.eq_ignore_ascii_case(b"data:"))
+    else {
+        return;
+    };
     for (comma, _) in line.match_indices(',') {
         let Some(marker) = comma.checked_sub(7) else {
             continue;
         };
-        if !bytes[marker..comma].eq_ignore_ascii_case(b";base64")
-            || !contains_ignore_ascii_case(&bytes[..marker], b"data:")
-        {
+        if !bytes[marker..comma].eq_ignore_ascii_case(b";base64") || first_data + 5 > marker {
             continue;
         }
         let start = comma + 1;
@@ -121,20 +175,22 @@ pub fn data_uri_payloads(line: &str, out: &mut Vec<(usize, usize)>) {
     }
 }
 
-/// Whether the byte range `start..end` lies inside one of `ranges`.
+/// Whether the byte range `start..end` lies inside one of `ranges`, which
+/// must be sorted and disjoint (as [`data_uri_payloads`] returns them).
 pub fn within(ranges: &[(usize, usize)], start: usize, end: usize) -> bool {
-    ranges.iter().any(|&(s, e)| start >= s && end <= e)
+    let idx = ranges.partition_point(|&(s, _)| s <= start);
+    idx.checked_sub(1)
+        .and_then(|i| ranges.get(i))
+        .is_some_and(|&(_, e)| end <= e)
 }
 
-/// Whether the byte range `start..end` overlaps one of `ranges`.
-pub fn overlaps(ranges: &[(usize, usize)], start: usize, end: usize) -> bool {
-    ranges.iter().any(|&(s, e)| start < e && s < end)
-}
-
-fn contains_ignore_ascii_case(haystack: &[u8], needle: &[u8]) -> bool {
-    haystack
-        .windows(needle.len())
-        .any(|w| w.eq_ignore_ascii_case(needle))
+/// Whether the byte range `start..end` overlaps one of the disjoint
+/// `ranges` (keyed by start).
+pub fn overlaps(ranges: &BTreeMap<usize, usize>, start: usize, end: usize) -> bool {
+    ranges
+        .range(..end)
+        .next_back()
+        .is_some_and(|(_, &e)| start < e)
 }
 
 #[cfg(test)]
@@ -173,12 +229,19 @@ mod tests {
         assert!(!is_path_like("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"));
         let url =
             "u = \"https://a.test/OWASP/3a31f35346c3f4e90f350395124382fa53af2afe/x?k=Zm9vYmFy\" t";
-        assert!(in_url_path(url, url.find("OWASP").unwrap()));
+        let mut paths = UrlPaths::new(url);
+        assert!(!paths.contains(url.find("https").unwrap()));
+        assert!(paths.contains(url.find("OWASP").unwrap()));
         assert!(
-            !in_url_path(url, url.find("Zm9v").unwrap()),
+            !paths.contains(url.find("Zm9v").unwrap()),
             "query strings still count"
         );
-        assert!(!in_url_path(url, url.len() - 1));
+        assert!(!paths.contains(url.len() - 1));
+        // Out-of-order queries still answer correctly.
+        assert!(paths.contains(url.find("OWASP").unwrap()));
+        assert!(!UrlPaths::new("a:/").contains(3));
+        assert!(UrlPaths::new("a://b").contains(4));
+        assert!(!UrlPaths::new("a://b").contains(3));
     }
 
     #[test]

@@ -55,7 +55,7 @@ impl std::fmt::Display for Severity {
 ///     println!("{}: {} at line {}", leak.severity, leak.category, leak.line_number);
 /// }
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Leak {
     /// Source file path. `None` when scanning a string with [`scan_text`].
     pub file: Option<PathBuf>,
@@ -71,6 +71,21 @@ pub struct Leak {
     pub severity: Severity,
     /// The full source line containing the match.
     pub line: String,
+}
+
+/// Shows the value redacted and leaves out the source line, which holds the
+/// value too. Read the fields directly when you need them.
+impl std::fmt::Debug for Leak {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Leak")
+            .field("file", &self.file)
+            .field("line_number", &self.line_number)
+            .field("category", &self.category)
+            .field("value", &redact(&self.value))
+            .field("entropy", &self.entropy)
+            .field("severity", &self.severity)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Leak {
@@ -234,7 +249,7 @@ impl LeakScanner {
 
     /// Recursively scans a directory for leaks in all text files.
     ///
-    /// Binary files (detected by null-byte presence in the first 8 KB) are skipped.
+    /// Files with a binary extension (images, archives, PDFs, …) are skipped.
     ///
     /// # Errors
     ///

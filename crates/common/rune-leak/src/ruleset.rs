@@ -3,7 +3,7 @@
 //! [`rune_finding::Finding`]s.
 
 use crate::detect::{
-    data_uri_payloads, for_each_keylike_token, in_url_path, is_path_like, is_sri_digest, is_uuid,
+    UrlPaths, data_uri_payloads, for_each_keylike_token, is_path_like, is_sri_digest, is_uuid,
     overlaps, redact, within,
 };
 use crate::error::Error;
@@ -13,6 +13,7 @@ use crate::rule::{
 use regex::{Regex, RegexBuilder};
 use rune_entropy::entropy;
 use rune_finding::{Confidence, Evidence, Finding, Location, Remediation, Severity};
+use std::collections::BTreeMap;
 
 /// Default entropy threshold (bits per byte) of the entropy detector.
 pub const DEFAULT_ENTROPY_THRESHOLD: f64 = 4.3;
@@ -196,7 +197,7 @@ impl Ruleset {
     pub fn for_each_match<'a>(&'a self, text: &'a str, mut f: impl FnMut(SecretMatch<'a>)) {
         let mut lower = String::new();
         let mut payloads: Vec<(usize, usize)> = Vec::new();
-        let mut taken: Vec<(usize, usize)> = Vec::new();
+        let mut taken: BTreeMap<usize, usize> = BTreeMap::new();
         let mut line_start = 0usize;
 
         for (idx, raw) in text.split_inclusive('\n').enumerate() {
@@ -244,7 +245,7 @@ impl Ruleset {
                     {
                         continue;
                     }
-                    taken.push((start, end));
+                    taken.insert(start, end);
                     emit(
                         &compiled.rule,
                         start,
@@ -256,12 +257,13 @@ impl Ruleset {
             }
 
             if let Some(rule) = &self.entropy {
+                let mut url_paths = UrlPaths::new(line);
                 for_each_keylike_token(line, |start, token| {
                     let end = start + token.len();
                     if is_uuid(token)
                         || is_sri_digest(token)
                         || is_path_like(token)
-                        || in_url_path(line, start)
+                        || url_paths.contains(start)
                         || within(&payloads, start, end)
                         || overlaps(&taken, start, end)
                     {
@@ -300,7 +302,7 @@ fn validate(rule: &SecretRule) -> Result<(), Error> {
 }
 
 /// One secret found by a [`Ruleset`], borrowing the rule and the scanned text.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct SecretMatch<'a> {
     /// The rule that matched (for entropy hits, a synthetic
@@ -318,6 +320,22 @@ pub struct SecretMatch<'a> {
     pub entropy: f64,
     /// Firm for a rule match, tentative for an entropy hit.
     pub confidence: Confidence,
+}
+
+/// Shows the secret redacted (first few characters and its length), like
+/// the evidence in [`SecretMatch::to_finding`].
+impl std::fmt::Debug for SecretMatch<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretMatch")
+            .field("rule", &self.rule.id)
+            .field("value", &redact(self.value))
+            .field("line_number", &self.line_number)
+            .field("column", &self.column)
+            .field("offset", &self.offset)
+            .field("entropy", &self.entropy)
+            .field("confidence", &self.confidence)
+            .finish()
+    }
 }
 
 impl SecretMatch<'_> {

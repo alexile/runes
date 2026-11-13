@@ -366,7 +366,7 @@ rune-kmeans = { path = "crates/ml/rune-kmeans", version = "0.1.1" }
 rune-ml-core = { path = "crates/ml/rune-ml-core", version = "0.1.1" }
 rune-pca = { path = "crates/ml/rune-pca", version = "0.2.0" }
 rune-landlock = { path = "crates/secops/rune-landlock", version = "0.1.0" }
-rune-leak = { path = "crates/common/rune-leak", version = "0.2.1" }
+rune-leak = { path = "crates/common/rune-leak", version = "0.2.2" }
 rune-log = { path = "crates/common/rune-log", version = "0.1.0" }
 rune-macaddr = { path = "crates/net/rune-macaddr", version = "0.1.0" }
 rune-md5 = { path = "crates/common/rune-md5", version = "0.2.1" }
