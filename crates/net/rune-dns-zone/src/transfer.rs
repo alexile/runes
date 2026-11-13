@@ -106,12 +106,20 @@ impl Session {
             _ => Ok(None),
         }
     }
+
+    /// Whether `record`'s owner lies outside the zone. Such records are
+    /// dropped: a primary has no business sending them, and keeping them
+    /// would let it plant names of other zones in the transfer.
+    fn outside(&self, record: &Record) -> bool {
+        !record.name.is_subdomain_of(&self.zone)
+    }
 }
 
 /// Reassembles an AXFR response (RFC 5936) from its messages.
 ///
 /// The stream must open with the zone's `SOA` and closes with the same
-/// `SOA` again; every record in between belongs to the zone. Messages are
+/// `SOA` again. Records in between whose owner lies outside the zone are
+/// dropped (they still count towards [`Axfr::with_max_records`]). Messages are
 /// checked for a matching id (with [`Axfr::with_id`]), the response flag,
 /// `NOERROR` (other codes become [`Error::Rcode`]), and a matching question
 /// when they carry one.
@@ -225,6 +233,7 @@ impl Axfr {
                     }
                     self.done = true;
                 }
+                (Some(_), None) if self.session.outside(record) => {}
                 (Some(_), None) => self.records.push(record.clone()),
             }
         }
@@ -314,6 +323,8 @@ enum Phase {
 /// Reassembles an IXFR response (RFC 1995) from its messages, telling the
 /// three answer forms apart: up to date (one `SOA`), a full zone, or a
 /// series of incremental differences.
+///
+/// Records whose owner lies outside the zone are dropped, as for [`Axfr`].
 ///
 /// ```
 /// use std::net::Ipv4Addr;
@@ -430,6 +441,13 @@ impl Ixfr {
 
     fn record(&mut self, record: &Record) -> Result<(), Error> {
         let soa = self.session.record(record)?;
+        let in_body = matches!(
+            self.phase,
+            Phase::AfterFirst | Phase::Full | Phase::Deleting | Phase::Adding
+        );
+        if soa.is_none() && in_body && self.session.outside(record) {
+            return Ok(());
+        }
         let newest = self.first.as_ref().and_then(soa_serial);
         let fail = |reason| Err(Error::Transfer { reason });
         match (self.phase, soa) {
@@ -678,6 +696,55 @@ mod tests {
             .fold(Message::response_to(&query), |message, record| {
                 message.with_answer(record.clone())
             })
+    }
+
+    fn elsewhere() -> Record {
+        Record::new(
+            Name::from_ascii("www.example.org").unwrap(),
+            60,
+            RData::A(Ipv4Addr::new(203, 0, 113, 1)),
+        )
+    }
+
+    #[test]
+    fn axfr_drops_records_outside_the_zone() {
+        // A hostile primary must not be able to add names of other zones
+        // to the transferred zone.
+        let mut axfr = Axfr::new(zone()).with_id(1);
+        let status = axfr
+            .push(&response(&[soa(5), a(1), elsewhere(), soa(5)]))
+            .unwrap();
+        assert_eq!(status, Status::Done);
+        assert_eq!(axfr.finish().unwrap().records, [soa(5), a(1)]);
+    }
+
+    #[test]
+    fn ixfr_drops_records_outside_the_zone() {
+        let mut full = Ixfr::new(zone(), 1).with_id(1);
+        full.push(&ixfr_response(&[soa(3), elsewhere(), a(1), soa(3)]))
+            .unwrap();
+        let IxfrOutcome::Full(zone_data) = full.finish().unwrap() else {
+            panic!("not a full transfer");
+        };
+        assert_eq!(zone_data.records, [soa(3), a(1)]);
+
+        let mut diff = Ixfr::new(zone(), 1).with_id(1);
+        diff.push(&ixfr_response(&[
+            soa(2),
+            soa(1),
+            elsewhere(),
+            a(1),
+            soa(2),
+            elsewhere(),
+            a(2),
+            soa(2),
+        ]))
+        .unwrap();
+        let IxfrOutcome::Incremental { diffs, .. } = diff.finish().unwrap() else {
+            panic!("not incremental");
+        };
+        assert_eq!(diffs[0].removed, [a(1)]);
+        assert_eq!(diffs[0].added, [a(2)]);
     }
 
     #[test]

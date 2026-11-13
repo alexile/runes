@@ -37,6 +37,10 @@ pub struct ParseOptions {
     pub default_class: Class,
     /// How deeply `$INCLUDE`s may nest (default 8).
     pub max_include_depth: usize,
+    /// Most `$INCLUDE`s to read in all, counting repeats (default 1024).
+    /// The depth limit alone does not stop a few files that each include
+    /// the next many times.
+    pub max_includes: usize,
     /// Most records to accept (default 10 000 000).
     pub max_records: usize,
 }
@@ -48,6 +52,7 @@ impl Default for ParseOptions {
             default_ttl: None,
             default_class: Class::IN,
             max_include_depth: 8,
+            max_includes: 1024,
             max_records: 10_000_000,
         }
     }
@@ -79,6 +84,13 @@ impl ParseOptions {
     #[must_use]
     pub const fn with_max_include_depth(mut self, depth: usize) -> Self {
         self.max_include_depth = depth;
+        self
+    }
+
+    /// Sets the total `$INCLUDE` limit; `0` rejects every `$INCLUDE`.
+    #[must_use]
+    pub const fn with_max_includes(mut self, max: usize) -> Self {
+        self.max_includes = max;
         self
     }
 
@@ -125,7 +137,8 @@ pub fn parse(text: &str, options: &ParseOptions) -> Result<Zone, Error> {
 /// # Errors
 ///
 /// As [`parse`], plus [`Error::Include`] when `loader` fails,
-/// [`Error::IncludeDepth`] past [`ParseOptions::max_include_depth`], and
+/// [`Error::IncludeDepth`] past [`ParseOptions::max_include_depth`],
+/// [`Error::TooManyIncludes`] past [`ParseOptions::max_includes`], and
 /// [`Error::InInclude`] wrapping an error inside an included file.
 pub fn parse_with_includes<F>(
     text: &str,
@@ -154,6 +167,8 @@ struct State<'o> {
     class: Class,
     owner: Option<Name>,
     records: Vec<Record>,
+    /// `$INCLUDE`s read so far.
+    includes: usize,
 }
 
 impl<'o> State<'o> {
@@ -166,6 +181,7 @@ impl<'o> State<'o> {
             class: options.default_class,
             owner: None,
             records: Vec::new(),
+            includes: 0,
         }
     }
 
@@ -219,6 +235,13 @@ impl<'o> State<'o> {
                 if depth >= self.options.max_include_depth {
                     return Err(Error::IncludeDepth { line });
                 }
+                if self.includes >= self.options.max_includes {
+                    return Err(Error::TooManyIncludes {
+                        line,
+                        max: self.options.max_includes,
+                    });
+                }
+                self.includes += 1;
                 let include_error = |reason: String| Error::Include {
                     line,
                     path: path.to_owned(),
@@ -431,6 +454,33 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn include_fan_out_is_bounded() {
+        // Each file includes the next ten times, stopping just inside the
+        // depth limit: 10^8 loads unless the total is capped.
+        let mut loads = 0usize;
+        let files = |path: &str| {
+            loads += 1;
+            if loads > 100_000 {
+                return Err("loader called too often".to_owned());
+            }
+            let level: usize = path.parse().map_err(|_| "bad path".to_owned())?;
+            if level >= 7 {
+                return Ok(String::new());
+            }
+            Ok(format!("$INCLUDE {}\n", level + 1).repeat(10))
+        };
+        let error = parse_with_includes("$INCLUDE 0", &ParseOptions::default(), files).unwrap_err();
+        let mut inner = &error;
+        while let Error::InInclude { source, .. } = inner {
+            inner = source;
+        }
+        assert!(
+            matches!(inner, Error::TooManyIncludes { max: 1024, .. }),
+            "{error}"
+        );
     }
 
     #[test]

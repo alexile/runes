@@ -30,15 +30,17 @@ and kept as opaque RDATA: `HINFO`, `MINFO`, `RP`, `AFSDB`, `LOC`, `KX`,
 `CDS`, `CDNSKEY`, `OPENPGPKEY`, `ZONEMD`, `SPF`, `URI`. Any other type works
 in the `\#` form.
 
-The parsers are written for hostile input: they never panic,
-bound `$INCLUDE` nesting and cap the number of records, so a server that
-allows zone transfers cannot make the client grow without bound.
+The parsers are written for hostile input: they never panic, bound
+`$INCLUDE` nesting and the total number of `$INCLUDE`s, and cap the number
+of records (10 million by default; set a lower cap for servers you do not
+trust). Transfers drop records whose owner lies outside the zone, so a
+primary cannot plant names of other zones.
 
 ## Installation
 
 ```toml
 [dependencies]
-rune-dns-zone = "0.1"
+rune-dns-zone = "0.2"
 ```
 
 ## Usage
@@ -88,6 +90,14 @@ if axfr.is_done() {
     println!("{zone}");
 }
 ```
+
+## Migrating from 0.1
+
+- `Axfr` and `Ixfr` now drop records whose owner lies outside the zone
+  being transferred. 0.1 kept them.
+- `parse_with_includes` reads at most 1024 `$INCLUDE`s in all by default
+  (`ParseOptions::max_includes`) and returns `Error::TooManyIncludes` past
+  that. Raise the limit with `ParseOptions::with_max_includes`.
 
 ## License
 

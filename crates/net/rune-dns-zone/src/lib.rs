@@ -185,6 +185,15 @@ pub enum Error {
         /// 1-based line number of the directive.
         line: usize,
     },
+    /// More `$INCLUDE`s were read in all than
+    /// [`ParseOptions::max_includes`].
+    #[error("line {line}: more than {max} $INCLUDEs")]
+    TooManyIncludes {
+        /// 1-based line number of the directive.
+        line: usize,
+        /// The limit.
+        max: usize,
+    },
     /// An error inside an included file.
     #[error("in {path:?}: {source}")]
     InInclude {
