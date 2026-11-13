@@ -307,8 +307,10 @@ impl Sanitizer {
     /// # Errors
     ///
     /// [`JsonError::Syntax`](crate::JsonError::Syntax) for invalid JSON
-    /// (including lone surrogate escapes) and
-    /// [`JsonError::TooDeep`](crate::JsonError::TooDeep) past `max_depth`.
+    /// (including lone surrogate escapes),
+    /// [`JsonError::TooDeep`](crate::JsonError::TooDeep) past `max_depth`, and
+    /// [`JsonError::DuplicateKey`](crate::JsonError::DuplicateKey) when a
+    /// cleaned object key ends up equal to another key of the same object.
     ///
     /// # Examples
     ///

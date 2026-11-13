@@ -198,3 +198,31 @@ fn allowlist_removes_active_content() {
         "<b>bold</b> <i>it</i>"
     );
 }
+
+#[test]
+fn cleaned_keys_cannot_collide() {
+    let sanitizer = Sanitizer::new();
+    for body in [
+        r#"{"a<b>":1,"a":2}"#,
+        r#"{"a":1,"a<b>":2}"#,
+        r#"{"a<b>":1,"a<i>":2}"#,
+        r#"[{"x":{"a<b>":1,"a":2}}]"#,
+    ] {
+        assert!(
+            matches!(
+                sanitizer.clean_json(body, 8),
+                Err(rune_axum_sanitize::JsonError::DuplicateKey { .. })
+            ),
+            "{body}"
+        );
+    }
+    // Duplicates the client sent as-is, and equal keys in different
+    // objects, are not the sanitizer's doing and pass through.
+    for body in [
+        r#"{"a":1,"a":2}"#,
+        r#"{"x":{"a":1},"a<b>":2}"#,
+        r#"[{"a<b>":1},{"a":2}]"#,
+    ] {
+        assert!(sanitizer.clean_json(body, 8).is_ok(), "{body}");
+    }
+}

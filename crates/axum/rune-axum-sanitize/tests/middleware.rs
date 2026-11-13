@@ -306,3 +306,10 @@ async fn clean_requests_keep_their_bytes() {
     assert_eq!(&body[..], raw.as_bytes());
     assert_eq!(headers["x-seen-length"], "");
 }
+
+#[tokio::test]
+async fn json_keys_that_collide_after_cleaning_are_rejected() {
+    let request = post_with("/json", "application/json", r#"{"a<b>": "x", "a": "y"}"#);
+    let (status, _, body) = send(app(SanitizeConfig::new()), request).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body:?}");
+}

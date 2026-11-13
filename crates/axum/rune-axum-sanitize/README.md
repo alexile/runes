@@ -54,7 +54,7 @@ Requests the middleware can't vouch for are answered directly:
 | Status | When |
 |---|---|
 | `413 Payload Too Large` | a body it would clean is over `max_body_bytes` (default 2 MiB, axum's default), by `Content-Length` or while reading |
-| `400 Bad Request` | invalid JSON, JSON nested past `max_json_depth`, a `text/*` body that isn't UTF-8, a body read error |
+| `400 Bad Request` | invalid JSON, JSON nested past `max_json_depth`, JSON object keys that become equal once cleaned (`{"a<b>": 1, "a": 2}`), a `text/*` body that isn't UTF-8, a body read error |
 | `415 Unsupported Media Type` | a non-empty other body under `OtherBodies::Reject` |
 
 Rewritten bodies get a correct `Content-Length` and lose `Transfer-Encoding`.

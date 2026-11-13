@@ -11,7 +11,7 @@
 //! comments, no trailing commas), so it agrees with `serde_json` on where
 //! every string starts and ends.
 
-use std::{borrow::Cow, fmt};
+use std::{borrow::Cow, collections::HashMap, fmt};
 
 /// Why a JSON body could not be cleaned.
 ///
@@ -41,6 +41,14 @@ pub enum JsonError {
         /// The configured limit.
         max_depth: usize,
     },
+    /// Cleaning an object key made it equal to another key of the same
+    /// object, e.g. `{"a<b>": 1, "a": 2}`. Parsers disagree on which
+    /// duplicate wins, so the document is refused rather than guessed at.
+    /// Duplicates the client sent verbatim are left alone.
+    DuplicateKey {
+        /// Byte offset of the key that collided.
+        offset: usize,
+    },
 }
 
 impl fmt::Display for JsonError {
@@ -50,15 +58,22 @@ impl fmt::Display for JsonError {
             Self::TooDeep { max_depth } => {
                 write!(formatter, "JSON nests deeper than {max_depth} levels")
             }
+            Self::DuplicateKey { offset } => {
+                write!(
+                    formatter,
+                    "JSON object key at byte {offset} duplicates another once cleaned"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for JsonError {}
 
-#[derive(Clone, Copy)]
 enum Container {
-    Object,
+    /// The keys seen so far, as cleaned, and whether any of them was
+    /// changed by cleaning.
+    Object(HashMap<String, bool>),
     Array(usize),
 }
 
@@ -143,7 +158,7 @@ where
                     }
                     index += 1;
                     if byte == b'{' {
-                        stack.push(Container::Object);
+                        stack.push(Container::Object(HashMap::new()));
                         Expect::ObjectKeyOrEnd
                     } else {
                         stack.push(Container::Array(0));
@@ -177,8 +192,25 @@ where
                 let end = scan_string(bytes, index)?;
                 let decoded = decode_string(input, index, end)?;
                 path.push(decoded.clone().into_owned());
-                if let Cow::Owned(cleaned) = clean(&path, true, &decoded) {
-                    rewriter.replace(index, end, &cleaned)?;
+                let (key, rewritten) = match clean(&path, true, &decoded) {
+                    Cow::Owned(cleaned) => {
+                        rewriter.replace(index, end, &cleaned)?;
+                        (cleaned, true)
+                    }
+                    Cow::Borrowed(_) => (decoded.into_owned(), false),
+                };
+                if let Some(Container::Object(keys)) = stack.last_mut() {
+                    match keys.get(&key) {
+                        // Two untouched keys are the client's own duplicate;
+                        // any other pairing is a collision cleaning created.
+                        Some(&earlier) if earlier || rewritten => {
+                            return Err(JsonError::DuplicateKey { offset: index });
+                        }
+                        Some(_) => {}
+                        None => {
+                            keys.insert(key, rewritten);
+                        }
+                    }
                 }
                 index = end;
                 Expect::Colon
@@ -245,7 +277,7 @@ where
 const fn after_value(stack: &[Container]) -> Expect {
     match stack.last() {
         None => Expect::End,
-        Some(Container::Object) => Expect::ObjectCommaOrEnd,
+        Some(Container::Object(_)) => Expect::ObjectCommaOrEnd,
         Some(Container::Array(_)) => Expect::ArrayCommaOrEnd,
     }
 }

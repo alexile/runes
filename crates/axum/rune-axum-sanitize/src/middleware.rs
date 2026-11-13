@@ -281,7 +281,13 @@ async fn sanitize_request(
         BodyKind::Json => json::clean(text, config.max_json_depth, |field, is_key, value| {
             clean_field(config, &rules, field, is_key, value)
         })
-        .map_err(|_| reject(StatusCode::BAD_REQUEST, "invalid JSON body"))?,
+        .map_err(|error| match error {
+            json::JsonError::DuplicateKey { .. } => reject(
+                StatusCode::BAD_REQUEST,
+                "JSON object keys collide once cleaned",
+            ),
+            _ => reject(StatusCode::BAD_REQUEST, "invalid JSON body"),
+        })?,
         BodyKind::Form => urlencoded::clean(text, |field, is_key, value| {
             clean_field(config, &rules, field, is_key, value)
         }),

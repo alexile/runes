@@ -1,7 +1,7 @@
 //! Property tests: no panics, valid output, no markup, structure preserved.
 
 use proptest::prelude::*;
-use rune_axum_sanitize::{Mode, Normalization, Sanitizer, strip_html};
+use rune_axum_sanitize::{JsonError, Mode, Normalization, Sanitizer, strip_html};
 use serde_json::Value;
 
 fn has_markup(text: &str) -> bool {
@@ -51,6 +51,20 @@ fn json_value() -> impl Strategy<Value = Value> {
 }
 
 /// Applies `sanitizer` to every string in `value`, as the JSON cleaner should.
+/// Whether cleaning makes two keys of one object equal anywhere in `value`.
+fn keys_collide(sanitizer: &Sanitizer, value: &Value) -> bool {
+    match value {
+        Value::Array(items) => items.iter().any(|item| keys_collide(sanitizer, item)),
+        Value::Object(map) => {
+            let mut seen = std::collections::HashSet::new();
+            map.keys()
+                .any(|key| !seen.insert(sanitizer.clean(key).into_owned()))
+                || map.values().any(|item| keys_collide(sanitizer, item))
+        }
+        _ => false,
+    }
+}
+
 fn clean_value(sanitizer: &Sanitizer, value: &Value) -> Value {
     match value {
         Value::String(text) => Value::String(sanitizer.clean(text).into_owned()),
@@ -114,9 +128,14 @@ proptest! {
     fn json_structure_is_preserved(value in json_value(), pretty in any::<bool>()) {
         let sanitizer = Sanitizer::new();
         let text = if pretty { serde_json::to_string_pretty(&value) } else { serde_json::to_string(&value) }.unwrap();
-        let cleaned = sanitizer.clean_json(&text, 64).unwrap();
-        let parsed: Value = serde_json::from_str(&cleaned).unwrap();
-        prop_assert_eq!(parsed, clean_value(&sanitizer, &value));
+        match sanitizer.clean_json(&text, 64) {
+            Ok(cleaned) => {
+                let parsed: Value = serde_json::from_str(&cleaned).unwrap();
+                prop_assert_eq!(parsed, clean_value(&sanitizer, &value));
+            }
+            Err(JsonError::DuplicateKey { .. }) => prop_assert!(keys_collide(&sanitizer, &value)),
+            Err(error) => prop_assert!(false, "{error}"),
+        }
     }
 
     #[test]
