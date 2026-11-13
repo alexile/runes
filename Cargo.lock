@@ -4132,9 +4132,10 @@ dependencies = [
 
 [[package]]
 name = "rune-ingest-mqtt"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
+ "proptest",
  "serde_json",
 ]
 

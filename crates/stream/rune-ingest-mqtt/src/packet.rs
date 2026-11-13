@@ -64,7 +64,24 @@ fn decode_remaining_length(bytes: &[u8]) -> Result<(usize, usize), DecodeError> 
         }
         multiplier *= 128;
     }
+    if consumed == 4 {
+        // MQTT caps the remaining length at four bytes; a fifth continuation
+        // byte can never become valid, so waiting for more input would stall.
+        return Err(DecodeError::Malformed(
+            "remaining length longer than four bytes",
+        ));
+    }
     Err(DecodeError::Incomplete)
+}
+
+/// Total length (fixed header included) of the packet at the start of `bytes`,
+/// whatever its type. Lets a reader skip packets it does not handle.
+pub(crate) fn frame_len(bytes: &[u8]) -> Result<usize, DecodeError> {
+    if bytes.is_empty() {
+        return Err(DecodeError::Incomplete);
+    }
+    let (remaining_len, header_len) = decode_remaining_length(&bytes[1..])?;
+    Ok(1 + header_len + remaining_len)
 }
 
 #[allow(
@@ -316,5 +333,28 @@ mod tests {
             decode_connack(&[0x20, 0x02]).unwrap_err(),
             DecodeError::Incomplete
         );
+    }
+
+    #[test]
+    fn remaining_length_longer_than_four_bytes_is_malformed() {
+        let bytes = [0x30, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00];
+        assert_eq!(
+            decode_publish(&bytes).unwrap_err(),
+            DecodeError::Malformed("remaining length longer than four bytes")
+        );
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(512))]
+
+        #[test]
+        fn decoders_never_panic(bytes in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..300)) {
+            let _ = decode_connack(&bytes);
+            let _ = decode_suback(&bytes);
+            if let Ok((_, consumed)) = decode_publish(&bytes) {
+                proptest::prop_assert!(consumed <= bytes.len());
+            }
+            let _ = decode_remaining_length(&bytes);
+        }
     }
 }
