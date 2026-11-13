@@ -35,7 +35,7 @@ use crate::{Date, Error};
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", from = "Wire")]
 #[non_exhaustive]
 pub struct KevCatalog {
     /// The catalog title.
@@ -50,11 +50,43 @@ pub struct KevCatalog {
     /// Number of entries, as the file states it.
     #[serde(default)]
     pub count: u64,
-    /// The entries, in the file's order.
+    /// The entries, in the file's order. After changing them, call
+    /// [`reindex`](Self::reindex) so [`get`](Self::get) sees the change.
     #[serde(default)]
     pub vulnerabilities: Vec<KevEntry>,
     #[serde(skip)]
     by_id: HashMap<CveId, usize>,
+}
+
+/// [`KevCatalog`] as it is read, before it is indexed.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Wire {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    catalog_version: String,
+    #[serde(default)]
+    date_released: String,
+    #[serde(default)]
+    count: u64,
+    #[serde(default)]
+    vulnerabilities: Vec<KevEntry>,
+}
+
+impl From<Wire> for KevCatalog {
+    fn from(wire: Wire) -> Self {
+        let mut catalog = Self {
+            title: wire.title,
+            catalog_version: wire.catalog_version,
+            date_released: wire.date_released,
+            count: wire.count,
+            vulnerabilities: wire.vulnerabilities,
+            by_id: HashMap::new(),
+        };
+        catalog.reindex();
+        catalog
+    }
 }
 
 /// One KEV entry.
@@ -149,9 +181,7 @@ impl KevCatalog {
     /// [`Error::Json`] when the JSON does not fit the schema (including an
     /// invalid CVE id or date).
     pub fn from_json(json: &[u8]) -> Result<Self, Error> {
-        let mut catalog: Self = serde_json::from_slice(json)?;
-        catalog.reindex();
-        Ok(catalog)
+        Ok(serde_json::from_slice(json)?)
     }
 
     /// A catalog of `entries`.
@@ -173,7 +203,23 @@ impl KevCatalog {
         serde_json::to_string_pretty(self).unwrap_or_default()
     }
 
-    fn reindex(&mut self) {
+    /// Rebuild the lookup index from [`vulnerabilities`](Self::vulnerabilities),
+    /// after changing that list directly. Until then, [`get`](Self::get)
+    /// may miss entries; it never returns the wrong one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rune_epss::{Date, KevCatalog, KevEntry};
+    ///
+    /// let id = "CVE-2021-44228".parse()?;
+    /// let mut kev = KevCatalog::default();
+    /// kev.vulnerabilities.push(KevEntry::new(id, Date::new(2021, 12, 10).unwrap()));
+    /// kev.reindex();
+    /// assert!(kev.contains(&id));
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn reindex(&mut self) {
         self.by_id = self
             .vulnerabilities
             .iter()
@@ -186,13 +232,16 @@ impl KevCatalog {
     /// entry wins.
     #[must_use]
     pub fn get(&self, cve: &CveId) -> Option<&KevEntry> {
-        self.by_id.get(cve).map(|&i| &self.vulnerabilities[i])
+        self.by_id
+            .get(cve)
+            .and_then(|&i| self.vulnerabilities.get(i))
+            .filter(|entry| entry.cve_id == *cve)
     }
 
     /// Whether `cve` is in the catalog.
     #[must_use]
     pub fn contains(&self, cve: &CveId) -> bool {
-        self.by_id.contains_key(cve)
+        self.get(cve).is_some()
     }
 
     /// Number of entries.
@@ -247,5 +296,23 @@ mod tests {
 
         let again = KevCatalog::from_json(kev.to_json().as_bytes()).unwrap();
         assert_eq!(again, kev);
+    }
+
+    // The lookup index sits next to a public entry list: plain serde left
+    // it empty, and shrinking the list made `get` index out of bounds.
+    #[test]
+    fn lookups_survive_serde_and_edits() {
+        let id: CveId = "CVE-2021-44228".parse().unwrap();
+        let added = Date::new(2021, 12, 10).unwrap();
+        let catalog = KevCatalog::from_entries(vec![KevEntry::new(id, added)]);
+        let json = serde_json::to_vec(&catalog).unwrap();
+        let read: KevCatalog = serde_json::from_slice(&json).unwrap();
+        assert!(read.contains(&id));
+        assert_eq!(read, catalog);
+
+        let mut edited = catalog;
+        edited.vulnerabilities.clear();
+        assert_eq!(edited.get(&id), None);
+        assert!(!edited.contains(&id));
     }
 }
