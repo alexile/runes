@@ -241,3 +241,49 @@ async fn handler_can_short_circuit_with_validators() {
     let res = send(app, Method::PUT, "/item", &[(header::IF_MATCH, "\"v2\"")]).await;
     assert_eq!(body_of(res).await, "written");
 }
+
+#[tokio::test]
+async fn shared_directives_are_made_private_for_authenticated_or_cookie_responses() {
+    let shared = || {
+        Cache::new()
+            .path(
+                "/assets",
+                CacheControl::immutable_asset(Duration::from_secs(60)),
+            )
+            .path("/c", CacheControl::new().s_maxage(Duration::from_secs(60)))
+    };
+    let router = || {
+        Router::new()
+            .route("/assets/app.js", get(|| async { "js" }))
+            .route(
+                "/c/login",
+                get(|| async { ([(header::SET_COOKIE, "sid=abc")], "hi") }),
+            )
+            .layer(CacheLayer::new(shared()))
+    };
+    let cc = |res: &Response| {
+        res.headers()
+            .get(header::CACHE_CONTROL)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned()
+    };
+
+    // Anonymous: the configured shared directives apply as is.
+    let res = send(router(), Method::GET, "/assets/app.js", &[]).await;
+    assert_eq!(cc(&res), "public, max-age=60, immutable");
+
+    // A shared cache must not hand one user's response to another.
+    let res = send(
+        router(),
+        Method::GET,
+        "/assets/app.js",
+        &[(header::AUTHORIZATION, "Bearer t")],
+    )
+    .await;
+    assert_eq!(cc(&res), "private, max-age=60, immutable");
+
+    let res = send(router(), Method::GET, "/c/login", &[]).await;
+    assert_eq!(cc(&res), "private");
+}

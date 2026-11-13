@@ -4,8 +4,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use http::header::{
-    CACHE_CONTROL, CONTENT_LOCATION, DATE, ETAG, EXPIRES, IF_MATCH, IF_MODIFIED_SINCE,
-    IF_NONE_MATCH, IF_UNMODIFIED_SINCE, LAST_MODIFIED, VARY,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_LOCATION, DATE, ETAG, EXPIRES, IF_MATCH,
+    IF_MODIFIED_SINCE, IF_NONE_MATCH, IF_UNMODIFIED_SINCE, LAST_MODIFIED, SET_COOKIE, VARY,
 };
 use http::{HeaderMap, HeaderValue, Method, Request, Response, StatusCode};
 use tower::{Layer, Service};
@@ -29,12 +29,19 @@ const CONDITIONAL: [http::HeaderName; 4] = [
 struct Rule {
     directives: CacheControl,
     value: HeaderValue,
+    /// What to send instead when the response belongs to one user: the
+    /// request carried `Authorization`, or the response sets a cookie.
+    /// `None` when `value` already keeps shared caches out.
+    personal: Option<HeaderValue>,
 }
 
 impl Rule {
     fn new(directives: CacheControl) -> Option<Self> {
         (!directives.is_empty()).then(|| Self {
             value: directives.to_header_value(),
+            personal: directives
+                .allows_shared_storage()
+                .then(|| directives.to_private().to_header_value()),
             directives,
         })
     }
@@ -53,6 +60,11 @@ struct PathOverride {
 /// Build with [`Cache::new()`] and chain methods to set the default
 /// `Cache-Control` directives, per-path overrides and conditional-request
 /// handling, then pass it to [`CacheLayer::new()`].
+///
+/// Directives that let shared caches store the response (`public`,
+/// `s-maxage`, `must-revalidate`, `proxy-revalidate`) are sent in their
+/// `private` form when the request carried `Authorization` or the response
+/// sets a cookie: a CDN must never hand one user's response to another.
 ///
 /// # Examples
 ///
@@ -271,9 +283,10 @@ where
             .then(|| {
                 self.config
                     .rule_for(req.uri().path())
-                    .map(|r| r.value.clone())
+                    .map(|r| (r.value.clone(), r.personal.clone()))
             })
             .flatten();
+        let authorized = req.headers().contains_key(AUTHORIZATION);
         let conditions =
             (cacheable && self.config.conditional).then(|| conditions_of(req.headers()));
         let override_existing = self.config.override_existing;
@@ -281,10 +294,16 @@ where
         Box::pin(async move {
             let mut response = fut.await?;
             let status = response.status();
-            if let Some(value) = rule
+            if let Some((value, personal)) = rule
                 && (status.is_success() || status == StatusCode::NOT_MODIFIED)
             {
                 let headers = response.headers_mut();
+                // A shared cache must never hand one user's response to
+                // another, whatever the configured directives say.
+                let value = match personal {
+                    Some(personal) if authorized || headers.contains_key(SET_COOKIE) => personal,
+                    _ => value,
+                };
                 if override_existing || !headers.contains_key(CACHE_CONTROL) {
                     headers.insert(CACHE_CONTROL, value);
                 }

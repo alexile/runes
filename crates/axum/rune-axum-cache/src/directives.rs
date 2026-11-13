@@ -206,6 +206,25 @@ impl CacheControl {
         self.no_store
     }
 
+    /// Whether a shared cache may store a response to a request that
+    /// carried `Authorization` under these directives (RFC 9111 §3.5).
+    pub(crate) const fn allows_shared_storage(&self) -> bool {
+        matches!(self.visibility, Some(Visibility::Public))
+            || self.s_maxage.is_some()
+            || self.must_revalidate
+            || self.proxy_revalidate
+    }
+
+    /// The same directives limited to the user's own cache: `private`, with
+    /// the shared-cache-only directives dropped.
+    pub(crate) fn to_private(&self) -> Self {
+        let mut private = self.clone();
+        private.visibility = Some(Visibility::Private);
+        private.s_maxage = None;
+        private.proxy_revalidate = false;
+        private
+    }
+
     /// The directives as a `Cache-Control` header value.
     #[must_use]
     pub fn to_header_value(&self) -> HeaderValue {

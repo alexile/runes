@@ -56,6 +56,8 @@ let app: Router = Router::new()
 
 A request for `/report` with `If-None-Match` set to the tag it received earlier now gets `304 Not Modified` with no body.
 
+Directives that let shared caches store the response (`public`, `s-maxage`, `must-revalidate`, `proxy-revalidate`) are turned into their `private` form when the request carried `Authorization` or the response sets a cookie, so a CDN never hands one user's response to another.
+
 ### Guarding writes in the handler
 
 The layer never touches unsafe methods: by the time it sees a response, the write has happened. Evaluate preconditions in the handler instead:
