@@ -10,7 +10,7 @@ use crate::error::{ConfigError, RestoreError};
 use crate::hash::HashKey;
 use crate::metrics::{EvictionReason, MetricEvent, Recorder, Stats};
 use crate::store::ExactStore;
-use crate::time::{Timestamp, within};
+use crate::time::Timestamp;
 
 /// The outcome of an [`EventTimeDedupe::check`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -110,11 +110,7 @@ impl<K: Eq + Hash + Clone, T: Timestamp> EventTimeDedupe<K, T> {
     /// Checks `key` with event time `event_time`.
     pub fn check(&mut self, key: K, event_time: T) -> Verdict {
         let window = self.window;
-        let verdict = if self
-            .store
-            .times(&key)
-            .any(|t| within(t, event_time, window))
-        {
+        let verdict = if self.store.any_within(&key, event_time, window) {
             Verdict::Duplicate
         } else if self.watermark.is_some_and(|wm| event_time < wm) {
             Verdict::Late

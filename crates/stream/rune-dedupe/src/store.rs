@@ -1,43 +1,66 @@
 //! Exact store: a keyed hash table plus a time-ordered index for eviction.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::hash::Hash;
+use std::time::Duration;
 
 use crate::hash::HashKey;
-use crate::time::Timestamp;
+use crate::time::{Timestamp, within};
 
 /// The accepted times recorded for one key. Almost always a single entry, so
 /// that case avoids a heap allocation.
 #[derive(Debug, Clone)]
 enum Slot<T> {
     One(T, u64),
-    Many(Vec<(T, u64)>),
+    /// Sorted, so the occurrences nearest a time are found in `O(log n)`.
+    Many(BTreeSet<(T, u64)>),
 }
 
-impl<T: Copy> Slot<T> {
+impl<T: Timestamp> Slot<T> {
     fn times(&self) -> impl Iterator<Item = T> + '_ {
         let (one, many) = match self {
-            Self::One(t, _) => (Some(*t), &[][..]),
-            Self::Many(v) => (None, v.as_slice()),
+            Self::One(t, _) => (Some(*t), None),
+            Self::Many(set) => (None, Some(set)),
         };
-        one.into_iter().chain(many.iter().map(|&(t, _)| t))
+        one.into_iter()
+            .chain(many.into_iter().flatten().map(|&(t, _)| t))
+    }
+
+    /// Whether some occurrence is within `window` of `t`. Only the nearest
+    /// occurrence on each side can be.
+    fn any_within(&self, t: T, window: Duration) -> bool {
+        match self {
+            Self::One(t0, _) => within(*t0, t, window),
+            Self::Many(set) => {
+                let before = set.range(..=(t, u64::MAX)).next_back();
+                let after = set.range((t, 0)..).next();
+                before
+                    .into_iter()
+                    .chain(after)
+                    .any(|&(t0, _)| within(t0, t, window))
+            }
+        }
     }
 
     fn push(&mut self, t: T, seq: u64) {
         match self {
-            Self::One(t0, s0) => *self = Self::Many(vec![(*t0, *s0), (t, seq)]),
-            Self::Many(v) => v.push((t, seq)),
+            Self::One(t0, s0) => *self = Self::Many(BTreeSet::from([(*t0, *s0), (t, seq)])),
+            Self::Many(set) => {
+                set.insert((t, seq));
+            }
         }
     }
 
-    /// Removes the entry with `seq`; returns whether the slot is now empty.
-    fn remove(&mut self, seq: u64) -> bool {
+    /// Removes one occurrence; `true` when the slot is now empty.
+    fn remove(&mut self, t: T, seq: u64) -> bool {
         match self {
             Self::One(_, s) => *s == seq,
-            Self::Many(v) => {
-                v.retain(|&(_, s)| s != seq);
-                if let [(t, s)] = v.as_slice() {
-                    *self = Self::One(*t, *s);
+            Self::Many(set) => {
+                set.remove(&(t, seq));
+                if set.len() == 1
+                    && let Some(&(t, s)) = set.first()
+                {
+                    *self = Self::One(t, s);
                 }
                 false
             }
@@ -45,9 +68,6 @@ impl<T: Copy> Slot<T> {
     }
 }
 
-/// Every accepted `(key, time)` entry, indexed by key for lookups and by
-/// `(time, insertion order)` for oldest-first eviction. All operations are
-/// `O(log n)` or better.
 #[derive(Debug, Clone)]
 pub struct ExactStore<K, T> {
     map: HashMap<K, Slot<T>, HashKey>,
@@ -78,6 +98,13 @@ impl<K: Eq + Hash + Clone, T: Timestamp> ExactStore<K, T> {
         self.map.get(key).into_iter().flat_map(Slot::times)
     }
 
+    /// Whether `key` has an occurrence within `window` of `t`.
+    pub fn any_within(&self, key: &K, t: T, window: Duration) -> bool {
+        self.map
+            .get(key)
+            .is_some_and(|slot| slot.any_within(t, window))
+    }
+
     pub fn contains_key(&self, key: &K) -> bool {
         self.map.contains_key(key)
     }
@@ -100,7 +127,11 @@ impl<K: Eq + Hash + Clone, T: Timestamp> ExactStore<K, T> {
 
     pub fn pop_oldest(&mut self) -> Option<(K, T)> {
         let ((t, seq), key) = self.order.pop_first()?;
-        if self.map.get_mut(&key).is_some_and(|slot| slot.remove(seq)) {
+        if self
+            .map
+            .get_mut(&key)
+            .is_some_and(|slot| slot.remove(t, seq))
+        {
             self.map.remove(&key);
         }
         Some((key, t))

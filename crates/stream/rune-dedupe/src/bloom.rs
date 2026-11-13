@@ -190,7 +190,7 @@ impl<T> Generation<T> {
                 *x |= m;
             }
         }
-        self.count += 1;
+        self.count = self.count.saturating_add(1);
     }
 }
 
@@ -227,7 +227,7 @@ impl<T: Timestamp> Generations<T> {
 
     /// Distinct keys recorded across live generations.
     pub fn len(&self) -> usize {
-        self.gens.iter().map(|g| g.count).sum()
+        self.gens.iter().fold(0, |n, g| n.saturating_add(g.count))
     }
 
     /// Whether a live generation reports `h`, without changing anything.
@@ -238,12 +238,12 @@ impl<T: Timestamp> Generations<T> {
     }
 
     pub fn check(&mut self, h: u64, now: T, window: Duration) -> Outcome {
-        let mut expired = 0;
+        let mut expired: u64 = 0;
         while let Some(front) = self.gens.front() {
             if now.saturating_since(front.newest) <= window {
                 break;
             }
-            expired += front.count as u64;
+            expired = expired.saturating_add(front.count as u64);
             self.gens.pop_front();
         }
         let hashes = self.params.hashes;
@@ -262,7 +262,7 @@ impl<T: Timestamp> Generations<T> {
             if self.gens.len() >= self.params.max_generations
                 && let Some(old) = self.gens.pop_front()
             {
-                capacity += old.count as u64;
+                capacity = old.count as u64;
             }
             self.gens.push_back(Generation {
                 bits: vec![0; self.params.words],

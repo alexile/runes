@@ -88,26 +88,26 @@ impl Recorder {
         let s = &mut self.stats;
         match event {
             MetricEvent::Fresh => {
-                s.seen += 1;
-                s.fresh += 1;
+                s.seen = s.seen.saturating_add(1);
+                s.fresh = s.fresh.saturating_add(1);
             }
             MetricEvent::Duplicate => {
-                s.seen += 1;
-                s.duplicates += 1;
+                s.seen = s.seen.saturating_add(1);
+                s.duplicates = s.duplicates.saturating_add(1);
             }
             MetricEvent::Late => {
-                s.seen += 1;
-                s.late += 1;
+                s.seen = s.seen.saturating_add(1);
+                s.late = s.late.saturating_add(1);
             }
             MetricEvent::Evicted { count: 0, .. } => return,
             MetricEvent::Evicted {
                 reason: EvictionReason::Expired,
                 count,
-            } => s.evicted_expired += count,
+            } => s.evicted_expired = s.evicted_expired.saturating_add(count),
             MetricEvent::Evicted {
                 reason: EvictionReason::Capacity,
                 count,
-            } => s.evicted_capacity += count,
+            } => s.evicted_capacity = s.evicted_capacity.saturating_add(count),
         }
         if let Some(hook) = self.hook.as_mut() {
             hook(event);
