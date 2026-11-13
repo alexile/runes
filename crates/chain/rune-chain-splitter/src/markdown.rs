@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::chunk::{Chunk, chunks_from_ranges};
+use crate::chunk::{Chunk, char_len, chunks_from_ranges};
 use crate::error::SplitError;
 use crate::recursive::{RecursiveSplitter, split_recursive};
 use crate::splitter::TextSplitter;
@@ -15,9 +15,11 @@ pub const HEADER_PATH_KEY: &str = "header_path";
 /// Each ATX heading (`#` … `######` followed by a space, up to three spaces
 /// of indentation) starts a new section; `#` lines inside fenced code blocks
 /// (```` ``` ```` / `~~~`) and `#hashtags` are not headings. A heading that
-/// is directly followed by another heading stays with it, so no chunk is a
-/// bare heading. Sections longer than `max_chunk_size` characters are split
-/// further like [`RecursiveSplitter`] (paragraphs, lines, sentences, words).
+/// is directly followed by another heading stays with it. Sections longer
+/// than `max_chunk_size` characters are split further like
+/// [`RecursiveSplitter`] (paragraphs, lines, sentences, words), and the
+/// heading always leads the first of those chunks, so no chunk is a bare
+/// heading unless the heading alone fills `max_chunk_size`.
 ///
 /// Every chunk from [`chunks`](TextSplitter::chunks) carries the headings
 /// that enclose it as metadata: `"h1"` … `"h6"` for each active level, and
@@ -106,6 +108,14 @@ impl TextSplitter for MarkdownSplitter {
                 0,
                 &mut ranges,
             );
+            keep_heading_with_body(
+                text,
+                section.range.end,
+                &separators,
+                max,
+                before,
+                &mut ranges,
+            );
             owners.extend(std::iter::repeat_n(i, ranges.len() - before));
         }
         let mut chunks = chunks_from_ranges(text, &ranges);
@@ -133,6 +143,53 @@ impl TextSplitter for MarkdownSplitter {
     }
 }
 
+/// If the first chunk of a section (at `ranges[first]`) is only its
+/// heading line(s), re-split so the heading leads the first body chunk.
+///
+/// The body right after the heading is split with the room the heading
+/// leaves, the result's first span is joined to the heading, and the rest of
+/// the section is split as usual. A heading longer than `max` stays alone.
+fn keep_heading_with_body(
+    text: &str,
+    section_end: usize,
+    separators: &[String],
+    max: usize,
+    first: usize,
+    ranges: &mut Vec<Range<usize>>,
+) {
+    let Some(head) = ranges.get(first).cloned() else {
+        return;
+    };
+    if ranges.len() - first < 2 || !is_heading_only(&text[head.clone()]) {
+        return;
+    }
+    let head_chars = char_len(&text[head.clone()]);
+    if head_chars >= max {
+        return;
+    }
+    let mut lead = Vec::new();
+    split_recursive(
+        text,
+        head.end..section_end,
+        separators,
+        max - head_chars,
+        0,
+        &mut lead,
+    );
+    let Some(lead) = lead.first() else {
+        return;
+    };
+    ranges.truncate(first);
+    ranges.push(head.start..lead.end);
+    split_recursive(text, lead.end..section_end, separators, max, 0, ranges);
+}
+
+/// Whether every non-blank line of `text` is an ATX heading.
+fn is_heading_only(text: &str) -> bool {
+    text.split_inclusive('\n')
+        .all(|line| line.trim().is_empty() || atx_heading(line).is_some())
+}
+
 struct Section {
     range: Range<usize>,
     /// `(level, title)` of the enclosing headings, outermost first.
@@ -151,10 +208,11 @@ fn sections(text: &str) -> Vec<Section> {
     for line in text.split_inclusive('\n') {
         let line_start = pos;
         pos += line.len();
-        if let Some(marker) = fence_marker(line) {
+        if let Some((mc, run, bare)) = fence_marker(line) {
             match fence {
-                None => fence = Some(marker),
-                Some((c, n)) if marker.0 == c && marker.1 >= n => fence = None,
+                None => fence = Some((mc, run)),
+                // A closing fence has nothing but whitespace after its run.
+                Some((c, n)) if bare && mc == c && run >= n => fence = None,
                 Some(_) => {}
             }
             has_body = true;
@@ -213,8 +271,11 @@ fn atx_heading(line: &str) -> Option<(usize, String)> {
     Some((level, title.to_owned()))
 }
 
-/// `(char, run length)` if `line` opens or closes a fenced code block.
-fn fence_marker(line: &str) -> Option<(char, usize)> {
+/// `(char, run length, nothing after the run)` if `line` is a code fence.
+///
+/// Only a bare fence can close a block. A backtick fence whose info string
+/// holds a backtick is not a fence at all (`CommonMark`).
+fn fence_marker(line: &str) -> Option<(char, usize, bool)> {
     let indent = line.len() - line.trim_start_matches(' ').len();
     if indent > 3 {
         return None;
@@ -222,7 +283,11 @@ fn fence_marker(line: &str) -> Option<(char, usize)> {
     let rest = &line[indent..];
     let c = rest.chars().next().filter(|c| matches!(c, '`' | '~'))?;
     let run = rest.len() - rest.trim_start_matches(c).len();
-    (run >= 3).then_some((c, run))
+    let info = &rest[run..];
+    if run < 3 || (c == '`' && info.contains('`')) {
+        return None;
+    }
+    Some((c, run, info.trim().is_empty()))
 }
 
 #[cfg(test)]
@@ -308,6 +373,35 @@ mod tests {
         assert_eq!(atx_heading("####### seven"), None);
         assert_eq!(atx_heading("    # code"), None);
         assert_eq!(atx_heading("# C#"), Some((1, "C#".into())));
+    }
+
+    #[test]
+    fn fence_with_info_string_does_not_close_a_block() {
+        let md = "# T\n```\n```python\n# not\n```\n# H\nx";
+        let chunks = MarkdownSplitter::new().max_chunk_size(1000).chunks(md);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].text, "# T\n```\n```python\n# not\n```\n");
+        assert_eq!(chunks[1].metadata[HEADER_PATH_KEY], "H");
+    }
+
+    #[test]
+    fn backtick_in_info_string_is_not_a_fence() {
+        let md = "# T\n``` a`b\n# H\nx";
+        let chunks = MarkdownSplitter::new().chunks(md);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[1].metadata[HEADER_PATH_KEY], "H");
+        // Tildes may carry backticks in their info string.
+        let md = "# T\n~~~ a`b\n# not\n~~~\n";
+        assert_eq!(MarkdownSplitter::new().chunks(md).len(), 1);
+    }
+
+    #[test]
+    fn heading_is_not_left_alone_before_a_long_paragraph() {
+        let md = format!("# H\n\n{}", "word ".repeat(100));
+        let chunks = MarkdownSplitter::new().max_chunk_size(100).split(&md);
+        assert!(chunks[0].starts_with("# H\n\nword"), "{:?}", chunks[0]);
+        assert!(chunks.iter().all(|c| chars(c) <= 100));
+        assert_eq!(chunks.concat(), md);
     }
 
     #[test]

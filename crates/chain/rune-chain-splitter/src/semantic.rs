@@ -328,8 +328,19 @@ impl SemanticChunker {
         // Sentence groups as (first, last_exclusive).
         let mut groups: Vec<(usize, usize)> = Vec::new();
         let mut first = 0;
-        let span_chars =
-            |a: usize, b: usize| char_len(&text[sentences[a].start..sentences[b - 1].end]);
+        // Char offsets of every sentence's start and end, so a group's size
+        // is a subtraction rather than a rescan of the text.
+        let mut starts = Vec::with_capacity(sentences.len());
+        let mut ends = Vec::with_capacity(sentences.len());
+        let (mut byte, mut chars) = (0, 0);
+        for s in sentences {
+            chars += char_len(&text[byte..s.start]);
+            starts.push(chars);
+            chars += char_len(&text[s.clone()]);
+            ends.push(chars);
+            byte = s.end;
+        }
+        let span_chars = |a: usize, b: usize| ends[b - 1] - starts[a];
         for &b in breaks {
             let end = b + 1;
             if end <= first || end >= sentences.len() {
@@ -375,9 +386,9 @@ impl SemanticChunker {
 
 /// Split `text` into sentence spans that tile it exactly.
 ///
-/// A sentence ends after `.`, `!`, `?` or `…` (plus any closing quotes or
-/// brackets) followed by whitespace, after `。`, `！` or `？`, or at a blank
-/// line. Trailing whitespace belongs to the sentence it follows; leading
+/// A sentence ends after `.`, `!`, `?`, `…`, `।`, `॥`, `؟` or `۔` (plus any
+/// closing quotes or brackets) followed by whitespace, after `。`, `！`,
+/// `？`, `．` or `｡`, or at a blank line. Trailing whitespace belongs to the sentence it follows; leading
 /// whitespace to the first sentence. Decimal points (`3.14`) do not split;
 /// abbreviations (`e.g. x`) do, as in `LangChain`.
 ///
@@ -390,8 +401,8 @@ impl SemanticChunker {
 /// ```
 #[must_use]
 pub fn sentence_spans(text: &str) -> Vec<Range<usize>> {
-    const TERMINAL: [char; 4] = ['.', '!', '?', '…'];
-    const CJK_TERMINAL: [char; 3] = ['。', '！', '？'];
+    const TERMINAL: [char; 8] = ['.', '!', '?', '…', '।', '॥', '؟', '۔'];
+    const CJK_TERMINAL: [char; 5] = ['。', '！', '？', '．', '｡'];
     const CLOSERS: [char; 10] = ['"', '\'', ')', ']', '}', '”', '’', '»', '」', '』'];
 
     let chars: Vec<(usize, char)> = text.char_indices().collect();
@@ -762,5 +773,44 @@ mod tests {
         assert_eq!(sentence_spans("   "), [0..3]);
         assert_eq!(sentence_spans("No terminator"), [0..13]);
         assert_eq!(sentence_spans("End.  "), [0..6]);
+    }
+
+    #[test]
+    fn sentence_spans_handle_other_scripts() {
+        let hindi = "यह पहला वाक्य है। यह दूसरा है॥ और तीसरा।";
+        assert_eq!(sentence_spans(hindi).len(), 3);
+        let arabic = "هل هذا سؤال؟ نعم هو كذلك.";
+        assert_eq!(sentence_spans(arabic).len(), 2);
+        let urdu = "یہ پہلا جملہ ہے۔ یہ دوسرا ہے۔";
+        assert_eq!(sentence_spans(urdu).len(), 2);
+        let wide = "一．二｡三";
+        let s: Vec<&str> = sentence_spans(wide).into_iter().map(|r| &wide[r]).collect();
+        assert_eq!(s, ["一．", "二｡", "三"]);
+    }
+
+    #[test]
+    fn min_chunk_chars_with_dense_breaks_is_linear() {
+        // Every distance is a break, but no group ever reaches the minimum.
+        let n = 300_000;
+        let text = "Ab. ".repeat(n);
+        let s = sentence_spans(&text);
+        assert_eq!(s.len(), n);
+        let e: Vec<Vec<f32>> = (0..n)
+            .map(|i| {
+                if i % 2 == 0 {
+                    vec![1.0, 0.0]
+                } else {
+                    vec![0.0, 1.0]
+                }
+            })
+            .collect();
+        let c = SemanticChunker::new()
+            .threshold(BreakpointThreshold::ChunkCount(usize::MAX))
+            .min_chunk_chars(usize::MAX);
+        let started = std::time::Instant::now();
+        let chunks = c.chunk_with_embeddings(&text, &s, &e).unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, text);
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
     }
 }
