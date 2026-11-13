@@ -115,6 +115,11 @@ pub fn dedupe<X, C: Correlate<X> + ?Sized>(
                 }
             }
         }
+        // The target's own keys already point at it, and the folded groups'
+        // keys were moved above: only the new finding's keys are left.
+        for key in &group.keys {
+            index.insert(key.clone(), target);
+        }
         let merged = match merged {
             Some(mut kept) => {
                 kept.absorb(group, correlate, options);
@@ -122,9 +127,6 @@ pub fn dedupe<X, C: Correlate<X> + ?Sized>(
             }
             None => group,
         };
-        for key in &merged.keys {
-            index.insert(key.clone(), target);
-        }
         if let Some(slot) = groups.get_mut(target) {
             *slot = Some(merged);
         }
@@ -208,6 +210,19 @@ mod tests {
         );
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].count, 4);
+    }
+
+    // Each finding that joined a group used to re-index every key the
+    // group had collected so far.
+    #[test]
+    fn a_group_with_many_keys_grows_in_linear_time() {
+        let findings = (0..20_000).map(|cwe| at("a", 1, Some(cwe)));
+        let start = std::time::Instant::now();
+        let groups = dedupe(findings, &Strategy::FingerprintOrCwe, &Options::default());
+        let elapsed = start.elapsed();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].keys.len(), 20_001);
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
     }
 
     #[test]

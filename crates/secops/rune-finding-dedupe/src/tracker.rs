@@ -435,8 +435,9 @@ impl<X> Tracker<X> {
         for key in &gone.keys {
             self.index.insert(key.clone(), survivor.clone());
         }
-        for target in self.redirects.values_mut() {
-            if target == absorbed {
+        // The ids redirected to the absorbed issue are its aliases.
+        for alias in &gone.aliases {
+            if let Some(target) = self.redirects.get_mut(alias) {
                 target.clone_from(survivor);
             }
         }
@@ -511,7 +512,10 @@ impl<X> Tracker<X> {
             }
         }
         for (from, to) in &redirects {
-            if issues.contains_key(from) || !issues.contains_key(to) {
+            let listed = issues
+                .get(to)
+                .is_some_and(|issue| issue.aliases.contains(from));
+            if issues.contains_key(from) || !listed {
                 return Err(Error::BadAlias(from.to_string()));
             }
         }
@@ -593,6 +597,37 @@ mod tests {
         assert_eq!(issue.map(|i| i.fixed_unix_ms), Some(None));
     }
 
+    // Merging an issue used to scan every redirect the tracker had made.
+    #[test]
+    fn one_finding_linking_many_issues_merges_in_linear_time() {
+        const N: u32 = 10_000;
+        let mut tracker = Tracker::default();
+        let s = Strategy::FingerprintOrCwe;
+        let at = |check: String| {
+            Finding::<()>::new(
+                check,
+                "x",
+                Severity::Low,
+                Confidence::Firm,
+                Location::file("f"),
+            )
+        };
+        let first = (0..N).map(|cwe| at(format!("c{cwe}")).push_taxonomy(TaxonomyRef::cwe(cwe)));
+        assert_eq!(
+            tracker.observe(&Scan::new("t", 1), first, &s).new.len(),
+            10_000
+        );
+        let link = at("link".to_owned()).with_taxonomy((0..N).map(TaxonomyRef::cwe).collect());
+        let start = std::time::Instant::now();
+        let r = tracker.observe(&Scan::new("t", 2), [link], &s);
+        let elapsed = start.elapsed();
+        assert_eq!(r.merged.len(), 9_999);
+        assert_eq!(tracker.issues().count(), 1);
+        let (gone, kept) = &r.merged[0];
+        assert_eq!(&tracker.resolve(gone), kept);
+        assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
+    }
+
     #[test]
     fn linking_finding_merges_issues_into_the_older() {
         let mut tracker = Tracker::default();
@@ -672,6 +707,11 @@ mod tests {
         let redirects = BTreeMap::from([(IssueId::new("x"), IssueId::new("missing"))]);
         assert!(matches!(
             Tracker::from_parts(Options::default(), 1, tracker.issues.clone(), redirects),
+            Err(Error::BadAlias(_))
+        ));
+        let unlisted = BTreeMap::from([(IssueId::new("x"), id.clone())]);
+        assert!(matches!(
+            Tracker::from_parts(Options::default(), 1, tracker.issues.clone(), unlisted),
             Err(Error::BadAlias(_))
         ));
         let mut issues = tracker.issues.clone();

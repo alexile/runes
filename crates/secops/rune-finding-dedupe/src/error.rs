@@ -13,7 +13,8 @@ pub enum Error {
     /// Two issues claim the same key.
     #[error("key {0} belongs to two issues")]
     SharedKey(String),
-    /// An alias is also a live issue, or points at no issue.
+    /// An alias is also a live issue, or points at an issue that does not
+    /// list it among its aliases.
     #[error("alias {0} is a live issue or points at a missing one")]
     BadAlias(String),
 }
