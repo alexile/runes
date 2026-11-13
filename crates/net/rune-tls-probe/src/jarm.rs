@@ -692,10 +692,38 @@ impl Fingerprint {
             .join(",")
     }
 
-    /// The 62-character fingerprint ([`hash`] of [`Fingerprint::raw`]).
+    /// The 62-character fingerprint: [`hash`] of [`Fingerprint::raw`],
+    /// worked out entry by entry. The two only differ when a server's ALPN
+    /// answer contains `,` or `|`, which would otherwise shift the other
+    /// entries in the raw form; no real protocol name does.
     #[must_use]
     pub fn hash(&self) -> String {
-        hash(&self.raw())
+        if self.is_empty() {
+            return "0".repeat(HASH_LEN);
+        }
+        let fields: Vec<[String; 4]> = self
+            .entries
+            .iter()
+            .map(|entry| match entry {
+                Entry::NoAnswer => Default::default(),
+                Entry::Answered {
+                    cipher_suite,
+                    version,
+                    alpn,
+                    extensions,
+                } => [
+                    format!("{cipher_suite:04x}"),
+                    format!("{version:04x}"),
+                    alpn.clone(),
+                    extensions
+                        .iter()
+                        .map(|ext| format!("{ext:04x}"))
+                        .collect::<Vec<_>>()
+                        .join("-"),
+                ],
+            })
+            .collect();
+        fuzzy_hash(fields.iter().map(|[a, b, c, d]| [&**a, &**b, &**c, &**d]))
     }
 
     /// Whether no probe got an answer (the hash is all zeros).
@@ -714,8 +742,9 @@ impl fmt::Display for Fingerprint {
 /// Hashes a raw JARM string (ten `cipher|version|alpn|extensions` entries
 /// joined by `,`) into the 62-character fingerprint.
 ///
-/// Any input is accepted: missing entries or fields count as empty, and a
-/// version whose last hex digit is not 0-5 hashes like an empty one.
+/// Any input is accepted: missing entries or fields count as empty, entries
+/// past the tenth are ignored, and a version whose last hex digit is not
+/// 0-5 hashes like an empty one.
 ///
 /// ```
 /// let empty = "|||,|||,|||,|||,|||,|||,|||,|||,|||,|||";
@@ -727,15 +756,23 @@ pub fn hash(raw: &str) -> String {
     if entries.len() == PROBES.len() && entries.iter().all(|e| *e == "|||") {
         return "0".repeat(HASH_LEN);
     }
+    fuzzy_hash(entries.into_iter().map(|entry| {
+        let mut fields = entry.split('|');
+        let mut next = || fields.next().unwrap_or("");
+        [next(), next(), next(), next()]
+    }))
+}
+
+/// The fuzzy hash of exactly ten `[cipher, version, alpn, extensions]`
+/// entries: missing ones count as empty, extra ones are ignored.
+fn fuzzy_hash<'a>(entries: impl Iterator<Item = [&'a str; 4]>) -> String {
     let order = hash_order();
     let mut out = String::with_capacity(HASH_LEN);
     let mut tail = String::new();
-    for entry in entries {
-        let mut fields = entry.split('|');
-        let cipher = fields.next().unwrap_or("");
-        let version = fields.next().unwrap_or("");
-        tail.push_str(fields.next().unwrap_or(""));
-        tail.push_str(fields.next().unwrap_or(""));
+    let mut entries = entries.chain(std::iter::repeat([""; 4])).take(PROBES.len());
+    for [cipher, version, alpn, extensions] in &mut entries {
+        tail.push_str(alpn);
+        tail.push_str(extensions);
         if cipher.is_empty() {
             out.push_str("00");
         } else {

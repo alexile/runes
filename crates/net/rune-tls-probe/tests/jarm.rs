@@ -446,3 +446,47 @@ fn a_scripted_server_end_to_end() {
     assert_eq!(&hash[..30], "2ad2ad0002ad2ad2ac42d42d00042d");
     assert_eq!(hash, jarm::hash(&fp.raw()));
 }
+
+#[test]
+fn hostile_alpn_cannot_reshape_the_fingerprint() {
+    // A server can answer with any ALPN bytes, including the `,` and `|`
+    // that separate entries and fields in the raw form.
+    let wire = ServerHello::new()
+        .with_legacy_version(ProtocolVersion::TLS_1_2)
+        .with_cipher_suite(CipherSuite(0xc02f))
+        .with_extension(Extension::new(
+            ExtensionType::ALPN,
+            b"\x00\x0d\x0c|0303|,,c02f".to_vec(),
+        ))
+        .to_records(ProtocolVersion::TLS_1_2, 16_384)
+        .unwrap();
+    let mut fp = Fingerprint::default();
+    fp.entries[0] = Entry::parse(&wire);
+    assert!(matches!(fp.entries[0], Entry::Answered { .. }));
+    let hash = fp.hash();
+    assert_eq!(hash.len(), jarm::HASH_LEN, "{hash}");
+    // Only the first probe answered; the others stay empty.
+    assert!(hash.starts_with("29d000000000000000000000000000"), "{hash}");
+    assert!(
+        jarm::decode(&hash).unwrap().answers[1..]
+            .iter()
+            .all(Option::is_none)
+    );
+}
+
+#[test]
+fn raw_hash_is_always_62_characters() {
+    for raw in [
+        "",
+        "c02f|0303||",
+        &"|||,".repeat(20),
+        "c02f|0303|h2|0010,,,,",
+    ] {
+        assert_eq!(jarm::hash(raw).len(), jarm::HASH_LEN, "{raw:?}");
+    }
+    // Missing entries count as empty ones.
+    assert_eq!(
+        jarm::hash("c02f|0303|h2|0010"),
+        jarm::hash("c02f|0303|h2|0010,|||,|||,|||,|||,|||,|||,|||,|||,|||")
+    );
+}
