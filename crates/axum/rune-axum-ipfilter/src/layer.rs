@@ -1,4 +1,4 @@
-use crate::client_ip::ClientIpConfig;
+use crate::client_ip::{ClientIpConfig, cidr_contains};
 use http::{Request, Response, StatusCode};
 use rune_cidr::{Cidr, CidrParseError};
 use std::future::Future;
@@ -137,7 +137,7 @@ impl IpFilterConfig {
         let Some(ip) = self.client_ip.resolve(req) else {
             return Some(self.missing_ip_status);
         };
-        let matched = self.cidrs.iter().any(|cidr| cidr.contains(ip));
+        let matched = self.cidrs.iter().any(|cidr| cidr_contains(cidr, ip));
         let rejected = match self.mode {
             FilterMode::Allowlist => !matched,
             FilterMode::Blocklist => matched,
@@ -383,6 +383,40 @@ mod tests {
         let app = build_app(IpFilterConfig::new().mode(FilterMode::Allowlist));
         let response = send(app, req_with_ip("1.2.3.4")).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    /// Client addresses are folded from `::ffff:a.b.c.d` to IPv4, so a range
+    /// written in the mapped form (as dual-stack logs print it) must still
+    /// match them. Otherwise a blocklist entry silently blocks nothing.
+    #[tokio::test]
+    async fn mapped_ipv6_ranges_match_ipv4_clients() {
+        let app = build_app(
+            IpFilterConfig::new()
+                .mode(FilterMode::Blocklist)
+                .cidr("::ffff:1.2.3.0/120")
+                .unwrap(),
+        );
+        for peer in ["1.2.3.4", "::ffff:1.2.3.4"] {
+            assert_eq!(
+                send(app.clone(), req_with_ip(peer)).await.status(),
+                StatusCode::FORBIDDEN,
+                "{peer}"
+            );
+        }
+        assert_eq!(
+            send(app, req_with_ip("1.2.4.4")).await.status(),
+            StatusCode::OK
+        );
+        let app = build_app(
+            IpFilterConfig::new()
+                .mode(FilterMode::Allowlist)
+                .cidr("::ffff:10.0.0.0/104")
+                .unwrap(),
+        );
+        assert_eq!(
+            send(app, req_with_ip("10.9.8.7")).await.status(),
+            StatusCode::OK
+        );
     }
 
     // --- Client IP resolution ---

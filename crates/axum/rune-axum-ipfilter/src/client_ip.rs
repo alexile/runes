@@ -124,8 +124,7 @@ impl ClientIpConfig {
     /// Returns `true` when `ip` lies in one of the trusted proxy ranges.
     #[must_use]
     pub fn is_trusted(&self, ip: IpAddr) -> bool {
-        let ip = canonical(ip);
-        self.trusted.iter().any(|cidr| cidr.contains(ip))
+        self.trusted.iter().any(|cidr| cidr_contains(cidr, ip))
     }
 
     /// Resolves the client IP of `req`. See [`ClientIpConfig::resolve_parts`].
@@ -205,6 +204,18 @@ impl ClientIpConfig {
             }
         }
         last_trusted
+    }
+}
+
+/// Whether `cidr` contains `ip`, treating an IPv4 address and its
+/// `::ffff:a.b.c.d` form as the same address, whichever way the range is
+/// written.
+pub(crate) fn cidr_contains(cidr: &Cidr, ip: IpAddr) -> bool {
+    match canonical(ip) {
+        IpAddr::V4(v4) => {
+            cidr.contains(IpAddr::V4(v4)) || cidr.contains(IpAddr::V6(v4.to_ipv6_mapped()))
+        }
+        v6 @ IpAddr::V6(_) => cidr.contains(v6),
     }
 }
 
@@ -454,6 +465,18 @@ mod tests {
         let h = headers(&[("x-forwarded-for", "198.51.100.1")]);
         assert_eq!(
             proxied().resolve_from_peer(ip("192.168.0.1"), &h),
+            ip("198.51.100.1")
+        );
+    }
+
+    #[test]
+    fn mapped_trusted_range_matches_ipv4_peer() {
+        let cfg = ClientIpConfig::new()
+            .trust_proxy("::ffff:10.0.0.0/104")
+            .unwrap();
+        let h = headers(&[("x-forwarded-for", "198.51.100.1")]);
+        assert_eq!(
+            cfg.resolve_from_peer(ip("10.0.0.1"), &h),
             ip("198.51.100.1")
         );
     }

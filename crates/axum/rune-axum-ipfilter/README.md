@@ -85,7 +85,8 @@ let client_ip = ClientIpConfig::new()
 | Peer trusted, header absent or malformed | The nearest trusted hop (at worst the peer). |
 | No `ConnectInfo<SocketAddr>` | Request rejected with `missing_ip_status` (500). |
 
-IPv4-mapped IPv6 addresses (`::ffff:192.0.2.1`) are normalised to IPv4. At most 32 hops of
+IPv4-mapped IPv6 addresses (`::ffff:192.0.2.1`) are normalised to IPv4, and ranges written in
+the mapped form (`::ffff:192.0.2.0/120`) match the same IPv4 clients. At most 32 hops of
 at most 128 bytes each are examined; malformed input never panics.
 
 ## Configuration

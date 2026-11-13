@@ -23,7 +23,8 @@
 //!
 //! - Blocklist or allowlist mode with a single enum variant.
 //! - IPv4 and IPv6 CIDR notation (`"10.0.0.0/8"`, `"2001:db8::/32"`); IPv4-mapped IPv6
-//!   addresses are normalised to IPv4 before matching.
+//!   addresses are normalised to IPv4 before matching, and mapped ranges such as
+//!   `"::ffff:10.0.0.0/104"` match the same IPv4 clients.
 //! - Multiple CIDR ranges per layer — chain `.cidr()` calls.
 //! - Spoof-resistant client IP: socket peer by default, opt-in trusted proxies reading
 //!   `X-Forwarded-For`, RFC 7239 `Forwarded` or a single header such as `CF-Connecting-IP`.
