@@ -5214,11 +5214,12 @@ dependencies = [
 
 [[package]]
 name = "rune-umap"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "clap",
  "proptest",
  "rayon",
+ "rune-ml-core",
  "thiserror",
 ]
 

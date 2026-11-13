@@ -1,6 +1,6 @@
 [package]
 name = "rune-umap"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -27,6 +27,7 @@ cli = ["dep:clap"]
 [dependencies]
 clap = { workspace = true, optional = true }
 rayon.workspace = true
+rune-ml-core = { workspace = true, features = ["rayon"] }
 thiserror.workspace = true
 
 [dev-dependencies]

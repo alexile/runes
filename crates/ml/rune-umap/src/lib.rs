@@ -21,7 +21,8 @@
 //! - 2D or nD output via `n_components`
 //! - Four distance metrics: Euclidean, Manhattan, Cosine, Correlation
 //! - Exact k-NN for small inputs, NN-Descent approximate k-NN for large ones
-//!   ([`KnnMethod`]), parallelised with rayon
+//!   ([`KnnMethod`]), parallelised with rayon; also usable on its own through
+//!   the [`knn`] module (`knn::knn_graph(data, k, metric, seed)`)
 //! - Spectral initialisation (default) or random
 //! - Supervised (`fit_supervised`) and semi-supervised (`fit_semi_supervised`)
 //!   modes — label graph merged with the structure graph
@@ -29,7 +30,8 @@
 //! - Deterministic via `random_seed` (independent of the rayon thread count)
 //! - Fallible `try_*` entry points that validate input (empty, ragged, `NaN`/`inf`,
 //!   `n_neighbors ≥ n_samples`, …) and return [`UmapError`] instead of panicking
-//! - [`trustworthiness`] quality metric for evaluating embeddings
+//! - [`trustworthiness`] quality metric for evaluating embeddings (shared with
+//!   the other runes through `rune-ml-core`)
 //! - Pure Rust, no unsafe
 //!
 //! # Error handling
@@ -108,6 +110,7 @@
 mod distance;
 mod error;
 mod graph;
+pub mod knn;
 mod layout;
 mod nnd;
 mod params;
@@ -118,9 +121,6 @@ mod supervised;
 pub use distance::{Metric, ParseMetricError};
 pub use error::UmapError;
 pub use quality::trustworthiness;
-
-/// Inputs up to this many points use exact k-NN under [`KnnMethod::Auto`].
-const EXACT_KNN_MAX_POINTS: usize = 4096;
 
 /// How the k-nearest-neighbour graph is computed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -634,7 +634,7 @@ impl Umap {
         let exact = match self.knn_method {
             KnnMethod::Exact => true,
             KnnMethod::NnDescent => false,
-            KnnMethod::Auto => n <= EXACT_KNN_MAX_POINTS,
+            KnnMethod::Auto => n <= knn::EXACT_MAX_POINTS,
         };
         let knn = if exact {
             nnd::exact(points, self.metric, self.n_neighbors)

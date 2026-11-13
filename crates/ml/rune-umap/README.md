@@ -82,7 +82,35 @@ let semi = Umap::new().n_neighbors(2).fit_semi_supervised(&points, &partial)?;
 
 `trustworthiness(high, low, k, metric)` scores how faithfully the embedding
 keeps each point's `k` nearest neighbours (1.0 = perfect), matching
-`sklearn.manifold.trustworthiness`.
+`sklearn.manifold.trustworthiness`. It wraps the shared implementation in
+`rune-ml-core`, so scores line up with `rune-tsne` and `rune-pca`.
+
+### Standalone kNN graphs
+
+The neighbour search UMAP uses is public in the `knn` module, for code that
+needs a k-nearest-neighbour graph without an embedding (density clustering,
+neighbour lists for t-SNE, label propagation):
+
+```rust
+use rune_umap::{knn, Metric};
+
+let points: Vec<Vec<f64>> = (0..1000)
+    .map(|i| vec![f64::from(i % 40), f64::from(i / 40)])
+    .collect();
+
+// Exact search up to 4096 points, NN-Descent above; seeded and deterministic.
+let graph = knn::knn_graph(&points, 10, Metric::Euclidean, 42)?;
+assert_eq!(graph[0].len(), 10); // (index, distance) pairs, nearest first
+
+// Force NN-Descent and check it against the exact answer.
+let approx = knn::nn_descent(&points, 10, Metric::Euclidean, 10, 42)?;
+let truth = knn::exact(&points, 10, Metric::Euclidean)?;
+assert!(knn::recall(&approx, &truth) > 0.9);
+```
+
+`knn_graph_with` takes an explicit `KnnMethod` and iteration cap. Inputs are
+validated the same way as `try_fit` (empty, ragged, non-finite, `k = 0`,
+`k ≥ n`).
 
 ## Key parameters
 
@@ -132,7 +160,8 @@ $ rune-umap blobs.csv --n-neighbors 5 --n-epochs 500
 
 1. **k-NN graph** — exact brute-force search for small inputs, NN-Descent
    (forward and reverse neighbour exploration) for large ones, parallelised with
-   rayon and deterministic regardless of thread count.
+   rayon and deterministic regardless of thread count. Available on its own as
+   `rune_umap::knn`.
 2. **Fuzzy simplicial set** — per point, `ρ` is the distance to the nearest
    non-duplicate neighbour and `σ` is binary-searched so membership strengths
    sum to `log₂(k)`; the directed graph is symmetrised via fuzzy union

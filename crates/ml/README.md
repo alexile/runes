@@ -13,6 +13,6 @@ Unsupervised ML: clustering, dimensionality reduction, graph embeddings, communi
 | [`rune-pagerank`](rune-pagerank) | PageRank — score graph nodes by importance via random-walk convergence |
 | [`rune-pca`](rune-pca) | Principal component analysis — exact, randomized and incremental (batched) PCA, whitening, inverse transform |
 | [`rune-tsne`](rune-tsne) | t-SNE dimensionality reduction — exact and Barnes-Hut t-SNE mapping high-dimensional data into 2D or 3D for visualisation |
-| [`rune-umap`](rune-umap) | UMAP dimensionality reduction — project high-dimensional data into 2D or nD embeddings |
+| [`rune-umap`](rune-umap) | UMAP dimensionality reduction — project high-dimensional data into 2D or nD embeddings; reusable NN-Descent kNN graph |
 
 [All groups](../../README.md)

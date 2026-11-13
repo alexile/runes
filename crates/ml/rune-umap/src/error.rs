@@ -56,4 +56,8 @@ pub enum UmapError {
         /// Why the value is rejected.
         reason: &'static str,
     },
+    /// An error reported by the shared `rune-ml-core` routines that some
+    /// entry points delegate to.
+    #[error(transparent)]
+    Core(#[from] rune_ml_core::MlError),
 }
