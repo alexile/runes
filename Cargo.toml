@@ -379,7 +379,7 @@ rune-matchers = { path = "crates/net/rune-matchers", version = "0.1.0" }
 rune-packet = { path = "crates/net/rune-packet", version = "0.1.0" }
 rune-pcap = { path = "crates/net/rune-pcap", version = "0.1.0" }
 rune-payload-encode = { path = "crates/web/rune-payload-encode", version = "0.1.0" }
-rune-pe = { path = "crates/common/rune-pe", version = "0.1.1" }
+rune-pe = { path = "crates/common/rune-pe", version = "0.1.2" }
 rune-permissions-policy = { path = "crates/web/rune-permissions-policy", version = "0.1.1" }
 rune-polyline = { path = "crates/geo/rune-polyline", version = "0.1.1" }
 rune-postman = { path = "crates/net/rune-postman", version = "0.1.0" }

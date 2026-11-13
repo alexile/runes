@@ -406,7 +406,10 @@ pub const fn is_pe(bytes: &[u8]) -> bool {
 /// within `NumberOfRvaAndSizes` and the optional header, and the work done
 /// is bounded: at most 4096 imported DLLs, 65536 imported functions in
 /// total, 65536 exports, and names of up to 4096 bytes (longer or
-/// unterminated names are reported as empty).
+/// unterminated names are reported as empty). All names together are at most
+/// twice the size of the file; once that is used up, further names are
+/// reported as empty too. Looking up an RVA costs `O(log n)` in the number
+/// of sections.
 ///
 /// # Examples
 ///
@@ -560,11 +563,13 @@ pub fn parse(bytes: &[u8]) -> Result<Pe, PeError> {
 
     // ── Import table ──────────────────────────────────────────────────────
     let (import_dir_rva, _) = data_dirs.get(DIR_IMPORT);
-    let imports = parse_imports(bytes, import_dir_rva, &sections, magic);
+    let rva_map = RvaMap::new(&sections);
+    let mut names = Names::new(bytes);
+    let imports = parse_imports(bytes, import_dir_rva, &rva_map, magic, &mut names);
 
     // ── Export table ──────────────────────────────────────────────────────
     let (export_dir_rva, _) = data_dirs.get(DIR_EXPORT);
-    let exports = parse_exports(bytes, export_dir_rva, &sections);
+    let exports = parse_exports(bytes, export_dir_rva, &rva_map, &mut names);
 
     Ok(Pe {
         header,
@@ -650,43 +655,144 @@ fn read_le_u64(bytes: &[u8], off: usize) -> Option<u64> {
         .map(|b| u64::from_le_bytes(*b))
 }
 
-/// Maps an RVA to a file offset through the section table. Section fields
-/// come from the file, so the arithmetic is done in `u64` and cannot overflow.
-fn rva_to_offset(rva: u32, sections: &[Section]) -> Option<usize> {
-    let rva = u64::from(rva);
-    sections
-        .iter()
-        .find(|s| {
+/// RVA to file offset mapping for one section table.
+///
+/// Sections come from the file and may overlap; an RVA belongs to the first
+/// section in table order whose range `virtual_address .. virtual_address +
+/// max(virtual_size, raw_size)` contains it. The table can hold 65535
+/// sections and a file can ask for hundreds of thousands of lookups, so the
+/// ranges are resolved once into disjoint pieces and each lookup is a binary
+/// search instead of a scan of the whole table.
+struct RvaMap {
+    /// Disjoint `(start, end, section index)` ranges, sorted by `start`.
+    pieces: Vec<(u64, u64, usize)>,
+    /// `virtual_address` and `raw_offset` of each section.
+    bases: Vec<(u64, u64)>,
+}
+
+impl RvaMap {
+    fn new(sections: &[Section]) -> Self {
+        use alloc::collections::BTreeMap;
+
+        // Union of the ranges claimed so far, as disjoint `start -> end`.
+        let mut claimed: BTreeMap<u64, u64> = BTreeMap::new();
+        let mut pieces = Vec::new();
+        for (index, s) in sections.iter().enumerate() {
             let start = u64::from(s.virtual_address);
-            rva >= start && rva < start + u64::from(s.virtual_size.max(s.raw_size))
-        })
-        .and_then(|s| {
-            usize::try_from(rva - u64::from(s.virtual_address) + u64::from(s.raw_offset)).ok()
-        })
+            let end = start + u64::from(s.virtual_size.max(s.raw_size));
+            if start == end {
+                continue;
+            }
+            // Claimed ranges overlapping this one, in ascending order. They
+            // are merged into one below, so each is visited once overall.
+            let mut overlapping: Vec<(u64, u64)> = claimed
+                .range(..end)
+                .rev()
+                .take_while(|&(_, &e)| e > start)
+                .map(|(&s, &e)| (s, e))
+                .collect();
+            overlapping.reverse();
+            // The parts of this section no earlier section claimed are its.
+            let mut cursor = start;
+            for &(s, e) in &overlapping {
+                if cursor < s {
+                    pieces.push((cursor, s, index));
+                }
+                cursor = cursor.max(e);
+            }
+            if cursor < end {
+                pieces.push((cursor, end, index));
+            }
+            let mut merged = (start, end);
+            for (s, e) in overlapping {
+                claimed.remove(&s);
+                merged = (merged.0.min(s), merged.1.max(e));
+            }
+            claimed.insert(merged.0, merged.1);
+        }
+        pieces.sort_unstable_by_key(|&(start, _, _)| start);
+        let bases = sections
+            .iter()
+            .map(|s| (u64::from(s.virtual_address), u64::from(s.raw_offset)))
+            .collect();
+        Self { pieces, bases }
+    }
+
+    /// The file offset of `rva`, or `None` if no section maps it. Section
+    /// fields come from the file, so the arithmetic is done in `u64` and
+    /// cannot overflow.
+    fn offset(&self, rva: u32) -> Option<usize> {
+        let rva = u64::from(rva);
+        let after = self.pieces.partition_point(|&(start, _, _)| start <= rva);
+        let &(_, end, index) = self.pieces.get(after.checked_sub(1)?)?;
+        if rva >= end {
+            return None;
+        }
+        let (virtual_address, raw_offset) = *self.bases.get(index)?;
+        usize::try_from(rva - virtual_address + raw_offset).ok()
+    }
 }
 
 /// The NUL-terminated UTF-8 string at `off`, or `""` if it is out of bounds,
 /// unterminated within [`MAX_NAME_LEN`] bytes, or not UTF-8.
-fn read_cstr(bytes: &[u8], off: usize) -> String {
+fn read_cstr(bytes: &[u8], off: usize) -> &str {
     bytes
         .get(off..)
         .map(|s| &s[..s.len().min(MAX_NAME_LEN + 1)])
         .and_then(|s| s.iter().position(|&b| b == 0).map(|e| &s[..e]))
         .and_then(|s| core::str::from_utf8(s).ok())
         .unwrap_or("")
-        .to_string()
+}
+
+/// Copies names out of the file, at most twice the file's size in total.
+///
+/// Every import and export entry can point at the same string, so the
+/// per-name cap alone still lets a small file expand into hundreds of
+/// megabytes of copies. Real images name each entry with its own string, so
+/// they never come near the budget; past it, names are reported as empty.
+struct Names<'a> {
+    bytes: &'a [u8],
+    left: usize,
+}
+
+impl<'a> Names<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self {
+            bytes,
+            left: bytes.len().saturating_mul(2),
+        }
+    }
+
+    /// The name at file offset `off`, as [`read_cstr`] reads it, or `""`
+    /// once the budget is spent.
+    fn read(&mut self, off: usize) -> String {
+        let name = read_cstr(self.bytes, off);
+        match self.left.checked_sub(name.len()) {
+            Some(left) => {
+                self.left = left;
+                name.to_string()
+            }
+            None => String::new(),
+        }
+    }
 }
 
 #[allow(
     clippy::similar_names,
     reason = "names mirror the PE specification fields"
 )]
-fn parse_imports(bytes: &[u8], dir_rva: u32, sections: &[Section], magic: PeMagic) -> Vec<Import> {
+fn parse_imports(
+    bytes: &[u8],
+    dir_rva: u32,
+    sections: &RvaMap,
+    magic: PeMagic,
+    names: &mut Names<'_>,
+) -> Vec<Import> {
     let mut imports = Vec::new();
     if dir_rva == 0 {
         return imports;
     }
-    let Some(mut off) = rva_to_offset(dir_rva, sections) else {
+    let Some(mut off) = sections.offset(dir_rva) else {
         return imports;
     };
     let mut budget = MAX_IMPORT_FUNCTIONS;
@@ -707,15 +813,18 @@ fn parse_imports(bytes: &[u8], dir_rva: u32, sections: &[Section], magic: PeMagi
             break;
         }
 
-        let dll = rva_to_offset(name_rva, sections)
-            .map(|o| read_cstr(bytes, o))
+        let dll = sections
+            .offset(name_rva)
+            .map(|o| names.read(o))
             .unwrap_or_default();
 
         if !dll.is_empty() {
             let thunk_rva = if ilt_rva != 0 { ilt_rva } else { iat_rva };
-            let functions = rva_to_offset(thunk_rva, sections).map_or_else(Vec::new, |thunk_off| {
-                parse_thunks(bytes, thunk_off, sections, magic, &mut budget)
-            });
+            let functions = sections
+                .offset(thunk_rva)
+                .map_or_else(Vec::new, |thunk_off| {
+                    parse_thunks(bytes, thunk_off, sections, magic, &mut budget, names)
+                });
             imports.push(Import { dll, functions });
         }
         off += 20;
@@ -728,9 +837,10 @@ fn parse_imports(bytes: &[u8], dir_rva: u32, sections: &[Section], magic: PeMagi
 fn parse_thunks(
     bytes: &[u8],
     mut off: usize,
-    sections: &[Section],
+    sections: &RvaMap,
     magic: PeMagic,
     budget: &mut usize,
+    names: &mut Names<'_>,
 ) -> Vec<ImportFunction> {
     let mut funcs = Vec::new();
     let entry_size = if magic == PeMagic::Pe64 { 8usize } else { 4 };
@@ -765,9 +875,9 @@ fn parse_thunks(
             }
         } else {
             let rva = (thunk & 0x7fff_ffff) as u32;
-            if let Some(name_off) = rva_to_offset(rva, sections) {
+            if let Some(name_off) = sections.offset(rva) {
                 let hint = read_le_u16(bytes, name_off);
-                let name = read_cstr(bytes, name_off.saturating_add(2));
+                let name = names.read(name_off.saturating_add(2));
                 ImportFunction {
                     name: Some(name),
                     ordinal: None,
@@ -791,12 +901,17 @@ fn parse_thunks(
     clippy::similar_names,
     reason = "names mirror the PE specification fields"
 )]
-fn parse_exports(bytes: &[u8], dir_rva: u32, sections: &[Section]) -> Vec<Export> {
+fn parse_exports(
+    bytes: &[u8],
+    dir_rva: u32,
+    sections: &RvaMap,
+    name_reader: &mut Names<'_>,
+) -> Vec<Export> {
     let mut exports = Vec::new();
     if dir_rva == 0 {
         return exports;
     }
-    let Some(base) = rva_to_offset(dir_rva, sections) else {
+    let Some(base) = sections.offset(dir_rva) else {
         return exports;
     };
     if base.saturating_add(40) > bytes.len() {
@@ -808,7 +923,7 @@ fn parse_exports(bytes: &[u8], dir_rva: u32, sections: &[Section]) -> Vec<Export
     let ordinal_base = read32(base + 16);
     let num_functions = read32(base + 20) as usize;
     let num_names = read32(base + 24) as usize;
-    let Some(eat_off) = rva_to_offset(read32(base + 28), sections) else {
+    let Some(eat_off) = sections.offset(read32(base + 28)) else {
         return exports;
     };
 
@@ -823,8 +938,8 @@ fn parse_exports(bytes: &[u8], dir_rva: u32, sections: &[Section]) -> Vec<Export
     // The name pointer and ordinal tables are optional (an image may export
     // by ordinal only); each name points at one address table index.
     if let (Some(ent_off), Some(eot_off)) = (
-        rva_to_offset(read32(base + 32), sections),
-        rva_to_offset(read32(base + 36), sections),
+        sections.offset(read32(base + 32)),
+        sections.offset(read32(base + 36)),
     ) {
         for i in 0..num_names.min(MAX_EXPORTS) {
             let (Some(name_rva), Some(index)) = (
@@ -835,8 +950,9 @@ fn parse_exports(bytes: &[u8], dir_rva: u32, sections: &[Section]) -> Vec<Export
             };
             if let Some(slot @ None) = names.get_mut(usize::from(index)) {
                 *slot = Some(
-                    rva_to_offset(name_rva, sections)
-                        .map(|o| read_cstr(bytes, o))
+                    sections
+                        .offset(name_rva)
+                        .map(|o| name_reader.read(o))
                         .unwrap_or_default(),
                 );
             }
@@ -977,6 +1093,63 @@ mod tests {
         buf[sec + 16..sec + 20].copy_from_slice(&section.1.to_le_bytes());
         buf[sec + 20..sec + 24].copy_from_slice(&0x200u32.to_le_bytes());
         buf
+    }
+
+    /// The first section in table order containing `rva`, by a plain scan.
+    fn scan(rva: u32, sections: &[Section]) -> Option<usize> {
+        let rva = u64::from(rva);
+        sections
+            .iter()
+            .find(|s| {
+                let start = u64::from(s.virtual_address);
+                rva >= start && rva < start + u64::from(s.virtual_size.max(s.raw_size))
+            })
+            .and_then(|s| {
+                usize::try_from(rva - u64::from(s.virtual_address) + u64::from(s.raw_offset)).ok()
+            })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(256))]
+
+        // Overlapping, nested, empty and adjacent sections all map an RVA
+        // the same way as scanning the table in order.
+        #[test]
+        fn rva_map_matches_a_scan_of_the_table(
+            raw in proptest::collection::vec((0u32..64, 0u32..32, 0u32..32, 0u32..1000), 0..12),
+            probes in proptest::collection::vec(0u32..100, 1..40),
+        ) {
+            let sections: Vec<Section> = raw
+                .into_iter()
+                .map(|(va, vsize, rsize, roff)| Section {
+                    name: String::new(),
+                    virtual_address: va,
+                    virtual_size: vsize,
+                    raw_offset: roff,
+                    raw_size: rsize,
+                    characteristics: 0,
+                })
+                .collect();
+            let map = RvaMap::new(&sections);
+            for rva in probes.into_iter().chain([u32::MAX]) {
+                proptest::prop_assert_eq!(map.offset(rva), scan(rva, &sections));
+            }
+        }
+    }
+
+    #[test]
+    fn rva_map_at_the_top_of_the_address_space() {
+        let section = Section {
+            name: String::new(),
+            virtual_address: u32::MAX - 1,
+            virtual_size: u32::MAX,
+            raw_offset: u32::MAX,
+            raw_size: 0,
+            characteristics: 0,
+        };
+        let map = RvaMap::new(core::slice::from_ref(&section));
+        assert_eq!(map.offset(u32::MAX), scan(u32::MAX, &[section]));
+        assert_eq!(map.offset(0), None);
     }
 
     // Regression: `virtual_address + size` overflowed u32

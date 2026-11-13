@@ -26,9 +26,12 @@ fn check(pe: &Pe, len: usize) {
                 .filter_map(|f| f.name.as_deref()),
         )
         .chain(pe.exports.iter().filter_map(|e| e.name.as_deref()));
+    let mut total = 0;
     for name in names {
         assert!(name.len() <= 4096);
+        total += name.len();
     }
+    assert!(total <= 2 * len);
     assert!(pe.imports.iter().all(|i| !i.dll.is_empty()));
     assert!(pe.exports.iter().all(|e| e.rva != 0));
     assert!(pe.security.score() <= 5);

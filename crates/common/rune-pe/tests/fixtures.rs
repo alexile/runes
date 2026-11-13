@@ -233,17 +233,30 @@ fn hostile_tables_stay_bounded() {
             .filter_map(|e| e.name.as_deref())
             .all(|n| n.len() <= 4096)
     );
-    assert_eq!(pe.imports.len(), 97);
+    // 97 descriptors share one thunk list whose 256 entries all name the
+    // same 1 KiB run of 'A'. Copying it for each of them would take 25 MB;
+    // the names stop at twice the file size, and the descriptors after that
+    // have no DLL name left and are dropped.
+    assert!(!pe.imports.is_empty() && pe.imports.len() < 97);
     assert!(pe.imports.iter().all(|i| i.dll == "evil.dll"));
-    let functions: usize = pe.imports.iter().map(|i| i.functions.len()).sum();
-    assert!(functions <= 65_536);
-    // Every thunk resolves to the same 1 KiB run of 'A' (or nowhere).
-    assert!(
-        pe.imports
-            .iter()
-            .flat_map(|i| &i.functions)
-            .all(|f| f.name.as_ref().is_some_and(|n| n.len() == 1021))
+    let functions: Vec<_> = pe.imports.iter().flat_map(|i| &i.functions).collect();
+    assert!(functions.len() <= 65_536);
+    assert!(functions.iter().all(|f| {
+        f.name
+            .as_ref()
+            .is_some_and(|n| n.len() == 1021 || n.is_empty())
+    }));
+    assert_eq!(
+        functions[0].name.as_deref().map(str::len),
+        Some(1021),
+        "the first names are kept"
     );
+    let name_bytes: usize = functions
+        .iter()
+        .filter_map(|f| f.name.as_deref())
+        .map(str::len)
+        .sum();
+    assert!(name_bytes <= 2 * bytes.len());
 }
 
 #[test]
