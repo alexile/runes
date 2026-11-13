@@ -85,8 +85,10 @@ pub use truncate::{DEFAULT_ELLIPSIS, Truncation, truncate_middle, truncate_with}
 
 /// Approximate number of tokens in `text` (4 UTF-8 characters ≈ 1 token).
 ///
-/// Returns 0 for an empty string. The result is a ceiling so budget comparisons
-/// are conservative — you will never undercount.
+/// Returns 0 for an empty string. The result is ⌈chars / 4⌉, which is
+/// conservative for English and code but undercounts CJK text and emoji,
+/// which real tokenizers charge one or more tokens per character. Use a
+/// [`TokenizerProfile`] with [`fits_with`] or [`chunk_with`] for those.
 ///
 /// # Example
 ///
@@ -165,10 +167,19 @@ pub fn truncate(text: &str, max_tokens: usize) -> &str {
         .nth(max_chars)
         .map_or(text.len(), |(i, _)| i);
     // Never leave a combining mark, ZWJ sequence or flag half-cut.
-    let candidate = &text[..grapheme::floor(text, byte_end)];
-    candidate
-        .rfind(|c: char| c.is_whitespace())
-        .map_or(candidate, |i| text[..i].trim_end())
+    let cut = grapheme::floor(text, byte_end);
+    let candidate = &text[..cut];
+    // The cut already sits at the end of a word.
+    if text[cut..].starts_with(char::is_whitespace) {
+        return candidate.trim_end();
+    }
+    // Back up to the last whole word, ignoring leading whitespace so a long
+    // first word is cut rather than dropped.
+    let lead = candidate.len() - candidate.trim_start().len();
+    candidate[lead..]
+        .rfind(char::is_whitespace)
+        .map_or(candidate, |i| &text[..lead + i])
+        .trim_end()
 }
 
 /// Split `text` into overlapping chunks of approximately `chunk_tokens` tokens,
@@ -177,6 +188,11 @@ pub fn truncate(text: &str, max_tokens: usize) -> &str {
 /// Chunks are split on word boundaries, so each chunk is a clean, readable
 /// string. Consecutive chunks share `overlap_tokens` worth of content, providing
 /// retrieval context that spans chunk edges.
+///
+/// A chunk always starts with a whole word, so a single word longer than
+/// `chunk_tokens` becomes its own oversized chunk (a 50 000-character word
+/// with `chunk_tokens = 100` yields one chunk of about 12 500 tokens).
+/// [`chunk_with`] splits such words so every chunk fits.
 ///
 /// Chunks are re-joined with single spaces. To keep the original formatting,
 /// get byte offsets, or cut at sentence / paragraph boundaries, use
@@ -387,5 +403,15 @@ mod tests {
         let chunks = chunk("superlongwordthatexceedsbudget next", 1, 0);
         assert_ne!(chunks, [] as [String; 0]);
         assert!(chunks[0].starts_with("superlongword"));
+    }
+
+    #[test]
+    fn truncate_keeps_last_word_that_fits() {
+        assert_eq!(truncate("aaaa bbb cccc", 2), "aaaa bbb");
+    }
+
+    #[test]
+    fn truncate_cuts_first_word_after_leading_whitespace() {
+        assert_eq!(truncate("   abcdefgh", 1), "   a");
     }
 }

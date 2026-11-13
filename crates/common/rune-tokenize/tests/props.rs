@@ -190,6 +190,7 @@ proptest! {
         for c in &chunks {
             prop_assert_eq!(&text[c.start..c.end], c.text);
             prop_assert!(!c.text.is_empty());
+            prop_assert_eq!(c.text, c.text.trim());
             prop_assert_eq!(c.tokens, p.count_tokens(c.text));
             // Over budget only for a single grapheme cluster.
             if c.tokens > max {

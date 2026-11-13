@@ -275,7 +275,8 @@ fn refine<C: TokenCounter + ?Sized>(
     }
 }
 
-/// Split `text[s..e]` at grapheme boundaries into maximal pieces that fit.
+/// Split `text[s..e]` at grapheme boundaries into maximal pieces that fit,
+/// each trimmed of surrounding whitespace (whitespace-only pieces are dropped).
 fn hard_split<C: TokenCounter + ?Sized>(
     text: &str,
     s: usize,
@@ -288,15 +289,25 @@ fn hard_split<C: TokenCounter + ?Sized>(
     let cuts = grapheme::boundaries(sub);
     let mut from = 0usize; // byte offset in `sub`
     let mut idx = 0usize; // first cut > from
-    while idx < cuts.len() {
+    loop {
+        let rest = &sub[from..];
+        from += rest.len() - rest.trim_start().len();
+        while idx < cuts.len() && cuts[idx] <= from {
+            idx += 1;
+        }
+        if idx >= cuts.len() {
+            break;
+        }
         // Largest cut that fits; a lone oversized grapheme still advances.
         let last = gallop(idx, cuts.len() - 1, |t| {
             t == idx || counter.count_tokens(&sub[from..cuts[t]]) <= max
         });
         let to = cuts[last];
+        // Starts on non-whitespace, so this is never empty.
+        let end = from + sub[from..to].trim_end().len();
         out.push(Unit {
             start: s + from,
-            end: s + to,
+            end: s + end,
         });
         from = to;
         idx = last + 1;
@@ -476,6 +487,25 @@ mod tests {
         let chunks = chunk_with(doc, &ChunkConfig::new(2), &P).unwrap_or_default();
         for c in chunks {
             assert_eq!(&doc[c.start..c.end], c.text);
+        }
+    }
+
+    #[test]
+    fn grapheme_chunks_are_trimmed() {
+        let config = ChunkConfig::new(1).boundary(Boundary::Grapheme);
+        let texts: Vec<Vec<&str>> = ["abcd    efgh", "abc defg", "abcd efgh"]
+            .iter()
+            .map(|doc| {
+                let chunks = chunk_with(doc, &config, &P).unwrap();
+                for c in &chunks {
+                    assert_eq!(&doc[c.start..c.end], c.text);
+                }
+                chunks.iter().map(|c| c.text).collect()
+            })
+            .collect();
+        assert_eq!(texts[0], ["abcd", "efgh"]);
+        for t in texts.iter().flatten() {
+            assert!(!t.is_empty() && *t == t.trim(), "{t:?}");
         }
     }
 }
