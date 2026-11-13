@@ -129,3 +129,21 @@ async fn too_many_targets_is_refused_before_connecting() {
         .unwrap_err();
     assert_eq!(err, Error::TooManyTargets { count: 20, max: 10 });
 }
+
+#[tokio::test]
+async fn an_unbounded_banner_timeout_still_reports_the_port() {
+    let ftp = listener(b"220 ready\r\n").await;
+    let mut ports = PortSet::new();
+    ports.insert(ftp);
+    let scanner = Scanner::new(
+        options()
+            .with_banners(true)
+            .with_banner_timeout(Duration::MAX),
+    );
+    let report = scanner.scan(&[LOCALHOST], &ports).await.unwrap();
+    assert_eq!(report.results.len(), 1, "the port's result went missing");
+    assert_eq!(
+        report.results[0].banner.as_deref(),
+        Some(&b"220 ready\r\n"[..])
+    );
+}

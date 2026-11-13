@@ -3,6 +3,7 @@
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
@@ -152,7 +153,13 @@ impl Scanner {
         let max = self.options.max_banner;
         let mut banner = Vec::new();
         let mut chunk = vec![0; max.clamp(1, 4096)];
-        let deadline = Instant::now() + self.options.banner_timeout;
+        // `Duration::MAX` (no limit) does not fit on the clock: wait about
+        // thirty years instead of panicking.
+        let now = Instant::now();
+        let deadline = now
+            .checked_add(self.options.banner_timeout)
+            .or_else(|| now.checked_add(Duration::from_secs(30 * 365 * 24 * 60 * 60)))
+            .unwrap_or(now);
         while banner.len() < max {
             let want = (max - banner.len()).min(chunk.len());
             let Some(buf) = chunk.get_mut(..want) else {
