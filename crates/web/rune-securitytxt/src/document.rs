@@ -363,7 +363,12 @@ impl SecurityTxt {
         self.fields_of(FieldKind::Extension)
     }
 
-    /// Whether the file has a PGP cleartext signature.
+    /// Whether the file is framed as a PGP cleartext signature.
+    ///
+    /// This only means the framing is intact: the signature itself is not
+    /// checked, so anyone can wrap a file in a signature block. Verify
+    /// [`Signature::canonical_text`] against [`Signature::armored`] with the
+    /// organization's key before trusting the contacts.
     #[must_use]
     pub const fn is_signed(&self) -> bool {
         self.signature.is_some()

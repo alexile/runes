@@ -25,7 +25,8 @@ struct Cli {
     /// Check expiry against this RFC 3339 time instead of the clock.
     #[arg(long, value_name = "DATE-TIME")]
     now: Option<String>,
-    /// Treat a missing signature as a low-severity weakness.
+    /// Treat a missing signature as a low-severity weakness. Signatures are
+    /// not verified: any intact cleartext signature block counts.
     #[arg(long)]
     require_signature: bool,
 }
@@ -77,7 +78,14 @@ fn main() -> ExitCode {
         if let Some(expires) = doc.expires() {
             println!("expires  {expires}");
         }
-        println!("signed   {}", if doc.is_signed() { "yes" } else { "no" });
+        println!(
+            "signed   {}",
+            if doc.is_signed() {
+                "yes (signature not verified)"
+            } else {
+                "no"
+            }
+        );
     }
     for w in &report.weaknesses {
         let line = w.line.map(|l| format!("line {l}: ")).unwrap_or_default();

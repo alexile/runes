@@ -14,7 +14,8 @@
 //!   `https://`, `Canonical` matching where the file was retrieved, at most
 //!   one `Preferred-Languages` with valid tags — plus recommendations
 //!   (expiry under a year, a signature, `Canonical` in signed files).
-//!   [`Report::is_valid`] says whether the file can be relied on, and
+//!   [`Report::is_valid`] says whether the file follows the RFC (signatures
+//!   are not verified, only their framing is checked), and
 //!   [`Report::to_findings`] maps weaknesses to findings with check ids
 //!   `securitytxt.<kind>`.
 //! - [`Timestamp`] parses RFC 3339 date-times.

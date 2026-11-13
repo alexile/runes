@@ -29,7 +29,9 @@ vulnerabilities.
   recommended under a year away; URIs well formed and `https://` for web
   URIs; at most one `Preferred-Languages` with valid tags; the retrieval URL
   listed in `Canonical`; a signature, and `Canonical` in signed files.
-  `Report::is_valid` says whether the file can be relied on.
+  `Report::is_valid` says whether the file follows the RFC; a "signed" file
+  only has intact signature framing, so verify the signature before trusting
+  its contacts.
 - **Report** each problem as a `rune_finding::Finding`
   (`securitytxt.<kind>`, with field and line as evidence).
 

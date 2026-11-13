@@ -253,7 +253,9 @@ pub struct Options {
     /// The URI the file was retrieved from, checked against `Canonical`.
     pub retrieved_from: Option<String>,
     /// Report a missing signature as [`Severity::Low`] instead of
-    /// [`Severity::Informational`].
+    /// [`Severity::Informational`]. A file with intact cleartext signature
+    /// framing counts as signed even though the signature is not verified
+    /// (see [`SecurityTxt::is_signed`]).
     pub require_signature: bool,
 }
 
@@ -782,6 +784,9 @@ mod tests {
              -----BEGIN PGP SIGNATURE-----\nAA==\n-----END PGP SIGNATURE-----\n";
         let k = kinds(signed, &Options::default());
         assert_eq!(k, [WeaknessKind::SignedWithoutCanonical]);
+        // "AA==" is no signature at all: the framing is all that is checked.
+        let k = kinds(signed, &Options::default().with_require_signature(true));
+        assert!(!k.contains(&WeaknessKind::Unsigned));
         let tampered = format!("{signed}Contact: mailto:attacker@evil.example\n");
         let r = run(&tampered, &Options::default());
         assert!(r.error.is_some());
