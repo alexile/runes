@@ -45,8 +45,10 @@ pub fn truncate_with_marker(text: &str, max_bytes: usize) -> (String, bool) {
 /// Wrap untrusted tool output in a `<tool_output>` fence.
 ///
 /// Any `<tool_output` / `</tool_output` sequence inside `content` (in any
-/// letter case) has its `<` escaped as `&lt;`, so a tool cannot close the
-/// fence early and smuggle text that looks like it came from outside.
+/// letter case, and also with whitespace or invisible characters slipped in
+/// such as `</ tool_output>`) has its `<` escaped as `&lt;`, so a tool cannot
+/// close the fence early and smuggle text that looks like it came from
+/// outside.
 ///
 /// ```rust
 /// use rune_chain_agent::sanitize::fence;
@@ -66,15 +68,10 @@ pub fn fence(tool: &str, status: &str, content: &str) -> String {
 }
 
 fn escape_fence(content: &str) -> String {
-    let bytes = content.as_bytes();
     let mut out = String::with_capacity(content.len());
     let mut last = 0;
     for (i, _) in content.match_indices('<') {
-        let rest = &bytes[i + 1..];
-        let rest = rest.strip_prefix(b"/").unwrap_or(rest);
-        if rest.len() >= FENCE_TAG.len()
-            && rest[..FENCE_TAG.len()].eq_ignore_ascii_case(FENCE_TAG.as_bytes())
-        {
+        if starts_tag(&content[i + 1..], FENCE_TAG) {
             out.push_str(&content[last..i]);
             out.push_str("&lt;");
             last = i + 1;
@@ -82,6 +79,35 @@ fn escape_fence(content: &str) -> String {
     }
     out.push_str(&content[last..]);
     out
+}
+
+/// Whether `rest`, the text right after a `<`, opens or closes `tag` as a
+/// lenient reader (a model) would see it: any letter case, an optional `/`,
+/// and whitespace or invisible characters before or inside the name.
+fn starts_tag(rest: &str, tag: &str) -> bool {
+    let mut chars = rest.chars().filter(|&c| !is_invisible(c)).peekable();
+    while chars.next_if(|c| c.is_whitespace()).is_some() {}
+    if chars.next_if_eq(&'/').is_some() {
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+    }
+    tag.chars()
+        .all(|t| chars.next().is_some_and(|c| c.eq_ignore_ascii_case(&t)))
+}
+
+/// Zero-width, bidi and other format characters a reader skips over.
+const fn is_invisible(c: char) -> bool {
+    matches!(c,
+        '\u{ad}'
+        | '\u{34f}'
+        | '\u{61c}'
+        | '\u{180e}'
+        | '\u{200b}'..='\u{200f}'
+        | '\u{202a}'..='\u{202e}'
+        | '\u{2060}'..='\u{206f}'
+        | '\u{fe00}'..='\u{fe0f}'
+        | '\u{feff}'
+        | '\u{e0000}'..='\u{e007f}'
+    )
 }
 
 /// Reduce a model-produced name to a short, printable identifier before it is
@@ -248,6 +274,23 @@ mod tests {
         assert!(f.contains("<other>"));
         assert_eq!(f.matches("</tool_output>").count(), 1);
         assert!(fence("t", "ok", "<").contains("\n<\n"));
+    }
+
+    #[test]
+    fn fence_escapes_spaced_and_invisible_variants() {
+        for sneaky in [
+            "</ tool_output>",
+            "< /tool_output>",
+            "<\n/tool_output>",
+            "<\u{200b}/tool_output>",
+            "</tool\u{200b}_output>",
+            "</\u{feff}TOOL_OUTPUT>",
+        ] {
+            let f = fence("t", "ok", sneaky);
+            let inner = &f[f.find('\n').unwrap()..f.len() - "</tool_output>".len()];
+            assert!(!inner.contains('<'), "{sneaky:?} -> {f:?}");
+        }
+        assert_eq!(escape_fence("a < b <tool <other>"), "a < b <tool <other>");
     }
 
     #[test]

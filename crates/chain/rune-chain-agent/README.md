@@ -97,7 +97,8 @@ returns it with `stop_reason` set.
 - `AgentResult` and `FunctionAgentResult` are `#[non_exhaustive]` and have new fields: `stop_reason` and `tool_invocations: Vec<ToolInvocation>`.
   `FunctionAgentResult::tool_invocations` used to hold `(name, input, output)` tuples. Use `.name`, `.arguments` and `.output` instead.
 - Tool calls are validated before they run. A tool that reads JSON arguments must declare them in `Tool::schema`.
-  The default schema needs `{"input": string}`, and any other arguments are rejected.
+  The default schema needs `{"input": string}`; it does not set `"additionalProperties": false`, so extra
+  arguments pass unless your schema closes the object.
 - Tool output reaches the model fenced in `<tool_output>` tags, and a notice is appended to the system prompt.
   Call `.fence_tool_outputs(false)` to get the old raw output.
   `AgentResult::scratchpad` still records unfenced observations.
