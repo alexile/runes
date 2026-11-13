@@ -29,7 +29,8 @@ pub struct Rule {
     /// Allow or disallow.
     pub kind: RuleKind,
     /// The path pattern, normalised: bytes outside printable ASCII are
-    /// percent-encoded and existing `%xx` escapes use uppercase hex. `*`
+    /// percent-encoded, escapes of unreserved characters are decoded (`%7E`
+    /// becomes `~`) and other `%xx` escapes use uppercase hex. `*`
     /// matches any sequence of bytes and a trailing `$` anchors the end.
     pub pattern: String,
     /// 1-based line number in the source file.
@@ -438,8 +439,21 @@ fn is_wildcard_agent(agent: &str) -> bool {
         .is_some_and(|rest| rest.trim_start().is_empty())
 }
 
-/// Percent-encodes bytes outside printable ASCII and uppercases the hex of
-/// existing `%xx` escapes, so patterns and paths compare consistently.
+/// The byte a `%xx` escape stands for.
+fn hex_pair(h: u8, l: u8) -> Option<u8> {
+    let digit = |d: u8| char::from(d).to_digit(16);
+    u8::try_from(digit(h)? * 16 + digit(l)?).ok()
+}
+
+/// Whether `b` is an RFC 3986 unreserved character.
+const fn is_unreserved(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
+}
+
+/// Normalises a pattern or path so the two compare as RFC 9309 §2.2.2
+/// requires: bytes outside printable ASCII are percent-encoded, escapes of
+/// unreserved characters are decoded (`%7E` is `~`), and the hex of the
+/// remaining `%xx` escapes is uppercased.
 fn escape(bytes: &[u8]) -> Cow<'_, str> {
     const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let needs_escape = |b: u8| !(0x21..0x7F).contains(&b);
@@ -448,8 +462,9 @@ fn escape(bytes: &[u8]) -> Cow<'_, str> {
             && (b != b'%'
                 || !matches!(
                     bytes.get(i + 1..i + 3),
-                    Some([h, l]) if h.is_ascii_hexdigit() && l.is_ascii_hexdigit()
-                        && (h.is_ascii_lowercase() || l.is_ascii_lowercase())
+                    Some(&[h, l]) if hex_pair(h, l).is_some_and(|decoded| {
+                        is_unreserved(decoded) || h.is_ascii_lowercase() || l.is_ascii_lowercase()
+                    })
                 ))
     });
     if clean {
@@ -460,7 +475,12 @@ fn escape(bytes: &[u8]) -> Cow<'_, str> {
     let mut i = 0;
     while let Some(&b) = bytes.get(i) {
         match bytes.get(i + 1..i + 3) {
-            Some(&[h, l]) if b == b'%' && h.is_ascii_hexdigit() && l.is_ascii_hexdigit() => {
+            Some(&[h, l]) if b == b'%' && hex_pair(h, l).is_some() => {
+                if let Some(decoded) = hex_pair(h, l).filter(|&d| is_unreserved(d)) {
+                    out.push(char::from(decoded));
+                    i += 3;
+                    continue;
+                }
                 out.push('%');
                 out.push(char::from(h.to_ascii_uppercase()));
                 out.push(char::from(l.to_ascii_uppercase()));
@@ -551,6 +571,7 @@ mod tests {
         assert_eq!(escape("/ä".as_bytes()), "/%C3%A4");
         assert_eq!(escape(b"/%c3%a4"), "/%C3%A4");
         assert_eq!(escape(b"/%zz"), "/%zz");
+        assert_eq!(escape(b"/%7e%41%2f%2A"), "/~A%2F%2A");
         assert_eq!(escape(b"/a b"), "/a%20b");
     }
 

@@ -171,3 +171,25 @@ fn empty_and_garbage_allow_everything() {
     assert!(Robots::parse("").is_allowed("x", "/"));
     assert!(Robots::parse_bytes(b"\x00\xFF\xFE<html>").is_allowed("x", "/"));
 }
+
+#[test]
+fn percent_encoded_unreserved_characters_match_their_plain_form() {
+    // RFC 9309 §2.2.2: "/foo/bar/%62%61%7A" is matched as "/foo/bar/baz".
+    let rule = Rule::new(RuleKind::Disallow, "/foo/bar/%62%61%7A");
+    assert_eq!(rule.pattern, "/foo/bar/baz");
+    assert!(rule.matches("/foo/bar/baz"));
+    let robots = Robots::parse("User-agent: *\nDisallow: /%7Euser/\n");
+    assert!(!robots.is_allowed("bot", "/~user/page"));
+    let robots = Robots::parse("User-agent: *\nDisallow: /~user/\n");
+    assert!(!robots.is_allowed("bot", "/%7euser/page"));
+    // Reserved characters stay encoded, so an encoded `*` or `/` is literal.
+    let rule = Rule::new(RuleKind::Disallow, "/a%2Ab%2fc");
+    assert_eq!(rule.pattern, "/a%2Ab%2Fc");
+    assert!(!rule.matches("/axb/c"));
+    assert!(rule.matches("/a%2ab%2Fc"));
+    // UTF-8 stays encoded too.
+    assert_eq!(
+        Rule::new(RuleKind::Allow, "/%e3%83%84").pattern,
+        "/%E3%83%84"
+    );
+}
