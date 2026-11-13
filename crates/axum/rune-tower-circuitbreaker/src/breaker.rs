@@ -96,6 +96,9 @@ impl CircuitBreaker {
 
     /// Sets the failure rate (`0.0..=1.0`) at or above which the circuit
     /// opens. Out-of-range values are clamped; `NaN` disables the check.
+    /// The circuit never opens without at least one failure, so `0.0`
+    /// opens on the first failure once [`minimum_calls`](Self::minimum_calls)
+    /// were seen.
     #[must_use]
     pub const fn failure_rate(mut self, rate: f64) -> Self {
         self.failure_rate = clamp_rate(rate);
@@ -477,8 +480,9 @@ impl Breaker {
         if calls < self.config.minimum() {
             return false;
         }
-        ratio(self.failures, calls) >= self.config.failure_rate
-            || ratio(self.slow, calls) >= self.config.slow_call_rate
+        // A rate of 0 means "any bad call", never "open while healthy".
+        (self.failures > 0 && ratio(self.failures, calls) >= self.config.failure_rate)
+            || (self.slow > 0 && ratio(self.slow, calls) >= self.config.slow_call_rate)
     }
 }
 
@@ -535,6 +539,33 @@ mod tests {
         }
         assert_eq!(b.state(now), State::Open);
         b
+    }
+
+    #[test]
+    fn zero_rates_need_at_least_one_bad_call() {
+        let now = Instant::now();
+        let mut b = Breaker::new(
+            config()
+                .failure_rate(0.0)
+                .slow_calls(Duration::from_secs(1), 0.0),
+        );
+        for _ in 0..20 {
+            call(&mut b, now, false, FAST);
+        }
+        assert_eq!(b.state(now), State::Closed);
+        call(&mut b, now, true, FAST);
+        assert_eq!(b.state(now), State::Open);
+
+        let mut b = Breaker::new(
+            config()
+                .failure_rate(1.0)
+                .slow_calls(Duration::from_secs(1), 0.0),
+        );
+        for _ in 0..5 {
+            call(&mut b, now, false, FAST);
+        }
+        call(&mut b, now, false, Duration::from_secs(2));
+        assert_eq!(b.state(now), State::Open);
     }
 
     #[test]
