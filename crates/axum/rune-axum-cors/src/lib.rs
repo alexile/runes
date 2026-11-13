@@ -24,15 +24,31 @@
 //!
 //! # Features
 //!
-//! - Exact origin allowlist by default, with opt-in subdomains that keep
-//!   the scheme and port, and an audited predicate escape hatch.
-//! - Preflights answered directly (`204`, or `403` when refused) with
-//!   method and header checks; they never reach handlers.
+//! - Exact origin allowlist by default. Subdomain wildcards are opt-in and
+//!   explicit about depth: `https://*.example.com` (one label) or
+//!   `https://**.example.com` (any depth). They keep the scheme and port
+//!   and never match the apex.
+//! - An audited predicate for origins only known at run time
+//!   ([`Cors::allow_origin_fn`]; read its security notes).
+//! - Per-route policies by path prefix ([`CorsLayer::route`]).
+//! - Preflights answered directly (`204`, or a [`Rejection`] when refused)
+//!   with method, header and Private Network Access checks; they never
+//!   reach handlers.
 //! - `Vary: Origin` on every response whose CORS headers depend on the
-//!   request.
-//! - Credentials, exposed headers, `Access-Control-Max-Age` and Private
-//!   Network Access.
+//!   request, and a full `Vary` on preflights.
+//! - Credentials, exposed headers, `Access-Control-Max-Age` (capped at
+//!   [`MAX_AGE_CAP`]) and Private Network Access for exactly listed origins.
 //! - Works with Axum, Hyper, and any Tower-compatible framework.
+//!
+//! # Security
+//!
+//! Only an origin that passed the policy is ever echoed in
+//! `Access-Control-Allow-Origin`. Origins must be in the exact form
+//! browsers send (lowercase, no default port, no trailing dot, punycode
+//! for internationalised names); anything else matches no rule. The layer
+//! owns the CORS response headers and strips whatever handlers or inner
+//! error paths set. Refused and malformed preflights are answered by the
+//! layer, never passed on.
 //!
 //! # Quick Start
 //!
@@ -91,7 +107,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub use config::Cors;
+pub use config::{Cors, MAX_AGE_CAP, Rejection, SubdomainDepth};
 pub use layer::{CorsLayer, CorsService};
 pub use rune_cors::{Report, Weakness, WeaknessKind};
 pub use rune_finding::Severity;
@@ -107,6 +123,16 @@ pub enum Error {
     /// a valid serialized origin.
     #[error(transparent)]
     InvalidOrigin(#[from] rune_cors::Error),
+    /// A builder input is malformed or ambiguous: a trailing dot or empty
+    /// label in a host, a non-ASCII host, a misplaced wildcard, or a bad
+    /// route prefix.
+    #[error("invalid CORS policy input {input:?}: {reason}")]
+    InvalidInput {
+        /// The input as given.
+        input: String,
+        /// What is wrong with it.
+        reason: &'static str,
+    },
     /// The `rune-cors` audit rated the policy insecure.
     #[error("insecure CORS policy: {}", summary(.weaknesses))]
     Insecure {

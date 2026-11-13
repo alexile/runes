@@ -32,6 +32,122 @@ const PROBE_HOST: &str = "rune-axum-cors-probe.example";
 /// [`Cors::reject_at`] says.
 const HARD_FLOOR: Severity = Severity::High;
 
+/// The largest `Access-Control-Max-Age` the middleware sends: two hours,
+/// the limit Chromium applies. Longer values given to [`Cors::max_age`]
+/// are clamped, so a policy change reaches browsers within that time.
+pub const MAX_AGE_CAP: Duration = Duration::from_secs(7200);
+
+/// How deep a subdomain wildcard reaches.
+///
+/// Written in an origin pattern as `*.` (one label) or `**.` (any depth);
+/// see [`Cors::allow_origin`]. Neither form matches the apex domain itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SubdomainDepth {
+    /// Exactly one label: `https://*.example.com` matches
+    /// `https://a.example.com` but not `https://a.b.example.com`.
+    One,
+    /// One or more labels: `https://**.example.com` matches both
+    /// `https://a.example.com` and `https://a.b.example.com`.
+    Any,
+}
+
+/// What a preflight from a disallowed origin (or asking for a method,
+/// header or Private Network Access the policy does not grant) gets back.
+///
+/// Either way the response carries no `Access-Control-*` headers, so the
+/// browser fails the preflight and never sends the actual request. Actual
+/// (non-preflight) requests from disallowed origins are always passed on
+/// unchanged, minus CORS headers: CORS decides what a browser may read, it
+/// is not access control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Rejection {
+    /// Answer with this status (default `403 Forbidden`), which shows up
+    /// clearly in browser devtools and server logs.
+    Status(StatusCode),
+    /// Answer `204 No Content`, like an allowed preflight, only without the
+    /// CORS headers. A prober cannot tell a refusal from the status alone.
+    OmitHeaders,
+}
+
+impl Default for Rejection {
+    fn default() -> Self {
+        Self::Status(StatusCode::FORBIDDEN)
+    }
+}
+
+impl Rejection {
+    /// The status code of a refused preflight.
+    #[must_use]
+    pub const fn status(self) -> StatusCode {
+        match self {
+            Self::Status(status) => status,
+            Self::OmitHeaders => StatusCode::NO_CONTENT,
+        }
+    }
+}
+
+/// A subdomain wildcard such as `https://*.example.com`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Pattern {
+    base: Origin,
+    depth: SubdomainDepth,
+}
+
+impl Pattern {
+    /// Whether canonical origin `o` is a subdomain of the base at the
+    /// allowed depth, with the base's scheme and port.
+    fn matches(&self, o: &Origin) -> bool {
+        o.scheme() == self.base.scheme()
+            && o.port() == self.base.port()
+            && subdomain_labels(o.host(), self.base.host())
+                .is_some_and(|n| self.depth == SubdomainDepth::Any || n == 1)
+    }
+}
+
+impl fmt::Display for Pattern {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let stars = match self.depth {
+            SubdomainDepth::One => "*",
+            SubdomainDepth::Any => "**",
+        };
+        write!(f, "{}://{stars}.{}", self.base.scheme(), self.base.host())?;
+        if let Some(p) = self.base.port() {
+            write!(f, ":{p}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The number of labels `host` has in front of `base`, when `host` is a
+/// strict subdomain of `base` made of well-formed labels.
+fn subdomain_labels(host: &str, base: &str) -> Option<usize> {
+    let prefix = host.strip_suffix(base)?.strip_suffix('.')?;
+    let mut count = 0;
+    for label in prefix.split('.') {
+        if !valid_label(label) {
+            return None;
+        }
+        count += 1;
+    }
+    Some(count)
+}
+
+/// A non-empty DNS label of letters, digits, `-` and `_`.
+fn valid_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 63
+        && label
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+}
+
+/// Whether `host` is an IP literal rather than a domain name.
+fn is_ip(host: &str) -> bool {
+    host.starts_with('[') || host.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+}
+
 /// A CORS policy.
 ///
 /// Build with [`Cors::new()`], which allows no cross-origin access at all,
@@ -47,11 +163,14 @@ const HARD_FLOOR: Severity = Severity::High;
 ///
 /// let cors = Cors::new()
 ///     .allow_origin("https://app.example.com")
+///     .allow_origin("https://*.tenants.example.com")
 ///     .allow_credentials(true)
 ///     .allow_methods([Method::GET, Method::POST, Method::DELETE])
 ///     .allow_headers([HeaderName::from_static("content-type")]);
 ///
 /// assert!(cors.is_allowed("https://app.example.com"));
+/// assert!(cors.is_allowed("https://acme.tenants.example.com"));
+/// assert!(!cors.is_allowed("https://tenants.example.com"));
 /// assert!(!cors.is_allowed("https://evil.example"));
 /// assert!(cors.audit().weaknesses.is_empty());
 /// ```
@@ -65,6 +184,7 @@ pub struct Cors {
     site: Option<Origin>,
     any_origin: bool,
     origins: Vec<Origin>,
+    patterns: Vec<Pattern>,
     allow_null: bool,
     allow_subdomains: bool,
     predicate: Option<Predicate>,
@@ -75,7 +195,7 @@ pub struct Cors {
     max_age: Option<Duration>,
     private_network: bool,
     reject_at: Severity,
-    deny_status: StatusCode,
+    rejection: Rejection,
     /// The first invalid builder input, reported by `CorsLayer::new`.
     error: Option<Error>,
 }
@@ -86,6 +206,7 @@ impl Default for Cors {
             site: None,
             any_origin: false,
             origins: Vec::new(),
+            patterns: Vec::new(),
             allow_null: false,
             allow_subdomains: false,
             predicate: None,
@@ -96,7 +217,7 @@ impl Default for Cors {
             max_age: None,
             private_network: false,
             reject_at: Severity::Low,
-            deny_status: StatusCode::FORBIDDEN,
+            rejection: Rejection::default(),
             error: None,
         }
     }
@@ -108,6 +229,14 @@ impl fmt::Debug for Cors {
             .field("site", &self.site)
             .field("any_origin", &self.any_origin)
             .field("origins", &self.origins)
+            .field(
+                "patterns",
+                &self
+                    .patterns
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>(),
+            )
             .field("allow_null", &self.allow_null)
             .field("allow_subdomains", &self.allow_subdomains)
             .field(
@@ -121,7 +250,7 @@ impl fmt::Debug for Cors {
             .field("max_age", &self.max_age)
             .field("private_network", &self.private_network)
             .field("reject_at", &self.reject_at)
-            .field("deny_status", &self.deny_status)
+            .field("rejection", &self.rejection)
             .field("error", &self.error)
             .finish()
     }
@@ -145,33 +274,73 @@ impl Cors {
     /// as `https://evilexample.com` for `https://example.com`, is caught.
     #[must_use]
     pub fn site(mut self, origin: impl AsRef<str>) -> Self {
-        match Origin::parse(origin.as_ref()) {
+        match parse_origin(origin.as_ref()) {
             Ok(o) => self.site = Some(o),
-            Err(e) => self.record(e.into()),
+            Err(e) => self.record(e),
         }
         self
     }
 
-    /// Allows one origin, written as `scheme://host[:port]`.
+    /// Allows one origin, written as `scheme://host[:port]`, or a family of
+    /// subdomains written as `scheme://*.host[:port]` (exactly one extra
+    /// label) or `scheme://**.host[:port]` (any number of labels).
     ///
-    /// The origin is normalised the way browsers serialise it (lowercase,
-    /// no default port), and requests are matched against it exactly.
-    /// `"null"` allows the opaque origin, and `"*"` is the same as
+    /// Exact origins are normalised the way browsers serialise them
+    /// (lowercase, no default port) and requests must match byte for byte:
+    /// `https://App.example.com`, `https://app.example.com:443` or
+    /// `https://app.example.com.` sent by a non-browser client match
+    /// nothing.
+    ///
+    /// Wildcards keep the scheme and port, never match the apex (list
+    /// `https://example.com` separately if it should be allowed), and need
+    /// a domain with at least two labels: `https://*.com` and IP addresses
+    /// are refused. Remember that every host under a wildcard, including a
+    /// forgotten one taken over by someone else, can then read responses.
+    ///
+    /// `"null"` allows the opaque origin and `"*"` is the same as
     /// [`allow_any_origin`](Self::allow_any_origin); the audit rejects both
-    /// in most configurations. An invalid origin makes
+    /// in most configurations.
+    ///
+    /// Internationalised domains must be written in punycode
+    /// (`https://xn--bcher-kva.example`), which is what browsers send.
+    /// Invalid input (a path, a trailing dot, an empty label, a wildcard
+    /// anywhere but the first label, non-ASCII text) makes
     /// [`CorsLayer::new()`](crate::CorsLayer::new) fail.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rune_axum_cors::Cors;
+    ///
+    /// let cors = Cors::new()
+    ///     .allow_origin("https://example.com")
+    ///     .allow_origin("https://*.example.com");
+    /// assert!(cors.is_allowed("https://example.com"));
+    /// assert!(cors.is_allowed("https://app.example.com"));
+    /// assert!(!cors.is_allowed("https://a.b.example.com"));
+    /// assert!(!cors.is_allowed("http://app.example.com"));
+    /// assert!(!cors.is_allowed("https://app.example.com.evil.net"));
+    /// ```
     #[must_use]
     pub fn allow_origin(mut self, origin: impl AsRef<str>) -> Self {
         match origin.as_ref() {
             "*" => self.any_origin = true,
             "null" => self.allow_null = true,
-            raw => match Origin::parse(raw) {
+            raw if raw.contains('*') => match parse_pattern(raw) {
+                Ok(p) => {
+                    if !self.patterns.contains(&p) {
+                        self.patterns.push(p);
+                    }
+                }
+                Err(e) => self.record(e),
+            },
+            raw => match parse_origin(raw) {
                 Ok(o) => {
                     if !self.origins.contains(&o) {
                         self.origins.push(o);
                     }
                 }
-                Err(e) => self.record(e.into()),
+                Err(e) => self.record(e),
             },
         }
         self
@@ -200,26 +369,72 @@ impl Cors {
         self
     }
 
-    /// Also allows subdomains of the [`allow_origin`](Self::allow_origin)
-    /// origins, with the same scheme and port: `https://a.example.com` for
-    /// `https://example.com`, but not `http://a.example.com` nor
-    /// `https://evilexample.com`. Off by default.
+    /// Also allows subdomains, at any depth, of every exact
+    /// [`allow_origin`](Self::allow_origin) origin, with the same scheme
+    /// and port: `https://a.example.com` for `https://example.com`, but not
+    /// `http://a.example.com` nor `https://evilexample.com`. Off by
+    /// default.
+    ///
+    /// The same as adding `**.` patterns for each origin; prefer explicit
+    /// `*.` / `**.` patterns, which say which origins they widen.
     #[must_use]
     pub const fn allow_subdomains(mut self, allow: bool) -> Self {
         self.allow_subdomains = allow;
         self
     }
 
-    /// Also allows every origin for which `predicate` returns `true`.
+    /// Also allows every origin for which `predicate` returns `true`, for
+    /// origins that are only known at run time (tenants in a database, a
+    /// reloadable list).
     ///
-    /// The predicate sees the request `Origin` exactly as the browser sent
-    /// it (lowercase, no default port); it is never called for `null` or
-    /// non-canonical values. Because it is opaque, the audit probes it with
-    /// attacker-style origins derived from the [`site`](Self::site) and the
-    /// allowed origins (an unrelated site, `null`, subdomains, plain-`http`
-    /// variants and unanchored lookalikes) and rejects the policy if it
-    /// grants any of them. Probing cannot prove a predicate safe; prefer
-    /// exact origins.
+    /// # Security
+    ///
+    /// A predicate is the classic way CORS goes wrong. Whatever it accepts
+    /// is echoed back in `Access-Control-Allow-Origin`, so a predicate that
+    /// accepts too much turns into origin reflection: any site can read the
+    /// responses, with the user's cookies when credentials are on.
+    ///
+    /// - Compare whole origins (`set.contains(origin)`), never substrings,
+    ///   prefixes, suffixes or unanchored regexes: `ends_with("example.com")`
+    ///   lets `https://evilexample.com` in and `starts_with("https://example.com")`
+    ///   lets `https://example.com.evil.net` in.
+    /// - Check the scheme: `http://` origins can be forged by anyone on the
+    ///   network path.
+    /// - Never return `true` for input you have not checked against
+    ///   something you control.
+    ///
+    /// The predicate sees the request `Origin` exactly as browsers send it
+    /// (lowercase, no default port, punycode); it is never called for `null`
+    /// or non-canonical values. Because it is opaque, the audit probes it
+    /// with attacker-style origins derived from the [`site`](Self::site) and
+    /// the allowed origins (an unrelated site, `null`, subdomains,
+    /// plain-`http` variants and unanchored lookalikes) and rejects the
+    /// policy if it grants any of them. Probing cannot prove a predicate
+    /// safe, so prefer exact origins and wildcards where you can. Origins
+    /// granted only by the predicate never get Private Network Access.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::collections::HashSet;
+    /// use std::sync::{Arc, RwLock};
+    /// use rune_axum_cors::{Cors, CorsLayer};
+    ///
+    /// let tenants = Arc::new(RwLock::new(HashSet::from([
+    ///     "https://acme.example".to_owned(),
+    /// ])));
+    /// let lookup = Arc::clone(&tenants);
+    /// let cors = Cors::new()
+    ///     .site("https://example.com")
+    ///     .allow_origin_fn(move |origin| {
+    ///         lookup.read().is_ok_and(|set| set.contains(origin))
+    ///     })
+    ///     .allow_credentials(true);
+    /// assert!(cors.is_allowed("https://acme.example"));
+    /// assert!(CorsLayer::new(cors).is_ok());
+    ///
+    /// tenants.write().unwrap().insert("https://globex.example".to_owned());
+    /// ```
     #[must_use]
     pub fn allow_origin_fn<F>(mut self, predicate: F) -> Self
     where
@@ -241,6 +456,9 @@ impl Cors {
     /// Replaces the methods allowed in preflights. Defaults to `GET`,
     /// `HEAD` and `POST`. The CORS-safelisted `GET`, `HEAD` and `POST` are
     /// always accepted, as browsers do not restrict them.
+    ///
+    /// `*` allows any method, but only without credentials: on a
+    /// credentialed response browsers read it as a literal method name.
     #[must_use]
     pub fn allow_methods(mut self, methods: impl IntoIterator<Item = Method>) -> Self {
         self.methods = dedup(methods);
@@ -248,10 +466,12 @@ impl Cors {
     }
 
     /// Replaces the request headers allowed in preflights. Empty by
-    /// default; CORS-safelisted headers need no listing.
+    /// default; CORS-safelisted headers need no listing. Requested headers
+    /// are never mirrored back: the response lists exactly these names.
     ///
     /// `*` allows any header, but only without credentials: on a
-    /// credentialed response it is a literal header name.
+    /// credentialed response it is a literal header name, so a
+    /// credentialed policy has to list its headers.
     #[must_use]
     pub fn allow_headers(mut self, headers: impl IntoIterator<Item = HeaderName>) -> Self {
         self.allow_headers = dedup(headers);
@@ -259,7 +479,27 @@ impl Cors {
     }
 
     /// Replaces the response headers exposed to scripts through
-    /// `Access-Control-Expose-Headers`. Empty by default.
+    /// `Access-Control-Expose-Headers`. Empty by default, so scripts only
+    /// see the CORS-safelisted response headers (`Content-Type`,
+    /// `Cache-Control`, ...).
+    ///
+    /// `*` exposes every header, but only without credentials; browsers
+    /// never expose `Set-Cookie`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use http::HeaderName;
+    /// use rune_axum_cors::Cors;
+    ///
+    /// let cors = Cors::new()
+    ///     .allow_origin("https://app.example.com")
+    ///     .expose_headers([
+    ///         HeaderName::from_static("x-request-id"),
+    ///         HeaderName::from_static("x-total-count"),
+    ///     ]);
+    /// # let _ = cors;
+    /// ```
     #[must_use]
     pub fn expose_headers(mut self, headers: impl IntoIterator<Item = HeaderName>) -> Self {
         self.expose_headers = dedup(headers);
@@ -267,16 +507,43 @@ impl Cors {
     }
 
     /// Sets `Access-Control-Max-Age` on successful preflights, in whole
-    /// seconds. Not sent by default (browsers then cache for 5 seconds).
+    /// seconds, clamped to [`MAX_AGE_CAP`] (two hours). Not sent by default
+    /// (browsers then cache preflights for 5 seconds).
+    ///
+    /// A long cache keeps browsers using a granted preflight after the
+    /// policy has been tightened, which is why it is capped.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use std::time::Duration;
+    /// use rune_axum_cors::{Cors, MAX_AGE_CAP};
+    ///
+    /// let cors = Cors::new().max_age(Duration::from_secs(86_400));
+    /// assert_eq!(cors.max_age_value(), Some(MAX_AGE_CAP));
+    /// ```
     #[must_use]
-    pub const fn max_age(mut self, max_age: Duration) -> Self {
-        self.max_age = Some(max_age);
+    pub fn max_age(mut self, max_age: Duration) -> Self {
+        self.max_age = Some(max_age.min(MAX_AGE_CAP));
         self
     }
 
+    /// The `Access-Control-Max-Age` this policy sends, after clamping.
+    #[must_use]
+    pub const fn max_age_value(&self) -> Option<Duration> {
+        self.max_age
+    }
+
     /// Answers preflights that carry
-    /// `Access-Control-Request-Private-Network: true` from allowed origins
-    /// with `Access-Control-Allow-Private-Network: true`. Off by default.
+    /// `Access-Control-Request-Private-Network: true` with
+    /// `Access-Control-Allow-Private-Network: true`. Off by default.
+    ///
+    /// Private Network Access lets a public site talk to a server on the
+    /// visitor's local network, so it is only granted to origins listed
+    /// exactly with [`allow_origin`](Self::allow_origin): never to `*`,
+    /// wildcards, [`allow_subdomains`](Self::allow_subdomains) or the
+    /// predicate. Such preflights from any other origin, or any such
+    /// preflight while this is off, are refused.
     #[must_use]
     pub const fn allow_private_network(mut self, allow: bool) -> Self {
         self.private_network = allow;
@@ -295,12 +562,30 @@ impl Cors {
         self
     }
 
-    /// Sets the status code of refused preflights (origin, method or a
-    /// header not allowed). Defaults to `403 Forbidden`.
+    /// Sets how refused preflights are answered; see [`Rejection`].
+    /// Defaults to `403 Forbidden`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rune_axum_cors::{Cors, Rejection};
+    ///
+    /// let cors = Cors::new()
+    ///     .allow_origin("https://app.example.com")
+    ///     .rejection(Rejection::OmitHeaders);
+    /// # let _ = cors;
+    /// ```
     #[must_use]
-    pub const fn deny_status(mut self, status: StatusCode) -> Self {
-        self.deny_status = status;
+    pub const fn rejection(mut self, rejection: Rejection) -> Self {
+        self.rejection = rejection;
         self
+    }
+
+    /// Shorthand for [`rejection`](Self::rejection) with
+    /// `Rejection::Status(status)`.
+    #[must_use]
+    pub const fn deny_status(self, status: StatusCode) -> Self {
+        self.rejection(Rejection::Status(status))
     }
 
     /// Whether a request from `origin` (the `Origin` header value) is
@@ -313,27 +598,35 @@ impl Cors {
         if origin == "null" {
             return self.allow_null;
         }
-        let Ok(parsed) = Origin::parse(origin) else {
+        let Some(parsed) = canonical(origin) else {
             return false;
         };
-        // Browsers send the canonical serialization; anything else is not
-        // a browser and must not match a lenient rule.
-        if parsed.to_string() != origin {
-            return false;
-        }
-        self.origins.contains(&parsed)
-            || (self.allow_subdomains
-                && self.origins.iter().any(|anchor| {
-                    parsed.scheme() == anchor.scheme()
-                        && parsed.effective_port() == anchor.effective_port()
-                        && parsed.is_subdomain_of(anchor)
-                }))
-            || self.predicate.as_ref().is_some_and(|p| p(origin))
+        self.structural(&parsed) || self.predicate.as_ref().is_some_and(|p| p(origin))
     }
 
-    /// The status code of refused preflights.
-    pub(crate) const fn deny_status_code(&self) -> StatusCode {
-        self.deny_status
+    /// Whether a canonical origin is granted by the exact list, the
+    /// wildcards or [`Cors::allow_subdomains`], i.e. without the predicate.
+    fn structural(&self, o: &Origin) -> bool {
+        self.origins.contains(o)
+            || self.patterns.iter().any(|p| p.matches(o))
+            || (self.allow_subdomains
+                && self.origins.iter().any(|anchor| {
+                    Pattern {
+                        base: anchor.clone(),
+                        depth: SubdomainDepth::Any,
+                    }
+                    .matches(o)
+                }))
+    }
+
+    /// Whether `origin` is listed exactly (the Private Network Access rule).
+    fn is_exact(&self, origin: &str) -> bool {
+        canonical(origin).is_some_and(|o| self.origins.contains(&o))
+    }
+
+    /// How refused preflights are answered.
+    pub(crate) const fn rejection_mode(&self) -> Rejection {
+        self.rejection
     }
 
     /// Whether `Access-Control-Allow-Origin` depends on the request origin,
@@ -343,6 +636,7 @@ impl Cors {
     }
 
     /// The `Access-Control-Allow-Origin` value for `origin`, if granted.
+    /// Only an origin that passed [`Cors::is_allowed`] is ever echoed.
     fn grant(&self, origin: Option<&str>) -> Option<HeaderValue> {
         if self.any_origin {
             return Some(HeaderValue::from_static("*"));
@@ -376,8 +670,8 @@ impl Cors {
     }
 
     /// Headers for a successful preflight, or `None` when the preflight is
-    /// refused: origin not allowed, method not allowed, or a requested
-    /// header not allowed.
+    /// refused: origin not allowed, method not allowed, a requested header
+    /// not allowed, or Private Network Access asked for and not granted.
     pub(crate) fn preflight_headers(
         &self,
         origin: &str,
@@ -386,8 +680,12 @@ impl Cors {
         private_network: bool,
     ) -> Option<HeaderList> {
         let acao = self.grant(Some(origin))?;
+        if private_network && !(self.private_network && self.is_exact(origin)) {
+            return None;
+        }
         let safelisted = matches!(method, "GET" | "HEAD" | "POST");
-        if !safelisted && !self.methods.iter().any(|m| m.as_str() == method) {
+        let any_method = !self.credentials && self.methods.iter().any(|m| m.as_str() == "*");
+        if !safelisted && !any_method && !self.methods.iter().any(|m| m.as_str() == method) {
             return None;
         }
         let any_header = !self.credentials && self.allow_headers.iter().any(|h| h.as_str() == "*");
@@ -425,7 +723,7 @@ impl Cors {
                 HeaderValue::from(age.as_secs()),
             ));
         }
-        if private_network && self.private_network {
+        if private_network {
             out.push((ALLOW_PRIVATE_NETWORK, HeaderValue::from_static("true")));
         }
         Some(out)
@@ -433,30 +731,44 @@ impl Cors {
 
     /// Audits the policy with [`rune_cors`].
     ///
-    /// Every probe origin (the [`site`](Self::site) and allowed origins,
-    /// [`rune_cors::probes`] of each, `null`, and unrelated `https` and
-    /// `http` sites) is run through the same code the middleware uses to
-    /// answer actual requests and preflights. The resulting
-    /// [`Exchange`]s are analysed with [`rune_cors::run`], with the
-    /// allowed origins as trusted (except plain-`http` variants of a
-    /// secure site or allowed origin).
+    /// Every probe origin (the [`site`](Self::site), the allowed origins
+    /// and wildcard bases, [`rune_cors::probes`] of each, `null`, and
+    /// unrelated `https` and `http` sites) is run through the same code the
+    /// middleware uses to answer actual requests and preflights. The
+    /// resulting [`Exchange`]s are analysed with [`rune_cors::run`], with
+    /// the allowed origins as trusted (except plain-`http` variants of a
+    /// secure site or allowed origin). Subdomains are trusted only where a
+    /// wildcard or [`allow_subdomains`](Self::allow_subdomains) grants them;
+    /// a subdomain the predicate lets in is still reported.
+    ///
+    /// Private Network Access is audited as if it were granted to every
+    /// allowed origin, which is broader than what the middleware does.
     ///
     /// The report lists every weakness, including the ones below the
     /// [`reject_at`](Self::reject_at) threshold.
     #[must_use]
     pub fn audit(&self) -> Report {
-        let anchors: Vec<&Origin> = self.site.iter().chain(&self.origins).collect();
+        let anchors: Vec<&Origin> = self
+            .site
+            .iter()
+            .chain(&self.origins)
+            .chain(self.patterns.iter().map(|p| &p.base))
+            .collect();
         let shadowed = |o: &Origin| {
             !o.is_secure()
                 && anchors
                     .iter()
                     .any(|a| a.is_secure() && (a.host() == o.host() || o.is_subdomain_of(a)))
         };
-        let mut options = Options::default().with_trust_subdomains(self.allow_subdomains);
+        let mut options = Options::default();
         if let Some(site) = &self.site {
             options = options.with_target(site.clone());
         }
-        for o in self.origins.iter().filter(|o| !shadowed(o)) {
+        let trusted = self
+            .origins
+            .iter()
+            .chain(self.patterns.iter().map(|p| &p.base));
+        for o in trusted.filter(|o| !shadowed(o)) {
             options = options.with_trusted(o.clone());
         }
 
@@ -490,14 +802,46 @@ impl Cors {
             .map_or("GET", Method::as_str);
 
         let mut exchanges = Vec::with_capacity(origins.len() * 2);
+        let mut structural = Vec::with_capacity(origins.len() * 2);
         for origin in &origins {
+            let by_rule = canonical(origin).is_some_and(|o| self.structural(&o));
             let actual = self.actual_headers(Some(origin));
             exchanges.push(self.exchange(origin, &actual));
-            if let Some(pre) = self.preflight_headers(origin, method, request_headers, true) {
+            structural.push(by_rule);
+            if let Some(mut pre) = self.preflight_headers(origin, method, request_headers, false) {
+                if self.private_network {
+                    pre.push((ALLOW_PRIVATE_NETWORK, HeaderValue::from_static("true")));
+                }
                 exchanges.push(self.exchange(origin, &pre));
+                structural.push(by_rule);
             }
         }
-        rune_cors::run(&exchanges, &options)
+
+        let strict = rune_cors::run(&exchanges, &options);
+        if !self.allow_subdomains && self.patterns.is_empty() {
+            return strict;
+        }
+        // Subdomains granted by a wildcard are a deliberate choice; judge
+        // those exchanges with subdomain trust and everything else without.
+        let mut report = rune_cors::run(&exchanges, &options.with_trust_subdomains(true));
+        for (row, (strict_row, &by_rule)) in report
+            .rows
+            .iter_mut()
+            .zip(strict.rows.iter().zip(&structural))
+        {
+            if !by_rule {
+                row.clone_from(strict_row);
+            }
+        }
+        let by_rule = |w: &Weakness| structural.get(w.exchange).copied().unwrap_or(false);
+        report.weaknesses.retain(|w| by_rule(w));
+        report
+            .weaknesses
+            .extend(strict.weaknesses.into_iter().filter(|w| !by_rule(w)));
+        report
+            .weaknesses
+            .sort_by_key(|w| std::cmp::Reverse(w.severity));
+        report
     }
 
     /// The weaknesses in `report` that reject this policy: the most severe
@@ -519,6 +863,11 @@ impl Cors {
         self.error.take()
     }
 
+    /// A policy that grants nothing but answers refusals like this one.
+    pub(crate) fn deny_all(&self) -> Self {
+        Self::new().rejection(self.rejection)
+    }
+
     /// Builds an [`Exchange`] from the headers the middleware would send.
     fn exchange(&self, origin: &str, headers: &HeaderList) -> Exchange {
         let mut h = CorsHeaders::from_pairs(
@@ -538,6 +887,85 @@ impl Cors {
             self.error = Some(error);
         }
     }
+}
+
+/// Parses a request `Origin` value, accepting only the exact serialization
+/// browsers send. Anything else (uppercase, a default port, a trailing dot,
+/// empty labels) comes from a non-browser client and matches no rule.
+fn canonical(origin: &str) -> Option<Origin> {
+    let parsed = Origin::parse(origin).ok()?;
+    let host = parsed.host();
+    let labels_ok = is_ip(host) || host.split('.').all(valid_label);
+    (labels_ok && parsed.to_string() == origin).then_some(parsed)
+}
+
+/// Builds an [`Error::InvalidInput`].
+fn invalid(input: &str, reason: &'static str) -> Error {
+    Error::InvalidInput {
+        input: input.to_owned(),
+        reason,
+    }
+}
+
+/// Parses an exact origin from the builder, with the checks browsers'
+/// serialization implies.
+fn parse_origin(input: &str) -> Result<Origin, Error> {
+    if !input.is_ascii() {
+        return Err(invalid(
+            input,
+            "non-ASCII host; write internationalised domain names in punycode (xn--), \
+             as browsers send them",
+        ));
+    }
+    let origin = Origin::parse(input)?;
+    let host = origin.host();
+    if !is_ip(host) {
+        if host.ends_with('.') {
+            return Err(invalid(
+                input,
+                "trailing dot in host; browsers treat `example.com.` as a different origin",
+            ));
+        }
+        if !host.split('.').all(valid_label) {
+            return Err(invalid(input, "empty or malformed label in host"));
+        }
+    }
+    Ok(origin)
+}
+
+/// Parses `scheme://*.host[:port]` or `scheme://**.host[:port]`.
+fn parse_pattern(input: &str) -> Result<Pattern, Error> {
+    let Some((scheme, rest)) = input.split_once("://") else {
+        return Err(invalid(input, "missing \"://\""));
+    };
+    let (depth, base) = if let Some(base) = rest.strip_prefix("**.") {
+        (SubdomainDepth::Any, base)
+    } else if let Some(base) = rest.strip_prefix("*.") {
+        (SubdomainDepth::One, base)
+    } else {
+        return Err(invalid(
+            input,
+            "a wildcard must be the whole first label: `*.` or `**.`",
+        ));
+    };
+    if base.contains('*') {
+        return Err(invalid(input, "only the first label can be a wildcard"));
+    }
+    let base = parse_origin(&format!("{scheme}://{base}")).map_err(|e| match e {
+        Error::InvalidInput { reason, .. } => invalid(input, reason),
+        other => other,
+    })?;
+    let host = base.host();
+    if is_ip(host) {
+        return Err(invalid(input, "a wildcard needs a domain name, not an IP"));
+    }
+    if !host.contains('.') && host != "localhost" {
+        return Err(invalid(
+            input,
+            "a wildcard needs at least two labels after it; `*.com` would allow every site",
+        ));
+    }
+    Ok(Pattern { base, depth })
 }
 
 /// Removes duplicates, keeping the first occurrence.
@@ -579,6 +1007,13 @@ mod tests {
             .and_then(|(_, v)| v.to_str().ok())
     }
 
+    fn input_error(mut cors: Cors) -> &'static str {
+        match cors.take_error() {
+            Some(Error::InvalidInput { reason, .. }) => reason,
+            other => panic!("expected InvalidInput, got {other:?}"),
+        }
+    }
+
     #[test]
     fn default_allows_nothing_and_is_clean() {
         let cors = Cors::new();
@@ -595,8 +1030,106 @@ mod tests {
         assert!(!cors.is_allowed("https://App.example.com"));
         assert!(!cors.is_allowed("https://app.example.com:443"));
         assert!(!cors.is_allowed("http://app.example.com"));
+        assert!(!cors.is_allowed("https://app.example.com:8443"));
         assert!(!cors.is_allowed("https://x.app.example.com"));
         assert!(!cors.is_allowed("https://app.example.com.evil.net"));
+        assert!(!cors.is_allowed("https://evil-app.example.com"));
+        assert!(!cors.is_allowed("https://app.example.com/"));
+        assert!(!cors.is_allowed(" https://app.example.com"));
+    }
+
+    #[test]
+    fn trailing_dots_never_match() {
+        let cors = Cors::new()
+            .allow_origin("https://example.com")
+            .allow_origin("https://**.example.com");
+        assert!(!cors.is_allowed("https://example.com."));
+        assert!(!cors.is_allowed("https://a.example.com."));
+        assert!(!cors.is_allowed("https://a..example.com"));
+        assert!(!cors.is_allowed("https://.example.com"));
+        assert!(input_error(Cors::new().allow_origin("https://example.com.")).contains("trailing"));
+        assert!(input_error(Cors::new().allow_origin("https://a..example.com")).contains("label"));
+    }
+
+    #[test]
+    fn idn_must_be_punycode() {
+        assert!(
+            input_error(Cors::new().allow_origin("https://bücher.example")).contains("punycode")
+        );
+        let cors = Cors::new().allow_origin("https://XN--bcher-kva.example");
+        assert!(cors.is_allowed("https://xn--bcher-kva.example"));
+        // A Unicode lookalike can never be a canonical Origin value.
+        assert!(!cors.is_allowed("https://bücher.example"));
+    }
+
+    #[test]
+    fn one_level_wildcard() {
+        let cors = Cors::new().allow_origin("https://*.example.com");
+        assert!(cors.is_allowed("https://a.example.com"));
+        assert!(!cors.is_allowed("https://a.b.example.com"));
+        assert!(
+            !cors.is_allowed("https://example.com"),
+            "apex is not implied"
+        );
+        assert!(!cors.is_allowed("http://a.example.com"));
+        assert!(!cors.is_allowed("https://a.example.com:8443"));
+        assert!(!cors.is_allowed("https://evil-example.com"));
+        assert!(!cors.is_allowed("https://evilexample.com"));
+        assert!(!cors.is_allowed("https://a.example.com.evil.net"));
+        assert!(!cors.is_allowed("https://example.com.evil.net"));
+        assert!(kinds(&cors.allow_credentials(true)).is_empty());
+    }
+
+    #[test]
+    fn any_depth_wildcard_keeps_port() {
+        let cors = Cors::new().allow_origin("https://**.example.com:8443");
+        assert!(cors.is_allowed("https://a.example.com:8443"));
+        assert!(cors.is_allowed("https://a.b.example.com:8443"));
+        assert!(!cors.is_allowed("https://a.example.com"));
+        assert!(!cors.is_allowed("https://example.com:8443"));
+    }
+
+    #[test]
+    fn bad_wildcards_are_refused() {
+        for bad in [
+            "https://*example.com",
+            "https://a.*.example.com",
+            "https://*.*.example.com",
+            "*://example.com",
+            "https://*.com",
+            "https://*.127.0.0.1",
+            "https://*.[::1]",
+            "https://*.example.com.",
+            "https://*.example.com/path",
+            "https://***.example.com",
+        ] {
+            let mut cors = Cors::new().allow_origin(bad);
+            assert!(cors.take_error().is_some(), "{bad}");
+        }
+        let cors = Cors::new().allow_origin("http://*.localhost:3000");
+        assert!(cors.is_allowed("http://app.localhost:3000"));
+    }
+
+    #[test]
+    fn insecure_wildcard_next_to_secure_site_is_caught() {
+        let cors = Cors::new()
+            .site("https://example.com")
+            .allow_origin("http://*.example.com")
+            .allow_credentials(true);
+        assert!(kinds(&cors).contains(&WeaknessKind::InsecureOrigin));
+    }
+
+    #[test]
+    fn wildcard_does_not_hide_predicate_subdomains() {
+        // The wildcard trusts subdomains of tenants.example.com, but a
+        // predicate letting in any subdomain of app.example.com is still
+        // reported.
+        let cors = Cors::new()
+            .allow_origin("https://app.example.com")
+            .allow_origin("https://*.tenants.example.com")
+            .allow_origin_fn(|o| o.ends_with(".app.example.com"))
+            .allow_credentials(true);
+        assert!(kinds(&cors).contains(&WeaknessKind::SubdomainOrigin));
     }
 
     #[test]
@@ -698,6 +1231,57 @@ mod tests {
     }
 
     #[test]
+    fn requested_headers_are_never_mirrored() {
+        let cors = Cors::new()
+            .allow_origin("https://a.example")
+            .allow_headers([HeaderName::from_static("content-type")]);
+        let h = cors
+            .preflight_headers("https://a.example", "GET", Some("CONTENT-TYPE"), false)
+            .unwrap();
+        assert_eq!(
+            value(&h, &header::ACCESS_CONTROL_ALLOW_HEADERS),
+            Some("content-type")
+        );
+    }
+
+    #[test]
+    fn max_age_is_capped() {
+        let cors = Cors::new()
+            .allow_origin("https://a.example")
+            .max_age(Duration::MAX);
+        let h = cors
+            .preflight_headers("https://a.example", "GET", None, false)
+            .unwrap();
+        assert_eq!(value(&h, &header::ACCESS_CONTROL_MAX_AGE), Some("7200"));
+        let zero = Cors::new().max_age(Duration::ZERO);
+        assert_eq!(zero.max_age_value(), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn private_network_only_for_exact_origins() {
+        let cors = Cors::new()
+            .allow_origin("https://a.example.com")
+            .allow_origin("https://*.example.com")
+            .allow_origin_fn(|o| o == "https://dyn.example")
+            .allow_private_network(true);
+        assert!(
+            cors.preflight_headers("https://a.example.com", "GET", None, true)
+                .is_some()
+        );
+        for other in ["https://b.example.com", "https://dyn.example"] {
+            assert!(cors.is_allowed(other));
+            assert!(cors.preflight_headers(other, "GET", None, true).is_none());
+            assert!(cors.preflight_headers(other, "GET", None, false).is_some());
+        }
+        // Asked for while the policy does not grant it: refused.
+        let off = Cors::new().allow_origin("https://a.example.com");
+        assert!(
+            off.preflight_headers("https://a.example.com", "GET", None, true)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn star_header_is_a_wildcard_only_without_credentials() {
         let star = [HeaderName::from_static("*")];
         let open = Cors::new().allow_any_origin().allow_headers(star.clone());
@@ -720,6 +1304,24 @@ mod tests {
                 .weaknesses
                 .iter()
                 .any(|w| w.kind == WeaknessKind::WildcardListWithCredentials)
+        );
+    }
+
+    #[test]
+    fn star_method_is_a_wildcard_only_without_credentials() {
+        let star = [Method::from_bytes(b"*").unwrap()];
+        let open = Cors::new()
+            .allow_origin("https://a.example")
+            .allow_methods(star);
+        assert!(
+            open.preflight_headers("https://a.example", "PATCH", None, false)
+                .is_some()
+        );
+        let creds = open.allow_credentials(true);
+        assert!(
+            creds
+                .preflight_headers("https://a.example", "PATCH", None, false)
+                .is_none()
         );
     }
 
@@ -753,6 +1355,9 @@ mod tests {
             .allow_credentials(true)
             .reject_at(Severity::Critical);
         assert!(kinds(&cors).contains(&WeaknessKind::NullOrigin));
+        // A predicate never sees `null`.
+        let cors = Cors::new().allow_origin_fn(|_| true);
+        assert!(!cors.is_allowed("null"));
     }
 
     #[test]
@@ -763,6 +1368,19 @@ mod tests {
         let report = cors.audit();
         assert_eq!(report.max_severity(), Some(Severity::Critical));
         assert!(kinds(&cors).contains(&WeaknessKind::OriginReflection));
+    }
+
+    #[test]
+    fn predicate_only_sees_canonical_origins() {
+        let cors = Cors::new().allow_origin_fn(|o| o.contains("example"));
+        assert!(!cors.is_allowed("HTTPS://example.com"));
+        assert!(!cors.is_allowed("https://example.com:443"));
+        assert!(!cors.is_allowed("https://example.com."));
+        assert!(!cors.is_allowed("https://example.com/x"));
+        assert!(
+            cors.actual_headers(Some("https://example.com/x"))
+                .is_empty()
+        );
     }
 
     #[test]
@@ -807,6 +1425,11 @@ mod tests {
         let cors = Cors::new().allow_any_origin().allow_private_network(true);
         assert!(kinds(&cors).contains(&WeaknessKind::PrivateNetworkAccess));
         let cors = Cors::new()
+            .site("https://example.com")
+            .allow_origin_fn(|o| o.ends_with("example.com"))
+            .allow_private_network(true);
+        assert!(kinds(&cors).contains(&WeaknessKind::PrivateNetworkAccess));
+        let cors = Cors::new()
             .allow_origin("https://a.example")
             .allow_private_network(true);
         assert!(kinds(&cors).is_empty());
@@ -820,8 +1443,27 @@ mod tests {
     }
 
     #[test]
-    fn debug_hides_predicate() {
-        let s = format!("{:?}", Cors::new().allow_origin_fn(|_| false));
+    fn rejection_modes() {
+        assert_eq!(Cors::new().rejection_mode().status(), StatusCode::FORBIDDEN);
+        let omit = Cors::new().rejection(Rejection::OmitHeaders);
+        assert_eq!(omit.rejection_mode().status(), StatusCode::NO_CONTENT);
+        assert_eq!(omit.deny_all().rejection_mode(), Rejection::OmitHeaders);
+        let teapot = Cors::new().deny_status(StatusCode::IM_A_TEAPOT);
+        assert_eq!(
+            teapot.rejection_mode(),
+            Rejection::Status(StatusCode::IM_A_TEAPOT)
+        );
+    }
+
+    #[test]
+    fn debug_hides_predicate_and_shows_patterns() {
+        let s = format!(
+            "{:?}",
+            Cors::new()
+                .allow_origin_fn(|_| false)
+                .allow_origin("https://**.example.com")
+        );
         assert!(s.contains("Fn(&str) -> bool"));
+        assert!(s.contains("https://**.example.com"));
     }
 }
