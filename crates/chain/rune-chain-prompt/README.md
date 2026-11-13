@@ -19,7 +19,12 @@
 - `validate_input_variables` to catch template typos at start-up, and
   `try_format` errors that list *every* missing variable
 - partial variables (defaults), few-shot templates and a
-  `MessagesPlaceholder` for splicing conversation history into chat templates
+  `MessagesPlaceholder` for splicing conversation history into chat templates;
+  the history value is checked (a clear error names the placeholder and what
+  it got), can be optional, bounded with `last(n)` and run through a
+  `ValueGuard`, and counts towards the template's maximum length
+- a `ChatTemplate` (placeholders included) also implements `PromptTemplate`,
+  rendering a `System: …` / `Human: …` transcript
 - prompt-injection hygiene: `ValueGuard`s that XML-escape and delimit untrusted
   values, strip invisible/bidi/tag characters and truncate, plus a maximum
   rendered length
@@ -109,6 +114,37 @@ args.insert("input".into(), "what did I say?".into());
 assert_eq!(tmpl.format_messages(&args).unwrap().len(), 4);
 ```
 
+History often comes from users or tools, so guard it like any other
+untrusted value. The same template works anywhere a `PromptTemplate` is
+expected, and in `rune-chain-llm`'s `LlmChain` (which writes only the new
+turns, not the history you pass in, to its memory):
+
+```rust
+use rune_chain_prompt::{
+    ChatTemplate, MessageTemplate, MessagesPlaceholder, PromptTemplate, ValueGuard, messages_value,
+};
+use rune_chain_core::{ChainError, Message, PromptArgs};
+
+let tmpl = ChatTemplate::new(vec![MessageTemplate::system("You are helpful.")])
+    .with_placeholder(
+        MessagesPlaceholder::new("history")
+            .last(20)
+            .guard(ValueGuard::StripInvisible),
+    )
+    .with_message(MessageTemplate::human("{input}"))
+    .with_max_len(16_000);
+
+let mut args = PromptArgs::new();
+args.insert("history".into(), messages_value(&[Message::human("hi\u{200B}")]));
+args.insert("input".into(), "bye".into());
+assert_eq!(tmpl.format(&args).unwrap(), "System: You are helpful.\nHuman: hi\nHuman: bye");
+
+// A history that is not a list of messages is rejected with a clear error.
+args.insert("history".into(), "hi".into());
+let err = tmpl.format(&args).unwrap_err();
+assert!(matches!(err, ChainError::ParseError(m) if m.contains("placeholder `history`") && m.contains("got a string")));
+```
+
 Few-shot prompts:
 
 ```rust
@@ -131,8 +167,9 @@ assert_eq!(tmpl.format(&prompt_args! { "question" => "3+3" }).unwrap(), "Q: 2+2\
 | `StringTemplate` | `{variable}` substitution, `{{`/`}}` escapes, partials, guards, max length |
 | `PromptTemplate` | Trait: `format(&PromptArgs) -> Result<String, ChainError>` |
 | `MessageTemplate` | One `(Role, template)` pair — `system`, `human`, `ai`, `from_template` |
-| `ChatTemplate` | Ordered message templates and placeholders → `Vec<Message>` |
-| `MessagesPlaceholder` | Splices a list of messages (history) from a variable; `optional`, `last(n)` |
+| `ChatTemplate` | Ordered message templates and placeholders → `Vec<Message>`; also a `PromptTemplate` (transcript) |
+| `MessagesPlaceholder` | Splices a list of messages (history) from a variable; `optional`, `last(n)`, `guard` |
+| `RenderedMessage` | A message from `ChatTemplate::render`, tagged with the placeholder it came from |
 | `FewShotTemplate` | Prefix + rendered examples + suffix |
 | `ValueGuard` | `untrusted(tag)`, `XmlTag`, `EscapeXml`, `StripInvisible`, `Truncate`, `Chain`, `Custom` |
 | `TemplateError` | Syntax position, all missing variables, declaration mismatches, too long; converts into `ChainError` |

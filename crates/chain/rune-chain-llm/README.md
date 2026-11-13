@@ -10,7 +10,9 @@
 
 `LlmChain` is the basic building block of a `rune-chain` pipeline. It:
 
-- renders a `ChatTemplate` from `rune-chain-prompt` with your variables;
+- renders a `ChatTemplate` from `rune-chain-prompt` with your variables,
+  including `MessagesPlaceholder`s filled from a `messages_value` input
+  (history passed in this way is sent as is and not written to memory);
 - splices in history from any `Memory` (e.g. `rune-chain-memory`);
 - calls any `Llm` provider and returns its `GenerateResult` untouched, so token
   usage (with cache and reasoning tokens) and the finish reason reach you;
@@ -117,14 +119,17 @@ while let Some(chunk) = stream.next().await {
 ## Message order
 
 ```text
-System (from the template, always first)
+System (from the template's own message templates, always first)
 ↓ parser format instructions (if any)
 ↓ prior Human / Ai turns (from memory)
-↓ new input (from the template)
+↓ the rest of the template, in order: placeholder history and new input
 ```
 
 `System` messages are never written to memory; they are rendered fresh from
-the template on every call.
+the template on every call. Only the Human messages the template itself
+renders are recorded as the new turn: messages a `MessagesPlaceholder`
+inserts (system ones included) stay where the placeholder is and are never
+written back to memory.
 
 ## `execute` keys
 

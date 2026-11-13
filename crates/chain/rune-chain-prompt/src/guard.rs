@@ -14,9 +14,10 @@ use std::sync::Arc;
 /// inserted into a prompt.
 ///
 /// Attach guards with [`StringTemplate::guard`](crate::StringTemplate::guard)
-/// (one variable) or [`StringTemplate::guard_all`](crate::StringTemplate::guard_all)
-/// (every variable). Partial variables and literal template text are never
-/// guarded.
+/// (one variable), [`StringTemplate::guard_all`](crate::StringTemplate::guard_all)
+/// (every variable) or [`MessagesPlaceholder::guard`](crate::MessagesPlaceholder::guard)
+/// (the text of every inserted message). Partial variables and literal
+/// template text are never guarded.
 ///
 /// # Example
 ///
@@ -83,6 +84,35 @@ impl ValueGuard {
         }
     }
 }
+
+/// Guards compare structurally; two [`Custom`](ValueGuard::Custom) guards are
+/// equal only when they share the same closure (the same `Arc`).
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use rune_chain_prompt::ValueGuard;
+///
+/// assert_eq!(ValueGuard::untrusted("doc"), ValueGuard::untrusted("doc"));
+/// let f = ValueGuard::Custom(Arc::new(str::to_uppercase));
+/// assert_eq!(f, f.clone());
+/// assert_ne!(f, ValueGuard::Custom(Arc::new(str::to_uppercase)));
+/// ```
+impl PartialEq for ValueGuard {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::EscapeXml, Self::EscapeXml) | (Self::StripInvisible, Self::StripInvisible) => {
+                true
+            }
+            (Self::XmlTag(a), Self::XmlTag(b)) => a == b,
+            (Self::Truncate(a), Self::Truncate(b)) => a == b,
+            (Self::Chain(a), Self::Chain(b)) => a == b,
+            (Self::Custom(a), Self::Custom(b)) => std::ptr::addr_eq(Arc::as_ptr(a), Arc::as_ptr(b)),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ValueGuard {}
 
 impl fmt::Debug for ValueGuard {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -40,6 +40,11 @@ type ParseFn = Arc<dyn Fn(&str) -> Result<Value, ChainError> + Send + Sync>;
 /// reason and parsed value; [`invoke_structured`](Self::invoke_structured)
 /// deserializes straight into a type.
 ///
+/// The template may contain [`MessagesPlaceholder`](rune_chain_prompt::MessagesPlaceholder)s,
+/// filled from inputs built with [`messages_value`](rune_chain_prompt::messages_value).
+/// Their messages stay where the placeholder is and, unlike the template's
+/// own human turns, are never written to memory.
+///
 /// # Example
 ///
 /// ```rust
@@ -271,9 +276,13 @@ impl<L: Llm> LlmChain<L> {
         &self,
         input: &PromptArgs,
     ) -> Result<(Vec<Message>, Vec<Message>), ChainError> {
-        let rendered = self.prompt.format_messages(input)?;
-        let (system, new): (Vec<_>, Vec<_>) =
-            rendered.into_iter().partition(|m| m.role == Role::System);
+        // System messages written in the template go first; everything else,
+        // including messages a placeholder inserted, keeps its order after
+        // the memory history.
+        let rendered = self.prompt.render(input)?;
+        let (system, new): (Vec<_>, Vec<_>) = rendered
+            .into_iter()
+            .partition(|r| r.message.role == Role::System && !r.is_from_placeholder());
         let history = match &self.memory {
             Some(memory) => memory.messages().await?,
             None => Vec::new(),
@@ -284,14 +293,21 @@ impl<L: Llm> LlmChain<L> {
             .filter(|_| self.inject_format_instructions)
             .map(Message::system);
         let mut messages = Vec::with_capacity(system.len() + history.len() + new.len() + 1);
-        messages.extend(system);
+        messages.extend(system.into_iter().map(|r| r.message));
         messages.extend(instructions);
         messages.extend(history);
-        messages.extend(new.iter().cloned());
+        messages.extend(new.iter().map(|r| r.message.clone()));
         if let Some(max) = self.max_context_tokens {
             check_budget(&messages, max)?;
         }
-        let turn = new.into_iter().filter(|m| m.role == Role::Human).collect();
+        // Only the template's own human turns are new; history passed in
+        // through a placeholder is already somewhere else and is not
+        // written to memory again.
+        let turn = new
+            .into_iter()
+            .filter(|r| r.message.role == Role::Human && !r.is_from_placeholder())
+            .map(|r| r.message)
+            .collect();
         Ok((messages, turn))
     }
 

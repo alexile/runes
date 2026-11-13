@@ -12,6 +12,8 @@
 //! - [`MessageTemplate`] — one `(Role, template_string)` pair
 //! - [`ChatTemplate`] — ordered list of message templates → `Vec<Message>`
 //! - [`MessagesPlaceholder`] — splice conversation history into a chat template
+//!   (validated, optionally bounded with `last(n)` and guarded); a
+//!   [`ChatTemplate`] with placeholders also implements [`PromptTemplate`]
 //! - [`FewShotTemplate`] — prefix + rendered examples + suffix
 //! - [`ValueGuard`] — sanitise untrusted values (XML-escape and delimit,
 //!   strip invisible characters, truncate) before they enter a prompt
@@ -80,7 +82,9 @@ mod few_shot;
 mod guard;
 mod template;
 
-pub use chat::{ChatPart, ChatTemplate, MessageTemplate, MessagesPlaceholder, messages_value};
+pub use chat::{
+    ChatPart, ChatTemplate, MessageTemplate, MessagesPlaceholder, RenderedMessage, messages_value,
+};
 pub use error::TemplateError;
 pub use few_shot::FewShotTemplate;
 pub use guard::{ValueGuard, escape_xml, strip_invisible, truncate_chars};

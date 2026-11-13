@@ -3359,7 +3359,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-llm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -3432,7 +3432,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-output-parser"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -3460,7 +3460,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-prompt"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proptest",
  "rune-chain-core",
