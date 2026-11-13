@@ -421,3 +421,24 @@ fn a_category_that_only_fails_is_a_d() {
         "every algorithm of a required category fails"
     );
 }
+
+#[test]
+fn grading_a_maximal_kexinit_stays_linear() {
+    // About 61 KB of distinct cipher names, just under the packet limit,
+    // graded under an allow list so every one of them fails.
+    let names: Vec<String> = (0..7000).map(|i| format!("{i:x}")).collect();
+    let mut offer = KexInit::default();
+    offer.encryption_client_to_server.clone_from(&names);
+    offer.encryption_server_to_client = names.into_iter().rev().collect();
+    assert!(encode_packet(&offer.encode()).len() < 65_536);
+    let policy = Policy::modern().allow_only(Category::Cipher, ["aes*"]);
+    let start = std::time::Instant::now();
+    let report = policy.grade(None, Some(&offer));
+    let elapsed = start.elapsed();
+    assert_eq!(report.failures().count(), 7000);
+    assert_eq!(report.grade, Grade::D);
+    assert!(
+        elapsed < std::time::Duration::from_millis(300),
+        "{elapsed:?}"
+    );
+}

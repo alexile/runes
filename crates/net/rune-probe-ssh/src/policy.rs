@@ -353,7 +353,7 @@ impl Policy {
             software,
             vulnerabilities,
         };
-        let (grade, reason) = report.compute_grade(kexinit);
+        let (grade, reason) = report.compute_grade();
         report.grade = grade;
         report.grade_reason = reason;
         report
@@ -480,7 +480,7 @@ impl Report {
         self.terrapin.is_some_and(|t| t.vulnerable())
     }
 
-    fn compute_grade(&self, kexinit: Option<&KexInit>) -> (Grade, &'static str) {
+    fn compute_grade(&self) -> (Grade, &'static str) {
         let mut grade = (Grade::A, self.grade_reason);
         let mut cap = |to: Grade, why: &'static str| {
             if to > grade.0 {
@@ -498,21 +498,21 @@ impl Report {
         if self.failures().any(|a| a.severity >= Severity::Medium) {
             cap(Grade::D, "offers a badly broken algorithm");
         }
-        if let Some(kexinit) = kexinit {
-            for category in [
-                Category::Kex,
-                Category::HostKey,
-                Category::Cipher,
-                Category::Mac,
-            ] {
-                let mut real = category
-                    .offered(kexinit)
-                    .into_iter()
-                    .filter(|n| !is_signal(category, n))
-                    .peekable();
-                if real.peek().is_some() && real.all(|n| self.failed(category, n)) {
-                    cap(Grade::D, "every algorithm of a required category fails");
-                }
+        for category in [
+            Category::Kex,
+            Category::HostKey,
+            Category::Cipher,
+            Category::Mac,
+        ] {
+            // There is one assessment per offered name, so this checks the
+            // offer without a lookup per name.
+            let mut real = self
+                .algorithms
+                .iter()
+                .filter(|a| a.category == category && !is_signal(category, &a.algorithm))
+                .peekable();
+            if real.peek().is_some() && real.all(|a| a.level == Level::Fail) {
+                cap(Grade::D, "every algorithm of a required category fails");
             }
         }
         if self.failures().next().is_some() {
@@ -538,12 +538,6 @@ impl Report {
     }
 
     /// True when the graded algorithm `name` of `category` failed.
-    fn failed(&self, category: Category, name: &str) -> bool {
-        self.algorithms
-            .iter()
-            .any(|a| a.category == category && a.algorithm == name && a.level == Level::Fail)
-    }
-
     /// The report as `rune-finding` findings at `location`:
     ///
     /// | Check id                        | Severity          | When                                        |

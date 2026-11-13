@@ -429,3 +429,30 @@ fn byte_at_a_time() {
         ED25519_FP
     );
 }
+
+#[test]
+fn odd_names_do_not_hide_the_rest_of_the_offer() {
+    // A server can add a non-ASCII or empty name to its lists; clients that
+    // only look for names they know still connect, so the grade must not
+    // fall back to the banner alone.
+    for odd in ["aes256-ctr\u{ff}", "caf\u{e9}", ""] {
+        let mut offer = openssh_5_3();
+        offer.encryption_server_to_client.insert(0, odd.to_owned());
+        offer.kex_algorithms.push(odd.to_owned());
+        let sim = simulate(
+            &SshProbe::new().with_host_key(false),
+            &Target::new("legacy.test", 22),
+            &[&hello("SSH-2.0-OpenSSH_9.9p2", &offer)],
+            &Options::default(),
+        )
+        .unwrap();
+        let info = sim.result.unwrap();
+        assert!(
+            !info.details.contains_key("ssh.probe_error"),
+            "{odd:?}: {:?}",
+            info.details.get("ssh.probe_error")
+        );
+        assert!(checks(&info).contains(&"ssh.weak_cipher"), "{odd:?}");
+        assert_eq!(info.details["ssh.grade"], "D", "{odd:?}");
+    }
+}

@@ -1,7 +1,7 @@
 //! SSH transport-layer framing: the identification string, the binary
 //! packet protocol and the RFC 4251 §5 data types.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 
 use crate::Error;
 
@@ -260,26 +260,32 @@ impl<'a> Reader<'a> {
         self.bytes(len, what)
     }
 
-    /// An RFC 4251 `name-list`: comma-separated, non-empty names of
-    /// printable ASCII other than comma.
+    /// An RFC 4251 `name-list`: comma-separated names of printable ASCII.
+    ///
+    /// Read leniently, so one odd name cannot hide the rest of an offer from
+    /// the grader: empty names are skipped, and bytes outside printable
+    /// ASCII come out as `\xNN` (such a name matches nothing in the
+    /// algorithm table). Never fails once the string itself is complete.
     pub fn name_list(&mut self, what: &'static str) -> Result<Vec<String>, Error> {
         let raw = self.string(what)?;
-        if raw.is_empty() {
-            return Ok(Vec::new());
-        }
-        raw.split(|&b| b == b',')
+        Ok(raw
+            .split(|&b| b == b',')
+            .filter(|name| !name.is_empty())
             .map(|name| {
-                if name.is_empty() || !name.iter().all(|&b| (0x21..=0x7e).contains(&b)) {
-                    Err(Error::Malformed(what))
-                } else {
-                    Ok(ascii(name))
+                let mut out = String::with_capacity(name.len());
+                for &b in name {
+                    if (0x21..=0x7e).contains(&b) {
+                        out.push(char::from(b));
+                    } else {
+                        let _ = write!(out, "\\x{b:02x}");
+                    }
                 }
+                out
             })
-            .collect()
+            .collect())
     }
 }
 
-/// Append an RFC 4251 `uint32`.
 pub fn put_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_be_bytes());
 }
@@ -365,7 +371,13 @@ mod tests {
         let mut r = Reader::new(&out);
         assert_eq!(r.name_list("x").unwrap(), ["a", "b@c.d"]);
         assert_eq!(r.name_list("x").unwrap(), Vec::<String>::new());
-        assert_eq!(r.name_list("x"), Err(Error::Malformed("x")));
+        assert_eq!(r.name_list("x").unwrap(), ["a", "b"]);
+        let mut out = Vec::new();
+        put_string(&mut out, b",caf\xc3\xa9, x,");
+        assert_eq!(
+            Reader::new(&out).name_list("x").unwrap(),
+            ["caf\\xc3\\xa9", "\\x20x"]
+        );
         assert_eq!(r.u32("y"), Err(Error::Truncated("y")));
     }
 }

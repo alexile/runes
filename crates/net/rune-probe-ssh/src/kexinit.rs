@@ -152,13 +152,14 @@ impl KexInit {
 }
 
 fn union<'a>(a: &'a [String], b: &'a [String]) -> Vec<&'a str> {
-    let mut out: Vec<&str> = Vec::with_capacity(a.len().max(b.len()));
-    for name in a.iter().chain(b) {
-        if !out.contains(&name.as_str()) {
-            out.push(name);
-        }
-    }
-    out
+    // A hash set keeps this linear: a hostile KEXINIT can carry thousands
+    // of distinct names.
+    let mut seen = std::collections::HashSet::with_capacity(a.len().max(b.len()));
+    a.iter()
+        .chain(b)
+        .map(String::as_str)
+        .filter(|name| seen.insert(*name))
+        .collect()
 }
 
 #[cfg(test)]
