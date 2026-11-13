@@ -51,9 +51,9 @@ metrics, with and without filters.
   size, record count, dimension, field size) before allocating, so a hostile
   file cannot exhaust memory. HNSW graphs are rebuilt from the records on
   load rather than trusted from the file, and the stored `m` and
-  `ef_construction` are capped (128 and 4096 by default, see
-  `LoadLimits::max_m` / `max_ef_construction`) so a small hostile file
-  cannot force a rebuild that takes seconds. Since 0.2.1, snapshots above
+  `ef_construction` are capped (64 and 1024 by default, well above the
+  usual 16 and 200; see `LoadLimits::max_m` / `max_ef_construction`) so a
+  small hostile file cannot force a rebuild that takes seconds. Since 0.2.1, snapshots above
   those caps fail with `LimitExceeded`; raise the limits to load them.
 - **Concurrency**: the store is `Send + Sync`; reads share an `RwLock`,
   writes take it exclusively, and no lock is ever held across an `.await`.

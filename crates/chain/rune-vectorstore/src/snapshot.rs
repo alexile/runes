@@ -48,8 +48,8 @@ const MAX_EF: u32 = 1 << 20;
 /// An HNSW snapshot is rebuilt on load with the `m` and `ef_construction`
 /// stored in the file, and large values make the rebuild far slower (a 40 KB
 /// file with `m = 1024` used to take seconds). [`LoadLimits::max_m`] and
-/// [`LoadLimits::max_ef_construction`] cap them; the defaults sit well above
-/// any sensible build setting. Load time still grows with the number of
+/// [`LoadLimits::max_ef_construction`] cap them; the defaults (64 and 1024)
+/// sit well above the usual build settings (16 and 200). Load time still grows with the number of
 /// records, so keep [`LoadLimits::max_bytes`] tight for untrusted files.
 ///
 /// # Example
@@ -73,9 +73,9 @@ pub struct LoadLimits {
     pub max_dimension: u32,
     /// Largest single id, content or metadata field, in bytes. Default 64 MiB.
     pub max_field_bytes: u32,
-    /// Largest HNSW `m` accepted. Default 128.
+    /// Largest HNSW `m` accepted. Default 64.
     pub max_m: u32,
-    /// Largest HNSW `ef_construction` accepted. Default 4096.
+    /// Largest HNSW `ef_construction` accepted. Default 1024.
     pub max_ef_construction: u32,
 }
 
@@ -86,8 +86,8 @@ impl Default for LoadLimits {
             max_records: 10_000_000,
             max_dimension: 65_536,
             max_field_bytes: 64 << 20,
-            max_m: 128,
-            max_ef_construction: 4096,
+            max_m: 64,
+            max_ef_construction: 1024,
         }
     }
 }
@@ -602,7 +602,7 @@ mod tests {
                 err,
                 StoreError::LimitExceeded {
                     what: "HNSW m",
-                    limit: 128,
+                    limit: 64,
                     actual: 1024
                 }
             ),
@@ -622,13 +622,15 @@ mod tests {
             .with_max_m(MAX_M)
             .with_max_ef_construction(MAX_EF);
         assert_eq!(decode(&wide_ef, &lim).unwrap().len(), 1);
-        // Parameters at the default caps still load.
+        // Parameters at the default caps still load; one past them does not.
         assert_eq!(
-            decode(&hnsw_snapshot(128, 4096, 3), &LoadLimits::default())
+            decode(&hnsw_snapshot(64, 1024, 3), &LoadLimits::default())
                 .unwrap()
                 .len(),
             3
         );
+        assert!(decode(&hnsw_snapshot(65, 1024, 3), &LoadLimits::default()).is_err());
+        assert!(decode(&hnsw_snapshot(64, 1025, 3), &LoadLimits::default()).is_err());
     }
 
     #[test]
