@@ -398,6 +398,15 @@ fn write_wal_header(path: &Path, generation: u64) -> Result<(), WalError> {
     Ok(())
 }
 
+fn next_generation(generation: u64) -> Result<u64, WalError> {
+    generation.checked_add(1).ok_or_else(|| {
+        WalError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "snapshot generation counter is exhausted",
+        ))
+    })
+}
+
 fn open_append(path: &Path) -> Result<File, WalError> {
     Ok(OpenOptions::new().append(true).open(path)?)
 }
@@ -494,7 +503,7 @@ impl WalWriter {
                     apply_op(&mut graph, op).map_err(WalError::Apply)?;
                 }
                 // Fold the old-format log into a new snapshot right away.
-                let generation = snap_gen.unwrap_or(0) + 1;
+                let generation = next_generation(snap_gen.unwrap_or(0))?;
                 Self::fresh(graph, snapshot_path, wal_path, generation, true)
             }
             Header::V1 {
@@ -600,9 +609,11 @@ impl WalWriter {
     ///
     /// # Errors
     ///
-    /// Returns [`WalError`] if either file cannot be written.
+    /// Returns [`WalError`] if either file cannot be written, or
+    /// [`WalError::Io`] if the generation counter is exhausted (only possible
+    /// with a damaged or hand-edited snapshot).
     pub fn checkpoint(&mut self) -> Result<(), WalError> {
-        let next = self.generation + 1;
+        let next = next_generation(self.generation)?;
         self.graph.save_snapshot(&self.snapshot_path, next)?;
         // The snapshot is now ahead of the log, so frames appended to the old
         // log would be skipped on open. Refuse writes until the reset is done.

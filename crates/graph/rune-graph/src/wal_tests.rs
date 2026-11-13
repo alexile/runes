@@ -417,3 +417,18 @@ fn failed_checkpoint_does_not_lose_later_writes() {
         expected
     );
 }
+
+#[test]
+fn checkpoint_at_max_generation_is_an_error() {
+    let dir = tempdir().unwrap();
+    let (snap, wal) = empty(&dir);
+    crate::Graph::new().save_snapshot(&snap, u64::MAX).unwrap();
+    let mut w = WalWriter::open(&snap, &wal).unwrap();
+    w.add_node(&[], props! {}).unwrap();
+    assert!(w.checkpoint().is_err());
+    drop(w);
+    assert_eq!(
+        WalWriter::open(&snap, &wal).unwrap().graph().node_count(),
+        1
+    );
+}

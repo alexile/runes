@@ -10,6 +10,11 @@
 //!
 //! Keys are written in sorted order; readers accept any order.
 //!
+//! When the newest nodes or edges were removed, a first line
+//! `{"next_edge":3,"next_node":5,"type":"ids"}` records the id counters so
+//! removed ids are not handed out again after a reload. It is left out
+//! otherwise.
+//!
 //! Property values use plain JSON: `null`, booleans, numbers, strings and
 //! arrays. Integers become [`Value::Int`]; numbers with a fraction or
 //! exponent become [`Value::Float`]. Objects are not supported as values.
@@ -234,6 +239,20 @@ impl Graph {
     /// assert_eq!(g2.edge_count(), 1);
     /// ```
     pub fn write_jsonl(&self, mut w: impl Write) -> Result<(), PersistError> {
+        let mut node_ids: Vec<NodeId> = self.nodes().map(|(id, _)| id).collect();
+        node_ids.sort_unstable();
+        let mut edge_ids: Vec<EdgeId> = self.edges().map(|(id, _)| id).collect();
+        edge_ids.sort_unstable();
+        // A reader rebuilds the counters as max(id) + 1, which is only short
+        // when the highest ids were removed. Spell them out in that case.
+        let implied_node = node_ids.last().map_or(0, |id| id.0 + 1);
+        let implied_edge = edge_ids.last().map_or(0, |id| id.0 + 1);
+        if self.next_node > implied_node || self.next_edge > implied_edge {
+            write_line(
+                &mut w,
+                &json!({"next_edge": self.next_edge, "next_node": self.next_node, "type": "ids"}),
+            )?;
+        }
         let mut indexes: Vec<(&str, &str)> = self.indexes().collect();
         indexes.sort_unstable();
         for (label, key) in indexes {
@@ -242,8 +261,6 @@ impl Graph {
                 &json!({"key": key, "label": label, "type": "index"}),
             )?;
         }
-        let mut node_ids: Vec<NodeId> = self.nodes().map(|(id, _)| id).collect();
-        node_ids.sort_unstable();
         for id in node_ids {
             let Some(n) = self.node(id) else { continue };
             write_line(
@@ -256,8 +273,6 @@ impl Graph {
                 }),
             )?;
         }
-        let mut edge_ids: Vec<EdgeId> = self.edges().map(|(id, _)| id).collect();
-        edge_ids.sort_unstable();
         for id in edge_ids {
             let Some(e) = self.edge(id) else { continue };
             write_line(
@@ -288,7 +303,7 @@ impl Graph {
 
     /// Build a graph from JSON Lines, reading one bounded line at a time.
     ///
-    /// Ids are preserved. Blank lines are skipped. An edge must come after
+    /// Ids and id counters are preserved. Blank lines are skipped. An edge must come after
     /// both of its endpoint nodes.
     ///
     /// # Errors
@@ -337,6 +352,19 @@ impl Graph {
             };
             let kind: String = take_field(&mut obj, "type", &ctx)?;
             match kind.as_str() {
+                "ids" => {
+                    let next_node: u64 = take_field(&mut obj, "next_node", &ctx)?;
+                    let next_edge: u64 = take_field(&mut obj, "next_edge", &ctx)?;
+                    for (next, what) in [(next_node, "node"), (next_edge, "edge")] {
+                        if next > crate::graph::MAX_RESTORED_ID {
+                            return Err(
+                                ctx.invalid(format!("next {what} id {next} is out of range"))
+                            );
+                        }
+                    }
+                    g.next_node = g.next_node.max(next_node);
+                    g.next_edge = g.next_edge.max(next_edge);
+                }
                 "index" => {
                     let label: String = take_field(&mut obj, "label", &ctx)?;
                     let key: String = take_field(&mut obj, "key", &ctx)?;

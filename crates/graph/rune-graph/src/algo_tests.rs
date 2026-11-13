@@ -643,3 +643,44 @@ fn page_rank_known_values_with_dangling_node() {
     assert!((pr[&a] - 0.4).abs() < 1e-9, "{}", pr[&a]);
     assert!((pr[&b] - 0.6).abs() < 1e-9, "{}", pr[&b]);
 }
+
+/// Runs `f` on a helper thread and fails if it does not finish in time, so a
+/// regression shows up as a failure rather than a stuck test run.
+fn finishes_within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(secs))
+        .expect("did not finish in time")
+}
+
+#[test]
+fn dijkstra_terminates_on_negative_cycle() {
+    let mut g = Graph::new();
+    let a = g.add_node(&[], props! {});
+    let b = g.add_node(&[], props! {});
+    let c = g.add_node(&[], props! {});
+    g.add_edge(a, b, "E", props! { "w" => 1.0_f64 }).unwrap();
+    g.add_edge(b, a, "E", props! { "w" => -2.0_f64 }).unwrap();
+    g.add_edge(b, c, "E", props! { "w" => 100.0_f64 }).unwrap();
+    let g = std::sync::Arc::new(g);
+    let g2 = std::sync::Arc::clone(&g);
+    let dist = finishes_within(10, move || algo::dijkstra(&g2, a, "w"));
+    assert_eq!(dist.len(), 3);
+    let path = finishes_within(10, move || algo::shortest_weighted_path(&g, a, c, "w"));
+    assert_eq!(path.map(|(_, p)| p), Some(vec![a, b, c]));
+}
+
+#[test]
+fn dijkstra_nan_and_inf_weights_mean_unreachable() {
+    for w in [f64::NAN, f64::INFINITY] {
+        let mut g = Graph::new();
+        let a = g.add_node(&[], props! {});
+        let b = g.add_node(&[], props! {});
+        g.add_edge(a, b, "E", props! { "w" => w }).unwrap();
+        let d = algo::dijkstra(&g, a, "w");
+        assert!(!d.contains_key(&b), "{w}: {d:?}");
+        assert!(algo::shortest_weighted_path(&g, a, b, "w").is_none());
+    }
+}

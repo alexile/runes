@@ -429,4 +429,60 @@ mod tests {
             Err(PersistError::Invalid(_))
         ));
     }
+
+    #[test]
+    fn to_json_rejects_non_finite_floats() {
+        for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut g = Graph::new();
+            g.add_node(&[], props! { "x" => Value::List(vec![Value::Float(x)]) });
+            match g.to_json() {
+                Err(PersistError::Encode(_)) => {}
+                Ok(s) => panic!(
+                    "{x}: wrote {s}, from_json -> {:?}",
+                    Graph::from_json(&s).err()
+                ),
+                Err(e) => panic!("{e}"),
+            }
+        }
+        let mut g = Graph::new();
+        let a = g.add_node(&[], props! {});
+        let b = g.add_node(&[], props! {});
+        g.add_edge(a, b, "E", props! { "w" => f64::NAN }).unwrap();
+        assert!(matches!(g.to_json(), Err(PersistError::Encode(_))));
+    }
+
+    #[test]
+    fn jsonl_round_trip_does_not_reuse_deleted_ids() {
+        let mut g = Graph::new();
+        let a = g.add_node(&[], props! {});
+        let b = g.add_node(&[], props! {});
+        let e1 = g.add_edge(a, b, "E", props! {}).unwrap();
+        let e2 = g.add_edge(a, a, "E", props! {}).unwrap();
+        g.remove_edge(e2).unwrap();
+        g.remove_node(b).unwrap();
+        assert!(!g.contains_edge(e1));
+        let mut buf = Vec::new();
+        g.write_jsonl(&mut buf).unwrap();
+        let mut g2 = Graph::read_jsonl(buf.as_slice()).unwrap();
+        assert_eq!(g2.node_count(), 1);
+        assert_ne!(g2.add_node(&[], props! {}), b);
+        let e3 = g2.add_edge(a, a, "E", props! {}).unwrap();
+        assert!(e3 != e1 && e3 != e2);
+
+        // Nothing deleted at the end: output is unchanged, no extra record.
+        let mut g = Graph::new();
+        g.add_node(&[], props! {});
+        let mut buf = Vec::new();
+        g.write_jsonl(&mut buf).unwrap();
+        assert_eq!(String::from_utf8(buf).unwrap().lines().count(), 1);
+    }
+
+    #[test]
+    fn jsonl_rejects_out_of_range_counters() {
+        let input = format!(r#"{{"type":"ids","next_node":{},"next_edge":0}}"#, u64::MAX);
+        assert!(matches!(
+            Graph::read_jsonl(input.as_bytes()),
+            Err(PersistError::Invalid(_))
+        ));
+    }
 }

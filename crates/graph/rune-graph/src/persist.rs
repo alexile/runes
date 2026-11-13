@@ -294,6 +294,18 @@ fn invalid(e: impl std::fmt::Display) -> PersistError {
     PersistError::Invalid(e.to_string())
 }
 
+fn has_non_finite(value: &Value) -> bool {
+    let mut stack = vec![value];
+    while let Some(v) = stack.pop() {
+        match v {
+            Value::Float(x) if !x.is_finite() => return true,
+            Value::List(items) => stack.extend(items),
+            _ => {}
+        }
+    }
+    false
+}
+
 fn check_counter(next: u64, what: &str) -> Result<(), PersistError> {
     if next > crate::graph::MAX_RESTORED_ID {
         return Err(invalid(format!("next {what} id {next} is out of range")));
@@ -657,6 +669,21 @@ impl Graph {
     /// # }
     /// ```
     pub fn to_json(&self) -> Result<String, PersistError> {
+        // serde_json writes NaN and infinities as `null`, which `from_json`
+        // cannot read back, so refuse them up front.
+        let props = self
+            .nodes()
+            .map(|(_, n)| n.properties())
+            .chain(self.edges().map(|(_, e)| e.properties()));
+        for map in props {
+            for (key, value) in map {
+                if has_non_finite(value) {
+                    return Err(PersistError::Encode(format!(
+                        "property `{key}` holds a non-finite float, which JSON cannot represent"
+                    )));
+                }
+            }
+        }
         serde_json::to_string(self).map_err(|e| PersistError::Encode(e.to_string()))
     }
 

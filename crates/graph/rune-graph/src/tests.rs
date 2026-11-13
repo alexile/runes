@@ -524,3 +524,27 @@ fn edges_directed_both_reports_self_loop_twice() {
         vec![(e, a), (e, a)]
     );
 }
+
+#[test]
+fn update_node_panic_keeps_indexes() {
+    let mut g = Graph::new();
+    g.create_index("L", "k");
+    let id = g.add_node(&["L"], props! { "k" => 1_i64 });
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        g.update_node(id, |n| {
+            n.add_label("M");
+            n.set("k", Value::Int(2));
+            panic!("boom");
+        })
+    }));
+    assert!(r.is_err());
+    // Whatever the closure managed to change is what the indexes must show.
+    assert_eq!(g.nodes_with_label("L").collect::<Vec<_>>(), vec![id]);
+    assert_eq!(g.nodes_with_label("M").collect::<Vec<_>>(), vec![id]);
+    assert_eq!(
+        g.nodes_by_property("L", "k", &Value::Int(2))
+            .collect::<Vec<_>>(),
+        vec![id]
+    );
+    assert_eq!(g.nodes_by_property("L", "k", &Value::Int(1)).count(), 0);
+}

@@ -89,6 +89,8 @@
 //!
 //! [`Graph::write_jsonl`] writes one object per line: index definitions,
 //! then nodes, then edges, each sorted by id. Property values are plain JSON.
+//! If the newest nodes or edges were removed, a leading `"type":"ids"` line
+//! keeps the id counters so those ids are not reused after a reload.
 //!
 //! ```text
 //! {"key":"name","label":"Person","type":"index"}

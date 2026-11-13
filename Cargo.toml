@@ -345,7 +345,7 @@ rune-fuzzyhash = { path = "crates/common/rune-fuzzyhash", version = "0.1.0" }
 rune-finding-dedupe = { path = "crates/secops/rune-finding-dedupe", version = "0.1.1" }
 rune-geohash = { path = "crates/geo/rune-geohash", version = "0.1.2" }
 rune-geoip = { path = "crates/net/rune-geoip", version = "0.1.0" }
-rune-graph = { path = "crates/graph/rune-graph", version = "0.4.1" }
+rune-graph = { path = "crates/graph/rune-graph", version = "0.4.2" }
 rune-hdbscan = { path = "crates/ml/rune-hdbscan", version = "0.1.1" }
 rune-graphql = { path = "crates/net/rune-graphql", version = "0.1.0" }
 rune-hex = { path = "crates/common/rune-hex", version = "0.3.0" }

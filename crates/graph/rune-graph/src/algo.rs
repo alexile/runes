@@ -45,7 +45,11 @@ fn edge_weight(graph: &Graph, eid: crate::id::EdgeId, weight_key: &str) -> f64 {
 ///
 /// Edge weights are read from the property named `weight_key`. If an edge does
 /// not have that property (or its value is not numeric), a default weight of
-/// `1.0` is used. Negative weights are not supported.
+/// `1.0` is used. Edges whose weight is NaN or `+inf` are never taken.
+///
+/// Negative weights are not supported. Each node is settled once, so they
+/// cannot make the search loop (even around a negative cycle), but the
+/// distances may then not be the true minimum.
 ///
 /// Returns a map from `NodeId` → distance. Nodes unreachable from `start` are
 /// not present in the map, and the map is empty if `start` is not in the graph.
@@ -75,23 +79,28 @@ pub fn dijkstra(graph: &Graph, start: NodeId, weight_key: &str) -> HashMap<NodeI
     // min-heap: (Reverse(distance), node)
     let mut heap: BinaryHeap<(Reverse<OrdF64>, NodeId)> = BinaryHeap::new();
 
+    let mut settled: HashSet<NodeId> = HashSet::new();
+
     dist.insert(start, 0.0);
     heap.push((Reverse(OrdF64(0.0)), start));
 
     while let Some((Reverse(OrdF64(cost)), node)) = heap.pop() {
-        if dist.get(&node).copied().unwrap_or(f64::INFINITY) < cost {
+        if !settled.insert(node) {
             continue;
         }
         for eid in graph.outgoing_edges(node) {
             let Some(edge) = graph.edge(eid) else {
                 continue;
             };
-            let w = edge_weight(graph, eid, weight_key);
             let next = edge.target();
-            let new_cost = cost + w;
-            let entry = dist.entry(next).or_insert(f64::INFINITY);
-            if new_cost < *entry {
-                *entry = new_cost;
+            if settled.contains(&next) {
+                continue;
+            }
+            let new_cost = cost + edge_weight(graph, eid, weight_key);
+            // Also false for NaN and for an infinite cost, so such edges
+            // never make a node reachable.
+            if new_cost < dist.get(&next).copied().unwrap_or(f64::INFINITY) {
+                dist.insert(next, new_cost);
                 heap.push((Reverse(OrdF64(new_cost)), next));
             }
         }
@@ -140,6 +149,8 @@ pub fn shortest_weighted_path(
     let mut prev: HashMap<NodeId, NodeId> = HashMap::new();
     let mut heap: BinaryHeap<(Reverse<OrdF64>, NodeId)> = BinaryHeap::new();
 
+    let mut settled: HashSet<NodeId> = HashSet::new();
+
     dist.insert(from, 0.0);
     heap.push((Reverse(OrdF64(0.0)), from));
 
@@ -147,19 +158,20 @@ pub fn shortest_weighted_path(
         if node == to {
             break;
         }
-        if dist.get(&node).copied().unwrap_or(f64::INFINITY) < cost {
+        if !settled.insert(node) {
             continue;
         }
         for eid in graph.outgoing_edges(node) {
             let Some(edge) = graph.edge(eid) else {
                 continue;
             };
-            let w = edge_weight(graph, eid, weight_key);
             let next = edge.target();
-            let new_cost = cost + w;
-            let entry = dist.entry(next).or_insert(f64::INFINITY);
-            if new_cost < *entry {
-                *entry = new_cost;
+            if settled.contains(&next) {
+                continue;
+            }
+            let new_cost = cost + edge_weight(graph, eid, weight_key);
+            if new_cost < dist.get(&next).copied().unwrap_or(f64::INFINITY) {
+                dist.insert(next, new_cost);
                 prev.insert(next, node);
                 heap.push((Reverse(OrdF64(new_cost)), next));
             }

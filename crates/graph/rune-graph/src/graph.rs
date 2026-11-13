@@ -66,6 +66,20 @@ fn index_labels(map: &mut HashMap<String, HashSet<NodeId>>, id: NodeId, entry: &
     }
 }
 
+struct Reindex<'a> {
+    labels: &'a mut HashMap<String, HashSet<NodeId>>,
+    indexes: &'a mut PropertyIndexes,
+    id: NodeId,
+    entry: &'a mut NodeEntry,
+}
+
+impl Drop for Reindex<'_> {
+    fn drop(&mut self) {
+        index_labels(self.labels, self.id, self.entry);
+        self.indexes.insert_node(self.id, self.entry);
+    }
+}
+
 fn unindex_labels(map: &mut HashMap<String, HashSet<NodeId>>, id: NodeId, entry: &NodeEntry) {
     for label in entry.labels() {
         if let Some(set) = map.get_mut(label) {
@@ -250,10 +264,15 @@ impl Graph {
             .ok_or(GraphError::NodeNotFound(id))?;
         unindex_labels(&mut self.node_labels, id, entry);
         self.indexes.remove_node(id, entry);
-        let out = f(entry);
-        index_labels(&mut self.node_labels, id, entry);
-        self.indexes.insert_node(id, entry);
-        Ok(out)
+        // Reindex from a drop guard so a panicking closure, caught further
+        // up, still leaves the indexes matching the node.
+        let guard = Reindex {
+            labels: &mut self.node_labels,
+            indexes: &mut self.indexes,
+            id,
+            entry,
+        };
+        Ok(f(guard.entry))
     }
 
     /// Add `label` to a node. Returns `true` if the label was not already present.
