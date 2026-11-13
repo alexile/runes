@@ -96,7 +96,7 @@ let app: Router = Router::new()
 | `.allow_missing_headers(bool)` | `false` | Let requests with neither `Origin` nor `Sec-Fetch-Site` through. |
 | `.trust_proxy_headers(bool)` | `false` | Take scheme and host from `Forwarded` / `X-Forwarded-Proto` / `X-Forwarded-Host`. Only behind a proxy that overwrites them. |
 | `.assume_https(bool)` | `true` | Scheme to assume when nothing else says. |
-| `.exempt_path(path)` / `.exempt_prefix(prefix)` | none | Skip the check (webhooks with their own auth). |
+| `.exempt_path(path)` / `.exempt_prefix(prefix)` | none | Skip the check (webhooks with their own auth). A prefix matches whole segments: `/webhooks` covers `/webhooks/x`, not `/webhooks-admin`. |
 | `.insecure_bypass(fn(&Parts) -> bool)` | none | Skip the check when the hook returns `true`, e.g. for bearer-token requests. Not for any `Authorization` header: browsers attach Basic auth on their own. |
 | `.status(StatusCode)` | `403` | Rejection status. |
 
@@ -197,7 +197,7 @@ async fn login() -> impl IntoResponse {
 | `.token_ttl(Duration)` | none | Token lifetime; also sets the cookie `Max-Age`. |
 | `.verify_origin(bool)` | `true` | `Origin` / `Sec-Fetch-Site` / `Referer` checks. |
 | `.trusted_origin(origin)` | none | Extra allowed origin, e.g. `https://app.example.com`. |
-| `.exempt_path(path)` / `.exempt_prefix(prefix)` | none | Skip CSRF handling (webhooks with their own auth). |
+| `.exempt_path(path)` / `.exempt_prefix(prefix)` | none | Skip CSRF handling (webhooks with their own auth). A prefix matches whole segments: `/webhooks` covers `/webhooks/x`, not `/webhooks-admin`. |
 | `.status(StatusCode)` | `403` | Rejection status. |
 
 ## Security notes

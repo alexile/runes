@@ -20,6 +20,9 @@ fn app(layer: CsrfLayer) -> Router {
         .route("/webhooks/pay", post(|| async { "hook" }))
         .route("/hooks/exact", post(|| async { "hook" }))
         .route("/hooks/exact2", post(|| async { "hook" }))
+        .route("/webhooks", post(|| async { "hook" }))
+        .route("/webhooksX", post(|| async { "not a hook" }))
+        .route("/webhooksX/pay", post(|| async { "not a hook" }))
         .layer(layer)
 }
 
@@ -452,6 +455,26 @@ async fn exempt_paths_and_prefixes() {
         CsrfRejection::CrossOrigin,
     )
     .await;
+}
+
+#[tokio::test]
+async fn exempt_prefixes_stop_at_segment_boundaries() {
+    let evil = [("origin", "https://evil.example")];
+    for prefix in ["/webhooks", "/webhooks/"] {
+        let app = app(CsrfLayer::origin(
+            CsrfOriginConfig::new().exempt_prefix(prefix),
+        ));
+        assert_ok(app.clone(), request(Method::POST, "/webhooks", &evil)).await;
+        assert_ok(app.clone(), request(Method::POST, "/webhooks/pay", &evil)).await;
+        for path in ["/webhooksX", "/webhooksX/pay"] {
+            assert_rejected(
+                app.clone(),
+                request(Method::POST, path, &evil),
+                CsrfRejection::CrossOrigin,
+            )
+            .await;
+        }
+    }
 }
 
 #[tokio::test]

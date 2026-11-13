@@ -58,6 +58,8 @@ fn app(config: CsrfConfig) -> Router {
             get(|| async { ([(SET_COOKIE, "session_id=abc; Path=/; HttpOnly")], "hello") }),
         )
         .route("/webhooks/stripe", post(|| async { "hook" }))
+        .route("/webhooks", post(|| async { "hook" }))
+        .route("/webhooksX", post(|| async { "not a hook" }))
         .layer(CsrfLayer::new(config))
 }
 
@@ -671,6 +673,20 @@ async fn exempt_paths_skip_checks() {
     )
     .await;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn exempt_prefix_stops_at_segment_boundary() {
+    for prefix in ["/webhooks", "/webhooks/"] {
+        let post = |path: &str| Request::post(path).body(Body::empty()).unwrap();
+        let cfg = config().exempt_prefix(prefix);
+        for path in ["/webhooks", "/webhooks/stripe"] {
+            let res = send(app(cfg.clone()), post(path)).await;
+            assert_eq!(res.status(), StatusCode::OK, "{prefix} {path}");
+        }
+        let res = send(app(cfg), post("/webhooksX")).await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{prefix}");
+    }
 }
 
 #[tokio::test]

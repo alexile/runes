@@ -196,8 +196,9 @@ impl CsrfOriginConfig {
         self
     }
 
-    /// Skips the check for every path starting with `prefix`. Include the
-    /// trailing slash to stop at a segment boundary.
+    /// Skips the check for `prefix` and every path below it: `/api/v1`
+    /// covers `/api/v1` and `/api/v1/x`, not `/api/v10`. A trailing slash
+    /// makes no difference.
     ///
     /// ```rust
     /// use rune_axum_csrf::CsrfOriginConfig;
@@ -263,7 +264,7 @@ impl CsrfOriginConfig {
             || self
                 .exempt_prefixes
                 .iter()
-                .any(|p| path.starts_with(p.as_str()))
+                .any(|p| crate::layer::prefix_covers(p, path))
             || self.bypass.iter().any(|f| f(parts))
     }
 

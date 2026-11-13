@@ -316,8 +316,9 @@ impl CsrfConfig {
         self
     }
 
-    /// Skips CSRF handling for every path starting with `prefix`
-    /// (e.g. `/webhooks/`). Include the trailing slash to stop at a segment boundary.
+    /// Skips CSRF handling for `prefix` and every path below it (e.g.
+    /// `/webhooks` covers `/webhooks` and `/webhooks/stripe`, not
+    /// `/webhooks-admin`). A trailing slash makes no difference.
     #[must_use]
     pub fn exempt_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.exempt_prefixes.push(prefix.into());
@@ -326,10 +327,7 @@ impl CsrfConfig {
 
     fn is_exempt(&self, path: &str) -> bool {
         self.exempt_paths.iter().any(|p| p == path)
-            || self
-                .exempt_prefixes
-                .iter()
-                .any(|p| path.starts_with(p.as_str()))
+            || self.exempt_prefixes.iter().any(|p| prefix_covers(p, path))
     }
 
     const fn prefixed(&self) -> bool {
@@ -841,4 +839,12 @@ fn finish<B>(
         response.headers_mut().append(SET_COOKIE, value);
     }
     response
+}
+
+/// Whether `prefix` covers `path` on a segment boundary: `/api` and `/api/`
+/// both cover `/api` and `/api/x`, never `/apix`.
+pub fn prefix_covers(prefix: &str, path: &str) -> bool {
+    let prefix = prefix.trim_end_matches('/');
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
