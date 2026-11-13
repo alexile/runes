@@ -333,3 +333,32 @@ fn env_reader_over_dotenv_then_environment() {
         .unwrap();
     assert_eq!((config.host.as_str(), config.port), ("dotenv", 2));
 }
+
+#[test]
+fn expansion_cannot_blow_up_memory() {
+    // Each line doubles the previous value: 60 lines would be exabytes.
+    let mut text = String::from("V0=0123456789abcdef\n");
+    for i in 1..60 {
+        let prev = i - 1;
+        text += &[
+            "V",
+            &i.to_string(),
+            "=${V",
+            &prev.to_string(),
+            "}${V",
+            &prev.to_string(),
+            "}\n",
+        ]
+        .concat();
+    }
+    let error = DotenvOptions::new().expand(true).parse(&text).unwrap_err();
+    assert!(
+        matches!(error.kind, DotenvErrorKind::ExpansionTooLarge(_)),
+        "{error}"
+    );
+    // Moderate reuse is fine, and expansion off never grows anything.
+    let ok = "A=abc\nB=${A}${A}\nC=$B-$B\n";
+    let parsed = DotenvOptions::new().expand(true).parse(ok).unwrap();
+    assert_eq!(parsed.get("C"), Some("abcabc-abcabc"));
+    assert!(Dotenv::parse(&text).is_ok());
+}

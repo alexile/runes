@@ -65,6 +65,10 @@ pub enum DotenvErrorKind {
     /// The input exceeds the size limit.
     #[error("input is larger than the {0}-byte limit")]
     TooLarge(u64),
+    /// Expansion would add more than this many bytes to the values; see
+    /// [`DotenvOptions::expand`].
+    #[error("expanded values exceed the {0}-byte limit")]
+    ExpansionTooLarge(u64),
     /// The file is not UTF-8.
     #[error("file is not valid UTF-8")]
     NotUtf8,
@@ -207,6 +211,13 @@ impl DotenvOptions {
     /// [`expansion_env`](Self::expansion_env) first, then to keys set
     /// earlier in the same file, and to the empty string otherwise.
     /// `$(...)` is never treated as a command; it stays literal text.
+    ///
+    /// Each value is expanded once, when it is defined, so references can
+    /// never loop. Their total is still capped: the text that expansions
+    /// insert, summed over the whole file, may not exceed
+    /// [`max_size`](Self::max_size) or 1 MiB, whichever is larger, so a
+    /// short file that doubles a value line after line fails with
+    /// [`DotenvErrorKind::ExpansionTooLarge`] instead of exhausting memory.
     pub const fn expand(mut self, on: bool) -> Self {
         self.expand = on;
         self
@@ -535,6 +546,8 @@ struct Parser<'a> {
     column: usize,
     options: &'a DotenvOptions,
     defined: BTreeMap<String, String>,
+    /// Bytes inserted by expansions so far.
+    expanded: u64,
 }
 
 impl<'a> Parser<'a> {
@@ -547,6 +560,7 @@ impl<'a> Parser<'a> {
             column: 1,
             options,
             defined: BTreeMap::new(),
+            expanded: 0,
         }
     }
 
@@ -800,14 +814,12 @@ impl<'a> Parser<'a> {
                     Some((text, colon)) if value.is_none() || (colon && value == Some("")) => {
                         out.push_str(&text);
                     }
-                    _ => out.push_str(value.unwrap_or_default()),
+                    _ => self.insert(out, &name, &start)?,
                 }
             }
             Some(c) if is_key_start(c) => {
                 let name = self.name();
-                if let Some(v) = self.lookup(&name) {
-                    out.push_str(v);
-                }
+                self.insert(out, &name, &start)?;
             }
             _ => out.push('$'),
         }
@@ -837,6 +849,27 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+    }
+
+    /// Appends the value of `name`, within the expansion budget.
+    fn insert(
+        &mut self,
+        out: &mut String,
+        name: &str,
+        at: &DotenvError,
+    ) -> Result<(), DotenvError> {
+        let limit = self.options.max_size.max(DEFAULT_MAX_FILE_SIZE);
+        let value = self.lookup(name).unwrap_or_default();
+        let total = self.expanded.saturating_add(value.len() as u64);
+        if total > limit {
+            return Err(DotenvError {
+                kind: DotenvErrorKind::ExpansionTooLarge(limit),
+                ..at.clone()
+            });
+        }
+        out.push_str(value);
+        self.expanded = total;
+        Ok(())
     }
 
     fn lookup(&self, name: &str) -> Option<&str> {

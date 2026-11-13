@@ -491,7 +491,8 @@ impl fmt::Debug for LoadedConfig {
 
 impl LoadedConfig {
     /// Every final value with the layer it came from, hiding the values of
-    /// secret-looking keys (see [`is_secret_key`](crate::is_secret_key)).
+    /// secret-looking keys (see [`is_secret_key`](crate::is_secret_key)),
+    /// and whole arrays that hold a table with such a key.
     ///
     /// ```
     /// use rune_config::{ConfigLoader, EnvMapping};
@@ -520,14 +521,17 @@ impl LoadedConfig {
             .provenance
             .iter()
             .map(|(key, source)| {
-                let redacted = is_secret_key(key) || secret(key);
+                let value = parse_key(key)
+                    .ok()
+                    .and_then(|segments| lookup(&self.table, &segments));
+                // An array is one leaf, so a table inside it can hold a
+                // secret-looking key of its own.
+                let redacted =
+                    is_secret_key(key) || secret(key) || value.is_some_and(has_secret_key);
                 let value = if redacted {
                     REDACTED.to_owned()
                 } else {
-                    parse_key(key)
-                        .ok()
-                        .and_then(|segments| lookup(&self.table, &segments))
-                        .map_or_else(String::new, ToString::to_string)
+                    value.map_or_else(String::new, ToString::to_string)
                 };
                 ReportEntry {
                     key: key.clone(),
@@ -649,16 +653,53 @@ impl LoadedConfig {
                 .unwrap_or(Source::Merged);
             let key = key.filter(|k| !k.is_empty()).map(|k| format_key(&k));
             let mut message = error.message().trim_end().to_owned();
-            if let Some(key) = key.as_deref().filter(|k| is_secret_key(k))
+            if let Some(key) = key.as_deref()
                 && let Some(value) = self.get(key)
             {
-                let raw = value
-                    .as_str()
-                    .map_or_else(|| value.to_string(), str::to_owned);
-                message = scrub(message, &raw, true);
+                // The error can quote any value under the key, including one
+                // in a table inside an array.
+                let mut secrets = Vec::new();
+                secret_values(value, is_secret_key(key), &mut secrets);
+                for raw in secrets {
+                    message = scrub(message, &raw, true);
+                }
             }
             ConfigIssue::new(source, key, message).into()
         })
+    }
+}
+
+/// Whether a table anywhere inside `value` has a secret-looking key.
+fn has_secret_key(value: &Value) -> bool {
+    match value {
+        Value::Table(table) => table
+            .iter()
+            .any(|(key, value)| is_secret_key(key) || has_secret_key(value)),
+        Value::Array(items) => items.iter().any(has_secret_key),
+        _ => false,
+    }
+}
+
+/// The values in `value` that sit under a secret-looking key, as an error
+/// message would quote them (strings bare, the rest as TOML).
+fn secret_values(value: &Value, secret: bool, out: &mut Vec<String>) {
+    match value {
+        Value::Table(table) => {
+            for (key, value) in table {
+                secret_values(value, secret || is_secret_key(key), out);
+            }
+        }
+        Value::Array(items) => {
+            if secret {
+                out.push(value.to_string());
+            }
+            for item in items {
+                secret_values(item, secret, out);
+            }
+        }
+        Value::String(text) if secret => out.push(text.clone()),
+        _ if secret => out.push(value.to_string()),
+        _ => {}
     }
 }
 

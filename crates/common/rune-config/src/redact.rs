@@ -53,13 +53,20 @@ pub fn is_secret_key(key: &str) -> bool {
     SECRET_MARKERS.iter().any(|marker| folded.contains(marker))
 }
 
-/// Replaces every occurrence of `raw` in `message` when `secret` is set.
+/// Replaces every occurrence of `raw` (and of `raw` trimmed) in `message`
+/// when `secret` is set.
 pub fn scrub(message: String, raw: &str, secret: bool) -> String {
-    if secret && !raw.is_empty() && message.contains(raw) {
-        message.replace(raw, REDACTED)
-    } else {
-        message
+    if !secret {
+        return message;
     }
+    // Parsers often quote the trimmed value rather than the raw one.
+    let mut message = message;
+    for needle in [raw, raw.trim()] {
+        if !needle.is_empty() && message.contains(needle) {
+            message = message.replace(needle, REDACTED);
+        }
+    }
+    message
 }
 
 #[cfg(test)]
@@ -93,5 +100,9 @@ mod tests {
         );
         assert_eq!(scrub("bad `x`".into(), "x", false), "bad `x`");
         assert_eq!(scrub("bad".into(), "", true), "bad");
+        assert_eq!(
+            scrub("bad `hunter2`".into(), " hunter2\n", true),
+            "bad `<redacted>`"
+        );
     }
 }

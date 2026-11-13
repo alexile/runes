@@ -264,3 +264,39 @@ fn merged_config_round_trips_through_toml() {
         loaded.deserialize::<Config>().unwrap()
     );
 }
+
+#[test]
+fn report_hides_secrets_nested_in_arrays() {
+    let loaded = ConfigLoader::new()
+        .with_defaults_toml(
+            "[[upstreams]]\nhost = \"a.internal\"\npassword = \"hunter2\"\n\n\
+             [scan]\nrate_limit = 5\n",
+        )
+        .load()
+        .unwrap();
+    let report = loaded.report().to_string();
+    assert!(!report.contains("hunter2"), "{report}");
+    assert!(report.contains("scan.rate_limit = 5"), "{report}");
+    assert!(!format!("{loaded:?}").contains("hunter2"));
+}
+
+#[test]
+fn type_errors_hide_secrets_nested_in_arrays() {
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Upstream {
+        host: String,
+        password: u32,
+    }
+    #[derive(Debug, Deserialize)]
+    #[allow(dead_code)]
+    struct Upstreams {
+        upstreams: Vec<Upstream>,
+    }
+    let loaded = ConfigLoader::new()
+        .with_defaults_toml("[[upstreams]]\nhost = \"a\"\npassword = \"hunter2\"\n")
+        .load()
+        .unwrap();
+    let error = loaded.deserialize::<Upstreams>().unwrap_err();
+    assert!(!error.to_string().contains("hunter2"), "{error}");
+}

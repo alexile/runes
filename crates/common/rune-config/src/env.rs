@@ -551,7 +551,18 @@ impl LeafDe<'_> {
     ) -> Result<V::Value, EnvError> {
         serde_json::from_str::<serde_json::Value>(self.raw)
             .and_then(|value| call(value, visitor))
-            .map_err(|error| self.error(format!("invalid JSON: {error}")))
+            .map_err(|error| {
+                if self.secret() {
+                    // serde_json quotes offending values; keep only where.
+                    self.error(format!(
+                        "invalid JSON at line {}, column {}",
+                        error.line(),
+                        error.column()
+                    ))
+                } else {
+                    self.error(format!("invalid JSON: {error}"))
+                }
+            })
     }
 
     fn parse<T: std::str::FromStr>(&self, what: &str) -> Result<T, EnvError> {
@@ -954,5 +965,26 @@ mod tests {
         assert!(!e.to_string().contains("hunter2"), "{e}");
         let e = read::<S>(&app(), &[("APP_API_TOKEN", "1"), ("APP_MODE", "loud")]).unwrap_err();
         assert_eq!(e.var(), Some("APP_MODE"));
+    }
+
+    #[test]
+    fn secrets_stay_out_of_json_and_trimmed_errors() {
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct Tokens {
+            tokens: Vec<u32>,
+        }
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct Secret {
+            secret_level: Level,
+        }
+        // A JSON list: serde_json quotes the offending element.
+        let e = read::<Tokens>(&app(), &[("APP_TOKENS", r#"[1, "hunter2"]"#)]).unwrap_err();
+        assert!(!e.to_string().contains("hunter2"), "{e}");
+        assert_eq!(e.var(), Some("APP_TOKENS"));
+        // An enum gets the trimmed value, which differs from the raw one.
+        let e = read::<Secret>(&app(), &[("APP_SECRET_LEVEL", " hunter2 ")]).unwrap_err();
+        assert!(!e.to_string().contains("hunter2"), "{e}");
     }
 }
