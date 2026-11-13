@@ -39,6 +39,15 @@ impl Error {
     }
 
     /// This error as the [`rune_service_probe::Error`] a session reports.
+    /// For errors inside a message whose length said it was complete: a
+    /// short element there is malformed, since more bytes cannot fix it.
+    pub(crate) fn within_complete_message(self) -> Self {
+        match self {
+            Self::Truncated { what } => Self::malformed(what, "element overruns its message"),
+            e @ Self::Malformed { .. } => e,
+        }
+    }
+
     pub(crate) fn into_probe_error(self, probe: &str) -> rune_service_probe::Error {
         rune_service_probe::Error::unrecognized(probe, self.to_string())
     }

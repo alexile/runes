@@ -222,10 +222,11 @@ pub fn parse_greeting(bytes: &[u8]) -> Result<Greeting, Error> {
     }
     let payload = r.take(len)?;
     let mut r = Reader::new(payload, WHAT);
-    match r.u8()? {
+    let greeting = match r.u8()? {
         0xff => parse_err(r).map(Greeting::Error),
         protocol => parse_handshake(protocol, r).map(Greeting::Handshake),
-    }
+    };
+    greeting.map_err(Error::within_complete_message)
 }
 
 fn parse_err(mut r: Reader<'_>) -> Result<ErrPacket, Error> {
@@ -454,6 +455,16 @@ fn report_error(err: &ErrPacket) -> ServiceInfo {
 mod tests {
     use super::*;
     use rune_service_probe::{Options, simulate};
+
+    #[test]
+    fn a_complete_packet_with_a_short_handshake_is_malformed_not_truncated() {
+        // The header says five bytes and all five arrived: the handshake
+        // inside is cut short, and no more bytes will fix that.
+        let packet = [5, 0, 0, 0, 10, b'8', b'.', b'0', 0];
+        let err = parse_greeting(&packet).unwrap_err();
+        assert!(!err.is_truncated(), "{err}");
+        assert_eq!(run(&[&packet]).end, End::Done);
+    }
 
     /// Build a protocol-10 greeting packet.
     fn greeting(version: &str, caps: u32, plugin: &str) -> Vec<u8> {

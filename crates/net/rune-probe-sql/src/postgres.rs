@@ -245,7 +245,8 @@ pub const fn auth_method_name(code: u32) -> &'static str {
 /// # Errors
 ///
 /// [`Error::Truncated`] until the whole message has arrived, and
-/// [`Error::Malformed`] for a length no backend message has.
+/// [`Error::Malformed`] for a length no backend message has, or a body
+/// cut short inside a complete message.
 pub fn parse_message(bytes: &[u8]) -> Result<(Message, usize), Error> {
     let mut r = Reader::new(bytes, WHAT);
     let tag = r.u8()?;
@@ -257,8 +258,14 @@ pub fn parse_message(bytes: &[u8]) -> Result<(Message, usize), Error> {
         return Err(Error::malformed(WHAT, format!("length {len}")));
     }
     let body = r.take(len - 4)?;
+    parse_body(tag, body)
+        .map(|msg| (msg, len + 1))
+        .map_err(Error::within_complete_message)
+}
+
+fn parse_body(tag: u8, body: &[u8]) -> Result<Message, Error> {
     let mut b = Reader::new(body, WHAT);
-    let msg = match tag {
+    Ok(match tag {
         b'R' => {
             let code = b.u32_be()?;
             let mut mechanisms = Vec::new();
@@ -280,8 +287,7 @@ pub fn parse_message(bytes: &[u8]) -> Result<(Message, usize), Error> {
         },
         b'Z' => Message::ReadyForQuery,
         other => Message::Other(other),
-    };
-    Ok((msg, len + 1))
+    })
 }
 
 fn parse_fields(mut r: Reader<'_>) -> ErrorFields {
@@ -736,6 +742,27 @@ impl ProbeSession for AuthSession {
 mod tests {
     use super::*;
     use rune_service_probe::{Options, simulate};
+
+    #[test]
+    fn a_complete_message_with_a_short_body_is_malformed_not_truncated() {
+        // ParameterStatus whose length covers the body, but the body has
+        // no NUL terminators. Waiting for more bytes would stall the
+        // session behind it.
+        let bad = [b'S', 0, 0, 0, 7, b'a', b'b', b'c'];
+        let err = parse_message(&bad).unwrap_err();
+        assert!(!err.is_truncated(), "{err}");
+
+        let mut replies = bad.to_vec();
+        replies.extend_from_slice(&[b'R', 0, 0, 0, 8, 0, 0, 0, 5]);
+        let sim = simulate(
+            &PostgresAuthProbe::new(),
+            &Target::new("db.test", 5432),
+            &[&replies],
+            &Options::default().with_allow_intrusive(true),
+        )
+        .unwrap();
+        assert_eq!(sim.end, End::Done);
+    }
 
     fn error_response(fields: &[(u8, &str)]) -> Vec<u8> {
         let mut body = Vec::new();
