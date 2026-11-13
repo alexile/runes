@@ -15,6 +15,10 @@ per request — method, path, query string, client IP, user-agent, HTTP status, 
 and delivers it to a pluggable [`AuditSink`](https://docs.rs/rune-axum-audit/latest/rune_axum_audit/trait.AuditSink.html).
 The inner service and its response pass through unchanged; auditing is purely observational.
 
+Values of credential-looking query parameters (`api_key`, `token`, `password`, `secret`,
+`signature` and the like) are recorded as `[redacted]`. The client IP comes from
+`X-Forwarded-For` / `X-Real-IP`, which the client controls unless a proxy overwrites them.
+
 ## Installation
 
 ```toml

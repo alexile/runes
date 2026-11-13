@@ -86,9 +86,15 @@ pub struct AuditEvent {
     pub method: String,
     /// Request path without query string (e.g. `"/api/users"`).
     pub path: String,
-    /// Query string, without the leading `?`, when present.
+    /// Query string, without the leading `?`, when present. Values of
+    /// credential-looking parameters (`api_key`, `token`, `password`,
+    /// `secret`, `signature` and the like) are replaced with `[redacted]`.
     pub query: Option<String>,
-    /// Client IP from `X-Forwarded-For` or `X-Real-IP`, when present.
+    /// Client IP from the first `X-Forwarded-For` entry or `X-Real-IP`,
+    /// when present.
+    ///
+    /// These headers come from the client unless a proxy in front of the
+    /// app overwrites them, so treat this as a claim, not an identity.
     pub client_ip: Option<String>,
     /// Value of the `User-Agent` header, when present.
     pub user_agent: Option<String>,
@@ -116,10 +122,67 @@ impl fmt::Display for AuditEvent {
             write!(formatter, " ip={ip}")?;
         }
         if let Some(ua) = &self.user_agent {
-            write!(formatter, " ua=\"{ua}\"")?;
+            // Escape so a crafted user agent cannot close the quotes and
+            // append fields of its own.
+            formatter.write_str(" ua=\"")?;
+            for c in ua.chars() {
+                if matches!(c, '"' | '\\') {
+                    formatter.write_str("\\")?;
+                }
+                write!(formatter, "{c}")?;
+            }
+            formatter.write_str("\"")?;
         }
         Ok(())
     }
+}
+
+/// Query parameter names whose values are never recorded.
+const SECRET_PARAMS: &[&str] = &[
+    "key",
+    "code",
+    "sig",
+    "pwd",
+    "auth",
+    "jwt",
+    "session",
+    "sessionid",
+];
+
+/// Substrings that mark a query parameter name as a credential.
+const SECRET_PARTS: &[&str] = &[
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "api_key",
+    "apikey",
+    "api-key",
+    "signature",
+    "credential",
+];
+
+fn is_secret_param(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    SECRET_PARAMS.contains(&name.as_str()) || SECRET_PARTS.iter().any(|part| name.contains(part))
+}
+
+/// Replaces the values of credential-looking parameters with `[redacted]`.
+fn redact_query(query: &str) -> String {
+    let mut out = String::with_capacity(query.len());
+    for (i, pair) in query.split('&').enumerate() {
+        if i > 0 {
+            out.push('&');
+        }
+        match pair.split_once('=') {
+            Some((name, _)) if is_secret_param(name) => {
+                out.push_str(name);
+                out.push_str("=[redacted]");
+            }
+            _ => out.push_str(pair),
+        }
+    }
+    out
 }
 
 fn format_timestamp(secs: u64) -> String {
@@ -494,7 +557,7 @@ where
 
         let method = req.method().to_string();
         let path = req.uri().path().to_owned();
-        let query = req.uri().query().map(str::to_owned);
+        let query = req.uri().query().map(redact_query);
 
         let client_ip = req
             .headers()
@@ -770,5 +833,47 @@ mod tests {
         assert!(output.contains("latency=5ms"));
         assert!(output.contains("ip=1.2.3.4"));
         assert!(output.contains("ua=\"curl/7.68.0\""));
+    }
+
+    #[test]
+    fn user_agent_cannot_forge_fields() {
+        let event = AuditEvent {
+            timestamp_secs: 0,
+            method: "GET".to_owned(),
+            path: "/".to_owned(),
+            query: None,
+            client_ip: None,
+            user_agent: Some(r#"x" status=200 user="admin"#.to_owned()),
+            status: 403,
+            latency_ms: 0,
+        };
+        let line = event.to_string();
+        assert!(
+            line.ends_with(r#" ua="x\" status=200 user=\"admin""#),
+            "{line}"
+        );
+    }
+
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the guard must outlive the values borrowed from it"
+    )]
+    #[tokio::test]
+    async fn credentials_in_the_query_are_not_recorded() {
+        let events: Arc<Mutex<Vec<AuditEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let app = build_app(Arc::clone(&events), StatusCode::OK);
+        send(
+            app,
+            Request::builder()
+                .uri("/api/items?page=2&api_key=s3cr3t&Access_Token=t0k&key=k3y&q=a=b")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        let captured = events.lock().unwrap();
+        assert_eq!(
+            captured[0].query.as_deref(),
+            Some("page=2&api_key=[redacted]&Access_Token=[redacted]&key=[redacted]&q=a=b")
+        );
     }
 }
