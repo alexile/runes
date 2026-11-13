@@ -14,6 +14,10 @@
 //! [`http`] adds a loopback [`MockServer`](http::MockServer) that replays canned
 //! HTTP responses, for testing HTTP-backed providers without the network.
 //!
+//! [`FakeLlm`] is the other side: a scriptable [`Llm`] for testing code that
+//! *uses* the trait. It answers from a queue of [`FakeReply`] values (or a
+//! closure) and records every [`FakeRequest`]; see the [`fake`] module.
+//!
 //! # Example
 //!
 //! ```rust
@@ -37,7 +41,10 @@
 //! # });
 //! ```
 
+pub mod fake;
 pub mod http;
+
+pub use fake::{FakeLlm, FakeMethod, FakeReply, FakeRequest};
 
 use std::collections::HashSet;
 

@@ -67,6 +67,7 @@ println!("{result}");
 | `PromptArgs` + `prompt_args!` | Ergonomic input map for prompt templates |
 | `ChainError` / `LlmError` | Structured errors with `From` conversion between them; `LlmError` has a `kind()` (`LlmErrorKind`), HTTP `status()`, `retry_after()` and `is_retryable()` |
 | `testing::check_*` | Trait-contract checks for implementors (feature `testing`) |
+| `testing::FakeLlm` | Scriptable offline `Llm` that records requests (feature `testing`) |
 
 ## Structured output, fallbacks and safe tool calls
 
@@ -126,6 +127,39 @@ async fn provider_meets_contract() {
     check_memory(&MyMemory::default()).await.unwrap();
 }
 ```
+
+## Testing code that uses an `Llm`
+
+`testing::FakeLlm` (same `testing` feature) is an offline `Llm` you script.
+It answers from a queue of replies in order, records every request, and
+returns an error, not a panic, when the script runs out:
+
+```rust
+use rune_chain_core::testing::{FakeLlm, FakeReply};
+use rune_chain_core::{Llm, Message, TokenUsage, ToolCall};
+
+let llm = FakeLlm::with_replies([
+    FakeReply::tool_calls([ToolCall::new("call_1", "search", r#"{"q":"rust"}"#)]),
+    FakeReply::text("Found it.").with_usage(TokenUsage::new(40, 3)),
+    FakeReply::rate_limited(),
+]);
+
+run_my_agent(&llm).await?;
+
+assert_eq!(llm.call_count(), 2);
+assert_eq!(llm.requests()[0].prompt().as_deref(), Some("find rust crates"));
+```
+
+- Replies can be text, JSON (`FakeReply::json`), tool calls, refusals,
+  truncated output, any `FinishReason`, token usage, or an `LlmError`
+  (`rate_limited()`, `timeout()`, `provider_error(..)`, `error(..)`).
+- `FakeLlm::from_fn(|req| ...)` answers per request instead; a responder set
+  with `with_responder` also takes over once the queue is empty.
+- `with_latency(..)` delays each call (runtime-agnostic), and
+  `max_in_flight()` reports peak concurrency, for testing your limits.
+- `stream()` sends the reply text in `with_chunk_chars(n)` pieces, then the
+  final chunk; `with_stream_error(..)` fails part-way instead.
+- Clones share the script and the recorded requests.
 
 ## Migrating from 0.1
 

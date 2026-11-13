@@ -35,7 +35,8 @@
 //!   [`LlmError`] carries an [`LlmErrorKind`], the HTTP status and the
 //!   provider's retry-after delay
 //! - `testing` (feature `testing`) — reusable trait-contract checks that every
-//!   `Llm`, `Chain`, `Memory` and `Tool` implementation should pass
+//!   `Llm`, `Chain`, `Memory` and `Tool` implementation should pass, plus
+//!   `FakeLlm`, a scriptable offline `Llm` for testing code built on it
 //!
 //! # Security notes
 //!
