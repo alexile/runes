@@ -387,3 +387,34 @@ fn decodes_wire_bytes() {
     ];
     assert_eq!(Message::decode(&bytes).unwrap().op, msg.op);
 }
+
+#[test]
+fn anonymous_search_uses_the_naming_context_verbatim() {
+    // A DN with UTF-8 and an escaped comma must go back to the server as
+    // the server sent it, not in the escaped form used for display.
+    let long = format!("ou={},dc=example,dc=org", "x".repeat(300));
+    for dn in ["ou=Smith\\, J,dc=exämple,dc=org", long.as_str()] {
+        let mut root = entry(
+            1,
+            "",
+            vec![
+                Attribute::new("namingContexts", [dn]),
+                Attribute::new("supportedLDAPVersion", ["3"]),
+            ],
+        );
+        root.extend(done(1, ResultCode::SUCCESS));
+        let bind_ok =
+            Message::new(2, Op::BindResponse(LdapResult::new(ResultCode::SUCCESS))).encode();
+        let sim = simulate(
+            &LdapAnonymousProbe::new(),
+            &target(),
+            &[&root, &bind_ok],
+            &options(),
+        )
+        .unwrap();
+        let Op::SearchRequest(req) = Message::decode(&sim.sent[2]).unwrap().op else {
+            panic!("not a search");
+        };
+        assert_eq!(req.base, dn);
+    }
+}

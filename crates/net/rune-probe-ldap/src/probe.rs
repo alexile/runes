@@ -262,7 +262,7 @@ impl Session {
                 let base = self
                     .root
                     .clone()
-                    .and_then(|e| RootDse::new(e).default_naming_context());
+                    .and_then(|e| RootDse::new(e).search_base());
                 match base {
                     Some(base) if ok => {
                         let search = SearchRequest::new(base.clone(), Scope::OneLevel)
@@ -400,7 +400,10 @@ impl Session {
                 .with_detail("ldap.anonymous_bind_result", bind.code.to_string());
         }
         info = info.with_detail("ldap.anonymous_bind", "accepted");
-        let base = self.search_base.clone().unwrap_or_default();
+        let base = rune_service_probe::banner::printable(
+            self.search_base.as_deref().unwrap_or_default().as_bytes(),
+            MAX_DIAGNOSTIC,
+        );
         let search_ok = self.search_done.as_ref().is_some_and(|r| {
             r.code == ResultCode::SUCCESS || r.code == ResultCode::SIZE_LIMIT_EXCEEDED
         });

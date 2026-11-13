@@ -102,6 +102,23 @@ proptest! {
     }
 
     #[test]
+    fn decoder_survives_mutated_messages(
+        id in any::<i64>(),
+        op in op(),
+        edits in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..6),
+    ) {
+        // Random bytes rarely get past the first tag; corrupting a valid
+        // message reaches the inner decoders.
+        let mut bytes = Message::new(id, op).encode();
+        for (at, byte) in edits {
+            let at = at % bytes.len();
+            bytes[at] = byte;
+        }
+        let _ = parse_message(&bytes);
+        let _ = Message::decode(&bytes);
+    }
+
+    #[test]
     fn sessions_survive_arbitrary_replies(
         replies in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 0..128), 0..8),
         max_read in 1usize..1024,

@@ -134,10 +134,34 @@ impl RootDse {
     /// The context to search for directory data: `defaultNamingContext`
     /// (Active Directory) or the first of `namingContexts`, skipping
     /// configuration, schema and monitoring contexts.
+    ///
+    /// The value is escaped for display (see
+    /// [`printable`](rune_service_probe::banner::printable)); use
+    /// [`search_base`](Self::search_base) to send it back to the server.
     #[must_use]
     pub fn default_naming_context(&self) -> Option<String> {
-        self.first("defaultNamingContext").or_else(|| {
-            self.naming_contexts().into_iter().find(|nc| {
+        self.naming_context_raw().map(|v| printable(v, MAX_TEXT))
+    }
+
+    /// [`default_naming_context`](Self::default_naming_context) exactly as
+    /// the server sent it, for use as the base of a search. `None` when it
+    /// is not valid UTF-8 (LDAP DNs are UTF-8 strings).
+    #[must_use]
+    pub fn search_base(&self) -> Option<String> {
+        self.naming_context_raw()
+            .and_then(|v| String::from_utf8(v.to_vec()).ok())
+    }
+
+    fn naming_context_raw(&self) -> Option<&[u8]> {
+        if let Some(first) = self.entry.values("defaultNamingContext").first() {
+            return Some(first);
+        }
+        self.entry
+            .values("namingContexts")
+            .iter()
+            .take(MAX_LIST)
+            .map(Vec::as_slice)
+            .find(|nc| {
                 let lower = nc.to_ascii_lowercase();
                 !nc.is_empty()
                     && ![
@@ -148,9 +172,8 @@ impl RootDse {
                         "o=netscaperoot",
                     ]
                     .iter()
-                    .any(|skip| lower.starts_with(skip))
+                    .any(|skip| lower.starts_with(skip.as_bytes()))
             })
-        })
     }
 
     /// `supportedLDAPVersion`, e.g. `["2", "3"]`.
