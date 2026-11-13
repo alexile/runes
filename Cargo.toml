@@ -318,7 +318,7 @@ rune-chain-memory = { path = "crates/chain/rune-chain-memory", version = "0.2.1"
 rune-chain-openai = { path = "crates/chain/rune-chain-openai", version = "0.2.1" }
 rune-chain-output-parser = { path = "crates/chain/rune-chain-output-parser", version = "0.2.1" }
 rune-chain-prompt = { path = "crates/chain/rune-chain-prompt", version = "0.2.1" }
-rune-chain-splitter = { path = "crates/chain/rune-chain-splitter", version = "0.2.0" }
+rune-chain-splitter = { path = "crates/chain/rune-chain-splitter", version = "0.2.1" }
 rune-chain-usage = { path = "crates/chain/rune-chain-usage", version = "0.1.0" }
 rune-cidr = { path = "crates/common/rune-cidr", version = "0.2.1" }
 rune-config = { path = "crates/common/rune-config", version = "0.2.0" }

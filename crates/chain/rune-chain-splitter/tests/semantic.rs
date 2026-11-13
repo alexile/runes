@@ -8,7 +8,7 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use rune_chain_embed::{EmbedError, Embedder};
-use rune_chain_splitter::{BreakpointThreshold, SemanticChunker, SplitError};
+use rune_chain_splitter::{BreakpointThreshold, SemanticChunker, SplitError, sentence_spans};
 
 /// Counts topic keywords: axis 0 = cats, axis 1 = rockets, axis 2 = other.
 #[derive(Default)]
@@ -126,4 +126,14 @@ async fn embedder_failures_are_reported() {
     ));
     let dyn_embedder: &dyn Embedder = &TopicEmbedder::default();
     assert!(c.chunk(TEXT, dyn_embedder).await.is_ok());
+}
+
+#[test]
+fn huge_buffer_size_covers_the_whole_text_without_overflow() {
+    let text = "One. Two. Three.";
+    let spans = sentence_spans(text);
+    let inputs = SemanticChunker::new()
+        .buffer_size(usize::MAX)
+        .embedding_inputs(text, &spans);
+    assert_eq!(inputs, [text; 3]);
 }

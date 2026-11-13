@@ -202,7 +202,7 @@ impl SemanticChunker {
         (0..n)
             .map(|i| {
                 let first = i.saturating_sub(self.buffer_size);
-                let last = (i + self.buffer_size).min(n - 1);
+                let last = i.saturating_add(self.buffer_size).min(n - 1);
                 text.get(sentences[first].start..sentences[last].end)
                     .unwrap_or_default()
                     .trim()
