@@ -186,9 +186,12 @@ pub fn retry_after(headers: &HeaderMap) -> Option<Duration> {
             .and_then(|v| v.trim().parse::<f64>().ok())
             .filter(|v| v.is_finite() && *v >= 0.0)
     };
+    // A value too large for a `Duration` saturates (and is then refused as
+    // longer than `MAX_RETRY_AFTER`) instead of panicking.
+    let secs = |s: f64| Duration::try_from_secs_f64(s).unwrap_or(Duration::MAX);
     get("retry-after-ms")
-        .map(|ms| Duration::from_secs_f64(ms / 1000.0))
-        .or_else(|| get("retry-after").map(Duration::from_secs_f64))
+        .map(|ms| secs(ms / 1000.0))
+        .or_else(|| get("retry-after").map(secs))
 }
 
 /// Exponential backoff `base · 2^attempt`, capped at 8 s, plus up to 25 %
@@ -546,6 +549,20 @@ mod tests {
         assert!(d >= Duration::from_millis(400) && d <= Duration::from_millis(500));
         let capped = backoff(30, Duration::from_secs(1));
         assert!(capped <= MAX_BACKOFF + MAX_BACKOFF / 4);
+    }
+
+    #[test]
+    fn huge_retry_after_does_not_panic() {
+        for (name, value) in [
+            ("retry-after", "1e300"),
+            ("retry-after-ms", "1e300"),
+            ("retry-after", "18446744073709551616"),
+        ] {
+            let mut h = HeaderMap::new();
+            h.insert(name, HeaderValue::from_static(value));
+            assert!(retry_after(&h).is_some_and(|d| d > MAX_RETRY_AFTER));
+            assert_eq!(retry_delay(&h, 0, Duration::ZERO), None);
+        }
     }
 
     #[test]
