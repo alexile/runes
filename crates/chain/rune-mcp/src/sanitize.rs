@@ -133,7 +133,8 @@ pub fn split_qualified(name: &str) -> Option<(&str, &str)> {
 /// server and tool, for a model to read as data.
 ///
 /// Any `<mcp_result` or `</mcp_result` inside `content` (in any letter
-/// case) has its `<` escaped as `&lt;`, so the content cannot close the
+/// case, and with whitespace or hidden characters slipped in, as in
+/// `</ mcp_result>`) has its `<` escaped as `&lt;`, so the content cannot close the
 /// fence early and pose as text from outside it. Attribute values are
 /// reduced to tool-name characters. Pair it with [`FENCE_NOTICE`] in the
 /// system prompt.
@@ -171,15 +172,10 @@ fn attribute(value: &str) -> String {
 }
 
 fn escape_fence(content: &str) -> String {
-    let bytes = content.as_bytes();
     let mut out = String::with_capacity(content.len());
     let mut last = 0;
     for (i, _) in content.match_indices('<') {
-        let rest = &bytes[i + 1..];
-        let rest = rest.strip_prefix(b"/").unwrap_or(rest);
-        if rest.len() >= FENCE_TAG.len()
-            && rest[..FENCE_TAG.len()].eq_ignore_ascii_case(FENCE_TAG.as_bytes())
-        {
+        if starts_tag(&content[i + 1..]) {
             out.push_str(&content[last..i]);
             out.push_str("&lt;");
             last = i + 1;
@@ -189,9 +185,39 @@ fn escape_fence(content: &str) -> String {
     out
 }
 
+/// Whether `rest`, the text right after a `<`, opens or closes the fence
+/// tag as a lenient reader (a model) would see it: any letter case, an
+/// optional `/`, and whitespace or hidden characters before or inside the
+/// name.
+fn starts_tag(rest: &str) -> bool {
+    let mut chars = rest.chars().filter(|&c| !is_hidden_char(c)).peekable();
+    while chars.next_if(|c| c.is_whitespace()).is_some() {}
+    if chars.next_if_eq(&'/').is_some() {
+        while chars.next_if(|c| c.is_whitespace()).is_some() {}
+    }
+    FENCE_TAG
+        .chars()
+        .all(|t| chars.next().is_some_and(|c| c.eq_ignore_ascii_case(&t)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fence_escapes_spaced_and_invisible_variants() {
+        for sneaky in [
+            "</ mcp_result>",
+            "< /mcp_result>",
+            "<\u{200b}/mcp_result>",
+            "</mcp\u{2060}_RESULT>",
+        ] {
+            let f = fence(None, "t", "ok", sneaky);
+            let inner = &f[f.find('\n').unwrap()..f.len() - "</mcp_result>".len()];
+            assert!(!inner.contains('<'), "{sneaky:?} -> {f:?}");
+        }
+        assert_eq!(escape_fence("a < b <mcp <other>"), "a < b <mcp <other>");
+    }
 
     #[test]
     fn hidden_characters_are_removed() {

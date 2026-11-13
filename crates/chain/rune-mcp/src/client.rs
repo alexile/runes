@@ -9,7 +9,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use rmcp::model::{
     CallToolRequestParams, ClientCapabilities, ClientConfig, GetPromptRequestParams,
-    Implementation, ReadResourceRequestParams,
+    Implementation, PaginatedRequestParams, ReadResourceRequestParams,
 };
 use rmcp::service::{NotificationContext, RunningService};
 use rmcp::transport::IntoTransport;
@@ -353,6 +353,29 @@ where
     )
 }
 
+/// Follow a listing's pages until it ends or holds more than `max` items.
+/// rmcp's `list_all_*` keep paging for as long as the server hands out a
+/// cursor, so a hostile server could grow the list until the timeout; here
+/// the list stops one item past the limit and [`McpClient::cap_list`] cuts
+/// and reports it.
+async fn list_pages<T, F, Fut>(max: usize, mut page: F) -> Result<Vec<T>, rmcp::ServiceError>
+where
+    F: FnMut(Option<PaginatedRequestParams>) -> Fut,
+    Fut: Future<Output = Result<(Vec<T>, Option<String>), rmcp::ServiceError>>,
+{
+    let mut items = Vec::new();
+    let mut cursor = None;
+    loop {
+        let params = cursor.map(|c| PaginatedRequestParams::default().with_cursor(Some(c)));
+        let (mut batch, next) = page(params).await?;
+        items.append(&mut batch);
+        match next {
+            Some(next) if items.len() <= max => cursor = Some(next),
+            _ => return Ok(items),
+        }
+    }
+}
+
 /// A connected MCP client session.
 ///
 /// [`connect`](McpClient::connect) on any rmcp transport (an in-process
@@ -590,7 +613,10 @@ impl McpClient {
         let listed = with_timeout(
             "tools/list",
             self.options.request_timeout,
-            self.service.list_all_tools(),
+            list_pages(self.options.max_list_items, |params| async {
+                let page = self.service.list_tools(params).await?;
+                Ok((page.tools, page.next_cursor))
+            }),
         )
         .await?;
         let mut rejected = Vec::new();
@@ -835,7 +861,10 @@ impl McpClient {
         let listed = with_timeout(
             "resources/list",
             self.options.request_timeout,
-            self.service.list_all_resources(),
+            list_pages(self.options.max_list_items, |params| async {
+                let page = self.service.list_resources(params).await?;
+                Ok((page.resources, page.next_cursor))
+            }),
         )
         .await?;
         let listed = self.cap_list(listed, &mut Vec::new())?;
@@ -885,7 +914,10 @@ impl McpClient {
         let listed = with_timeout(
             "prompts/list",
             self.options.request_timeout,
-            self.service.list_all_prompts(),
+            list_pages(self.options.max_list_items, |params| async {
+                let page = self.service.list_prompts(params).await?;
+                Ok((page.prompts, page.next_cursor))
+            }),
         )
         .await?;
         let listed = self.cap_list(listed, &mut Vec::new())?;

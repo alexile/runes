@@ -879,3 +879,45 @@ async fn spawned_server_is_killed_and_handshake_times_out() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(gone, "the spawned server outlived its client");
 }
+
+/// A server whose tool listing never ends: every page has one more tool
+/// and a cursor to the next page.
+#[derive(Clone, Default)]
+struct EndlessPages {
+    pages: Arc<Mutex<usize>>,
+}
+
+impl ServerHandler for EndlessPages {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let page = {
+            let mut pages = self.pages.lock().unwrap();
+            *pages += 1;
+            *pages
+        };
+        let mut result =
+            ListToolsResult::with_all_items(vec![raw_tool(&format!("t{page}"), "A tool.")]);
+        result.next_cursor = Some(page.to_string());
+        Ok(result)
+    }
+}
+
+#[tokio::test]
+async fn endless_pagination_stops_at_the_list_limit() {
+    let server = EndlessPages::default();
+    let options = ClientOptions::default()
+        .with_max_list_items(5)
+        .with_request_timeout(Duration::from_secs(3));
+    let (client, _running) = connect_with(server.clone(), options).await;
+    let tools = client.list_tools().await.unwrap();
+    assert_eq!(tools.len(), 5);
+    assert!(*server.pages.lock().unwrap() <= 6);
+    assert!(client.rejected()[0].reason.contains("over the limit"));
+}
