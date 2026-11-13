@@ -16,6 +16,27 @@ proptest! {
     }
 
     #[test]
+    fn readers_survive_mutated_documents(
+        keys in proptest::collection::vec("[a-z]{1,8}", 1..8),
+        edits in proptest::collection::vec((any::<usize>(), any::<u8>()), 1..6),
+    ) {
+        // Corrupt a valid document so the element decoders get exercised,
+        // which random bytes rarely reach.
+        let elements: Vec<(&str, Bson)> = keys
+            .iter()
+            .map(|k| (k.as_str(), Bson::String(k.clone())))
+            .collect();
+        let mut bytes = Document::encode(&elements);
+        for (at, byte) in edits {
+            let at = at % bytes.len();
+            bytes[at] = byte;
+        }
+        let _ = Document::parse(&bytes);
+        let reply = mongodb::op_msg(1, &bytes);
+        let _ = mongodb::parse_reply(&reply);
+    }
+
+    #[test]
     fn bson_round_trips(
         entries in proptest::collection::vec(("[a-z]{1,8}", any::<i32>(), any::<i64>(), "[ -~]{0,16}", any::<bool>()), 0..8)
     ) {
