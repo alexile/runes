@@ -342,15 +342,55 @@ impl CsrfConfig {
         }
     }
 
-    fn session_id(&self, parts: &Parts) -> Vec<u8> {
+    /// The session binding of a request, or `None` when the session cookie
+    /// arrives more than once with different values. A sibling subdomain can
+    /// plant a second session cookie, so neither value can be trusted then.
+    fn session_id(&self, parts: &Parts) -> Option<Vec<u8>> {
         match &self.session {
-            None => Vec::new(),
-            Some(SessionSource::Cookie(name)) => cookie_values(&parts.headers, name)
-                .next()
-                .map(|v| v.as_bytes().to_vec())
-                .unwrap_or_default(),
-            Some(SessionSource::Custom(f)) => f(parts).map(String::into_bytes).unwrap_or_default(),
+            None => Some(Vec::new()),
+            Some(SessionSource::Cookie(name)) => {
+                let mut values = cookie_values(&parts.headers, name);
+                let first = values.next().unwrap_or_default();
+                if values.any(|v| v != first) {
+                    return None;
+                }
+                Some(first.as_bytes().to_vec())
+            }
+            Some(SessionSource::Custom(f)) => {
+                Some(f(parts).map(String::into_bytes).unwrap_or_default())
+            }
         }
+    }
+
+    /// The session cookie value the handler just set on `response`, if any.
+    /// A removal (empty value or `Max-Age` of zero or less) means no session.
+    fn session_from_response(&self, response: &HeaderMap) -> Option<Vec<u8>> {
+        let Some(SessionSource::Cookie(name)) = &self.session else {
+            return None;
+        };
+        response
+            .get_all(SET_COOKIE)
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .filter_map(|c| {
+                let mut attrs = c.split(';');
+                let (n, v) = attrs.next()?.split_once('=')?;
+                if n.trim() != name {
+                    return None;
+                }
+                let removed = attrs.any(|a| {
+                    a.split_once('=').is_some_and(|(k, v)| {
+                        k.trim().eq_ignore_ascii_case("max-age")
+                            && v.trim().parse::<i64>().is_ok_and(|age| age <= 0)
+                    })
+                });
+                Some(if removed {
+                    Vec::new()
+                } else {
+                    v.trim().as_bytes().to_vec()
+                })
+            })
+            .next_back()
     }
 
     /// `None` if the cookie name or path is not header-safe; no cookie is then set,
@@ -482,6 +522,11 @@ impl fmt::Debug for CsrfToken {
 /// issues a fresh token cookie with that response. Do this after login, logout
 /// or privilege changes.
 ///
+/// With [`CsrfConfig::session_cookie`], the new token is bound to the session
+/// cookie the response sets (or clears), so it works on the very next request.
+/// Otherwise it is bound to the session of the request; when a
+/// [`CsrfConfig::session_id_with`] session changes, use [`CsrfRotateFor`].
+///
 /// # Examples
 ///
 /// ```rust
@@ -497,6 +542,66 @@ impl fmt::Debug for CsrfToken {
 /// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CsrfRotate;
+
+/// Like [`CsrfRotate`], but binds the new token to the given session id.
+///
+/// Use it with [`CsrfConfig::session_id_with`] when the response starts or ends
+/// a session, since the middleware cannot see the new id itself. Takes
+/// precedence over [`CsrfRotate`]. The [`Debug`] output is redacted.
+///
+/// # Examples
+///
+/// ```rust
+/// use axum::response::{IntoResponse, Redirect};
+/// use rune_axum_csrf::CsrfRotateFor;
+///
+/// async fn login() -> impl IntoResponse {
+///     let new_session_id = "s-1234".to_owned(); // from your session store
+///     let mut res = Redirect::to("/").into_response();
+///     res.extensions_mut().insert(CsrfRotateFor::session(new_session_id));
+///     res
+/// }
+///
+/// async fn logout() -> impl IntoResponse {
+///     let mut res = Redirect::to("/").into_response();
+///     res.extensions_mut().insert(CsrfRotateFor::anonymous());
+///     res
+/// }
+/// ```
+#[derive(Clone, PartialEq, Eq)]
+pub struct CsrfRotateFor {
+    session: Option<String>,
+}
+
+impl CsrfRotateFor {
+    /// Rotates to a token bound to session `id`, the value
+    /// [`CsrfConfig::session_id_with`] will return on the next request.
+    #[must_use]
+    pub fn session(id: impl Into<String>) -> Self {
+        Self {
+            session: Some(id.into()),
+        }
+    }
+
+    /// Rotates to a token for a request without a session (after logout).
+    #[must_use]
+    pub const fn anonymous() -> Self {
+        Self { session: None }
+    }
+}
+
+impl fmt::Debug for CsrfRotateFor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let session = if self.session.is_some() {
+            "Some([redacted])"
+        } else {
+            "None"
+        };
+        f.debug_struct("CsrfRotateFor")
+            .field("session", &format_args!("{session}"))
+            .finish()
+    }
+}
 
 /// Why a request was rejected. Attached to the rejection **response**'s
 /// extensions for logging and metrics; never written to the response body.
@@ -734,33 +839,48 @@ where
         return inner.call(Request::from_parts(parts, body)).await;
     }
 
-    let session = config.session_id(&parts);
+    let binding = config.session_id(&parts);
+    let ambiguous = binding.is_none();
+    // With conflicting session cookies no token is accepted, and new ones are
+    // bound to "no session" so they are useless under either value.
+    let session = binding.unwrap_or_default();
     let now = token::now_secs();
     let cookie_name = config.effective_cookie_name();
     let mut saw_cookie = false;
     let valid: Vec<String> = cookie_values(&parts.headers, &cookie_name)
         .inspect(|_| saw_cookie = true)
-        .filter(|t| token::verify(&config.key, &session, t, now, config.ttl).is_ok())
+        .filter(|t| !ambiguous && token::verify(&config.key, &session, t, now, config.ttl).is_ok())
         .map(str::to_owned)
         .collect();
-    let issue = || token::issue(&config.key, &session, config.token_bytes, now);
+    let issue = |session: &[u8]| token::issue(&config.key, session, config.token_bytes, now);
 
     if is_safe_method(&parts.method) {
         let (current, fresh) = valid
             .into_iter()
             .next()
-            .map_or_else(|| (issue(), true), |t| (Some(t), false));
+            .map_or_else(|| (issue(&session), true), |t| (Some(t), false));
         if let Some(t) = &current {
             parts.extensions.insert(config.make_token(t.clone()));
         }
         let response = inner.call(Request::from_parts(parts, body)).await?;
         let to_set = if fresh { current } else { None };
-        return Ok(finish(&config, &cookie_name, response, to_set, issue));
+        return Ok(finish(
+            &config,
+            &cookie_name,
+            response,
+            to_set,
+            &session,
+            issue,
+        ));
     }
 
     if config.verify_origin
-        && origin::check(&parts.headers, &parts.uri, &config.trusted_origins)
-            == Verdict::CrossOrigin
+        && origin::check(
+            &parts.headers,
+            &parts.uri,
+            &config.trusted_origins,
+            config.secure,
+        ) == Verdict::CrossOrigin
     {
         return Ok(reject(config.status, CsrfRejection::CrossOrigin));
     }
@@ -818,20 +938,34 @@ where
 
     parts.extensions.insert(config.make_token(submitted));
     let response = inner.call(Request::from_parts(parts, body)).await?;
-    Ok(finish(&config, &cookie_name, response, None, issue))
+    Ok(finish(
+        &config,
+        &cookie_name,
+        response,
+        None,
+        &session,
+        issue,
+    ))
 }
 
 /// Appends `Set-Cookie` for a fresh token, or for a rotated one when the handler
-/// asked for it with [`CsrfRotate`]. Appending keeps the handler's own cookies.
+/// asked for it with [`CsrfRotate`] or [`CsrfRotateFor`]. A rotated token is
+/// bound to the session the response leaves behind, not the request's.
+/// Appending keeps the handler's own cookies.
 fn finish<B>(
     config: &CsrfConfig,
     cookie_name: &str,
     mut response: Response<B>,
     fresh: Option<String>,
-    issue: impl FnOnce() -> Option<String>,
+    request_session: &[u8],
+    issue: impl FnOnce(&[u8]) -> Option<String>,
 ) -> Response<B> {
-    let token = if response.extensions_mut().remove::<CsrfRotate>().is_some() {
-        issue()
+    let rotate = response.extensions_mut().remove::<CsrfRotate>().is_some();
+    let token = if let Some(to) = response.extensions_mut().remove::<CsrfRotateFor>() {
+        issue(to.session.as_deref().unwrap_or_default().as_bytes())
+    } else if rotate {
+        let session = config.session_from_response(response.headers());
+        issue(session.as_deref().unwrap_or(request_session))
     } else {
         fresh
     };

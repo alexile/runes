@@ -13,7 +13,7 @@ use http::{
     header::{COOKIE, SET_COOKIE},
 };
 use rune_axum_csrf::{
-    CsrfConfig, CsrfKey, CsrfLayer, CsrfRejection, CsrfRotate, CsrfToken, SameSite,
+    CsrfConfig, CsrfKey, CsrfLayer, CsrfRejection, CsrfRotate, CsrfRotateFor, CsrfToken, SameSite,
 };
 use std::time::Duration;
 use tower::ServiceExt;
@@ -49,6 +49,27 @@ fn app(config: CsrfConfig) -> Router {
             "/login",
             post(|| async {
                 let mut res = "logged in".into_response();
+                res.extensions_mut().insert(CsrfRotate);
+                res
+            }),
+        )
+        .route(
+            "/login-session",
+            post(|| async {
+                let mut res = (
+                    [(SET_COOKIE, "session_id=new; Path=/; HttpOnly")],
+                    "logged in",
+                )
+                    .into_response();
+                res.extensions_mut().insert(CsrfRotate);
+                res
+            }),
+        )
+        .route(
+            "/logout-session",
+            post(|| async {
+                let mut res =
+                    ([(SET_COOKIE, "session_id=gone; Path=/; Max-Age=0")], "bye").into_response();
                 res.extensions_mut().insert(CsrfRotate);
                 res
             }),
@@ -704,6 +725,200 @@ async fn handler_can_rotate_token() {
     assert_eq!(res.status(), StatusCode::OK);
     let c = csrf_set_cookie(&res).expect("rotated cookie");
     assert!(!c.contains(&t));
+}
+
+fn jar_with(session: Option<&str>, token: &str) -> String {
+    session.map_or_else(
+        || format!("{COOKIE_NAME}={token}"),
+        |s| format!("{s}; {COOKIE_NAME}={token}"),
+    )
+}
+
+/// Sends `path` as a POST with a valid token for the given session cookie and
+/// returns the rotated token from the response.
+async fn rotate_via(cfg: impl Fn() -> CsrfConfig, path: &str, session: Option<&str>) -> String {
+    let t = fetch_token(cfg(), session).await;
+    let jar = jar_with(session, &t);
+    let res = send(
+        app(cfg()),
+        Request::post(path)
+            .header("host", "example.com")
+            .header("origin", "https://example.com")
+            .header(COOKIE, jar)
+            .header("x-csrf-token", &t)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let c = csrf_set_cookie(&res).unwrap();
+    let v = c[COOKIE_NAME.len() + 1..]
+        .split(';')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert_ne!(v, t);
+    v
+}
+
+async fn post_with_session(cfg: CsrfConfig, session: Option<&str>, token: &str) -> Response<Body> {
+    let jar = jar_with(session, token);
+    send(
+        app(cfg),
+        post_req(Some(&jar), Some(token))
+            .header("origin", "https://example.com")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn rotate_after_login_binds_to_new_session() {
+    let cfg = || config().session_cookie("session_id");
+    for before in [None, Some("session_id=old")] {
+        let rotated = rotate_via(cfg, "/login-session", before).await;
+        let res = post_with_session(cfg(), Some("session_id=new"), &rotated).await;
+        assert_eq!(res.status(), StatusCode::OK, "{before:?}");
+    }
+}
+
+#[tokio::test]
+async fn rotate_after_logout_binds_to_no_session() {
+    let cfg = || config().session_cookie("session_id");
+    let rotated = rotate_via(cfg, "/logout-session", Some("session_id=old")).await;
+    let res = post_with_session(cfg(), None, &rotated).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = post_with_session(cfg(), Some("session_id=old"), &rotated).await;
+    assert_eq!(rejection(&res), Some(CsrfRejection::InvalidCookie));
+}
+
+#[tokio::test]
+async fn rotate_without_session_change_keeps_request_session() {
+    let cfg = || config().session_cookie("session_id");
+    let rotated = rotate_via(cfg, "/login", Some("session_id=same")).await;
+    let res = post_with_session(cfg(), Some("session_id=same"), &rotated).await;
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn rotate_for_custom_session_binds_to_given_id() {
+    let cfg = || {
+        CsrfConfig::new().key(key()).session_id_with(|parts| {
+            parts
+                .headers
+                .get("x-user")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        })
+    };
+    let app = |cfg: CsrfConfig| {
+        Router::new()
+            .route(
+                "/login",
+                post(|| async {
+                    let mut res = "in".into_response();
+                    res.extensions_mut().insert(CsrfRotateFor::session("alice"));
+                    res
+                }),
+            )
+            .route(
+                "/logout",
+                post(|| async {
+                    let mut res = "out".into_response();
+                    res.extensions_mut().insert(CsrfRotateFor::anonymous());
+                    res
+                }),
+            )
+            .route("/submit", post(|| async { "ok" }))
+            .layer(CsrfLayer::new(cfg))
+    };
+    let post_as = |path: &str, user: Option<&str>, t: &str| {
+        let mut b = Request::post(path)
+            .header("host", "example.com")
+            .header(COOKIE, format!("{COOKIE_NAME}={t}"))
+            .header("x-csrf-token", t);
+        if let Some(u) = user {
+            b = b.header("x-user", u);
+        }
+        b.body(Body::empty()).unwrap()
+    };
+    let token_of = |res: &Response<Body>| {
+        let c = csrf_set_cookie(res).expect("rotated cookie");
+        c[COOKIE_NAME.len() + 1..]
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    let anon = fetch_token(cfg(), None).await;
+    let res = send(app(cfg()), post_as("/login", None, &anon)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let alice = token_of(&res);
+    let res = send(app(cfg()), post_as("/submit", Some("alice"), &alice)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = send(app(cfg()), post_as("/logout", Some("alice"), &alice)).await;
+    let anon = token_of(&res);
+    let res = send(app(cfg()), post_as("/submit", None, &anon)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(!format!("{:?}", CsrfRotateFor::session("secret-id")).contains("secret-id"));
+}
+
+#[tokio::test]
+async fn origin_with_explicit_default_port_accepted() {
+    let t = fetch_token(config(), None).await;
+    for (host, origin) in [
+        ("example.com:443", "https://example.com"),
+        ("example.com", "https://example.com:443"),
+    ] {
+        let res = send(
+            app(config()),
+            Request::post("/submit")
+                .header("host", host)
+                .header("origin", origin)
+                .header(COOKIE, format!("{COOKIE_NAME}={t}"))
+                .header("x-csrf-token", &t)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::OK, "{host} {origin}");
+    }
+}
+
+#[tokio::test]
+async fn plain_http_origin_rejected_with_secure_cookie() {
+    let t = fetch_token(config(), None).await;
+    let res = send(
+        app(config()),
+        post_req(Some(&format!("{COOKIE_NAME}={t}")), Some(&t))
+            .header("origin", "http://example.com")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(rejection(&res), Some(CsrfRejection::CrossOrigin));
+}
+
+#[tokio::test]
+async fn duplicate_session_cookie_with_different_values_is_rejected() {
+    let cfg = || config().session_cookie("session_id");
+    let attacker = fetch_token(cfg(), Some("session_id=attacker")).await;
+    for jar in [
+        "session_id=attacker; session_id=victim",
+        "session_id=victim; session_id=attacker",
+    ] {
+        let res = post_with_session(cfg(), Some(jar), &attacker).await;
+        assert_eq!(rejection(&res), Some(CsrfRejection::InvalidCookie), "{jar}");
+    }
+    // The same value sent twice is not ambiguous.
+    let res = post_with_session(
+        cfg(),
+        Some("session_id=attacker; session_id=attacker"),
+        &attacker,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
 }
 
 #[tokio::test]

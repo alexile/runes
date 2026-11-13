@@ -34,9 +34,15 @@
 //!    has no valid token cookie, a fresh token is minted and set with
 //!    `Set-Cookie`. The current token is always available to the handler as a
 //!    [`CsrfToken`] request extension.
+//!    They are never checked, so GET and HEAD handlers (axum serves HEAD with
+//!    the GET handler) must not change state. The method on the wire is what
+//!    counts: method-override headers or `_method` fields are ignored, so a
+//!    method-override layer must sit outside this one.
 //! 2. **Every other method** must satisfy, in order:
 //!    - the source is not cross-origin (`Origin`, else `Sec-Fetch-Site`, else
-//!      `Referer`; requests carrying none of them rely on the token alone);
+//!      `Referer`; requests carrying none of them rely on the token alone).
+//!      Default ports are ignored, and while [`CsrfConfig::secure`] is on the
+//!      source must be `https` (or `http` on a loopback host);
 //!    - the token cookie carries a valid HMAC-SHA256 signature for this key and
 //!      session (and is not older than the optional TTL);
 //!    - the `x-csrf-token` header — or, if absent, the `csrf_token` field of an
@@ -94,7 +100,8 @@
 
 pub use cross_origin::CsrfOriginConfig;
 pub use layer::{
-    CsrfConfig, CsrfLayer, CsrfRejection, CsrfRotate, CsrfService, CsrfToken, SameSite,
+    CsrfConfig, CsrfLayer, CsrfRejection, CsrfRotate, CsrfRotateFor, CsrfService, CsrfToken,
+    SameSite,
 };
 pub use token::{CsrfKey, KeyTooShort};
 

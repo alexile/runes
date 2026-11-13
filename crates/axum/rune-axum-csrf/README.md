@@ -37,8 +37,9 @@ meaning token mode.
    `CsrfToken` request extension, ready to embed in a form.
 2. **Every other method** (POST, PUT, PATCH, DELETE, custom verbs) must pass, in order:
    - **Source check:** `Origin` (or, if absent, `Sec-Fetch-Site: cross-site`, or `Referer`) must
-     match the request `Host` or a trusted origin. Requests with none of these headers rely on the
-     token alone.
+     match the request `Host` (default ports `:443` / `:80` ignored) or a trusted origin. `Host`
+     carries no scheme, so while `secure` is on (the default) the source must be `https`, or `http`
+     on `localhost` / loopback. Requests with none of these headers rely on the token alone.
    - **Cookie check:** the token cookie must carry a valid HMAC-SHA256 signature for this key and
      session, and must not be older than the optional TTL.
    - **Token check:** the `x-csrf-token` header — or, if absent, the `csrf_token` field of an
@@ -164,7 +165,9 @@ fetch("/api/items", {
 ### Rotating the token
 
 Insert `CsrfRotate` into a response (after login, logout or a privilege change) and the
-middleware sets a fresh token cookie with it:
+middleware sets a fresh token cookie with it. With `session_cookie(name)`, the new token is bound
+to the session cookie the response sets (or clears with an empty value or `Max-Age=0`), so the
+next request works straight away:
 
 ```rust
 use axum::response::{IntoResponse, Redirect};
@@ -176,6 +179,9 @@ async fn login() -> impl IntoResponse {
     res
 }
 ```
+
+With `session_id_with`, the middleware can't see the new session id, so pass it in:
+`CsrfRotateFor::session(new_id)` after login, `CsrfRotateFor::anonymous()` after logout.
 
 ## Token mode configuration
 
@@ -206,12 +212,18 @@ async fn login() -> impl IntoResponse {
   proves the server minted the token. An attacker who controls a sibling subdomain could then plant
   ("toss") a genuine token of their own into the victim's cookie jar. The `__Host-` prefix (on by
   default) already stops subdomains from setting the cookie; session binding stops it even when
-  the prefix is off.
+  the prefix is off, as long as the session cookie can't be tossed either (give it a `__Host-`
+  name too). If the session cookie arrives twice with different values, every unsafe request is
+  rejected until one of them goes away.
 - **Share one key across instances** and load it from a secret store. The default key is random per
   `CsrfConfig`, so tokens do not survive restarts and are not accepted by other replicas.
 - **Rotate on privilege changes** with `CsrfRotate`. A safe request whose cookie is invalid for the
   current session (e.g. right after login) gets a new token automatically.
-- **Never change state on GET.** Safe methods are not checked, by design.
+- **Never change state on GET, HEAD, OPTIONS or TRACE.** Safe methods are not checked, by design,
+  and axum answers HEAD with your GET handler.
+- **Method override is ignored.** The check uses the method on the wire, never
+  `X-HTTP-Method-Override` or `_method`. If you use a method-override layer, put it outside
+  (before) this one, or a `GET ?_method=DELETE` reaches a delete handler unchecked.
 - **Behind a reverse proxy** that rewrites `Host`, add your public origin with `trusted_origin`,
   or the `Origin` check rejects legitimate posts.
 - **Multipart forms** are not parsed: send the token in the header (or switch the form to
