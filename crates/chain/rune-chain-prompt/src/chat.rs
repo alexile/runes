@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::error::TemplateError;
 use crate::guard::ValueGuard;
-use crate::template::{PromptTemplate, StringTemplate, check_declared, legacy_error, push_unique};
+use crate::template::{PromptTemplate, StringTemplate, UniqueNames, check_declared, legacy_error};
 
 /// A single-role message template: one [`Role`] paired with a [`StringTemplate`].
 ///
@@ -614,22 +614,22 @@ impl ChatTemplate {
     /// first appearance.
     #[must_use]
     pub fn missing_variables(&self, args: &PromptArgs) -> Vec<String> {
-        let mut missing = Vec::new();
+        let mut missing = UniqueNames::default();
         for slot in self.slots() {
             match slot {
                 Slot::Message(m) => {
                     for v in m.template().missing_variables(args) {
-                        push_unique(&mut missing, &v);
+                        missing.push(&v);
                     }
                 }
                 Slot::Placeholder(p) => {
                     if !p.optional && !args.contains_key(&p.name) {
-                        push_unique(&mut missing, &p.name);
+                        missing.push(&p.name);
                     }
                 }
             }
         }
-        missing
+        missing.into_vec()
     }
 
     /// Check that the template uses exactly the `declared` input variables.
@@ -655,22 +655,22 @@ impl ChatTemplate {
     /// ones and partials are not.
     #[must_use]
     pub fn input_variables(&self) -> Vec<String> {
-        let mut vars: Vec<String> = Vec::new();
+        let mut vars = UniqueNames::default();
         for slot in self.slots() {
             match slot {
                 Slot::Message(m) => {
                     for v in m.input_variables() {
-                        push_unique(&mut vars, &v);
+                        vars.push(&v);
                     }
                 }
                 Slot::Placeholder(p) => {
                     if !p.optional {
-                        push_unique(&mut vars, &p.name);
+                        vars.push(&p.name);
                     }
                 }
             }
         }
-        vars
+        vars.into_vec()
     }
 }
 

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use rune_chain_core::{ChainError, PromptArgs};
 use serde_json::Value;
@@ -112,26 +112,45 @@ fn value_text(value: &Value) -> String {
     }
 }
 
-/// Push `name` onto `names` unless it is already there.
-pub fn push_unique(names: &mut Vec<String>, name: &str) {
-    if !names.iter().any(|n| n == name) {
-        names.push(name.to_owned());
+/// Names in order of first appearance, without duplicates. A set backs the
+/// lookups so templates with many variables stay linear.
+#[derive(Default)]
+pub struct UniqueNames {
+    names: Vec<String>,
+    seen: HashSet<String>,
+}
+
+impl UniqueNames {
+    /// Add `name` unless it is already there.
+    pub fn push(&mut self, name: &str) {
+        if !self.seen.contains(name) {
+            self.seen.insert(name.to_owned());
+            self.names.push(name.to_owned());
+        }
+    }
+
+    /// The names in order of first appearance.
+    pub fn into_vec(self) -> Vec<String> {
+        self.names
     }
 }
 
 /// Compare the variables a template uses with the ones a caller declared.
 pub fn check_declared<S: AsRef<str>>(used: &[String], declared: &[S]) -> Result<(), TemplateError> {
+    let declared_set: HashSet<&str> = declared.iter().map(AsRef::as_ref).collect();
+    let used_set: HashSet<&str> = used.iter().map(String::as_str).collect();
     let undeclared: Vec<String> = used
         .iter()
-        .filter(|u| !declared.iter().any(|d| d.as_ref() == u.as_str()))
+        .filter(|u| !declared_set.contains(u.as_str()))
         .cloned()
         .collect();
-    let mut unused = Vec::new();
+    let mut unused = UniqueNames::default();
     for d in declared {
-        if !used.iter().any(|u| u == d.as_ref()) {
-            push_unique(&mut unused, d.as_ref());
+        if !used_set.contains(d.as_ref()) {
+            unused.push(d.as_ref());
         }
     }
+    let unused = unused.into_vec();
     if undeclared.is_empty() && unused.is_empty() {
         Ok(())
     } else {
@@ -357,13 +376,13 @@ impl StringTemplate {
     /// Every variable the template mentions, partials included, in order of
     /// first appearance.
     fn all_variables(&self) -> Vec<String> {
-        let mut vars = Vec::new();
+        let mut vars = UniqueNames::default();
         for seg in &self.segments {
             if let Segment::Var(v) = seg {
-                push_unique(&mut vars, v);
+                vars.push(v);
             }
         }
-        vars
+        vars.into_vec()
     }
 
     /// The variables `args` (with partials) does not supply, in order of

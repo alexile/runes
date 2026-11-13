@@ -152,12 +152,21 @@ pub fn escape_xml(value: &str) -> String {
 const fn is_invisible(c: char) -> bool {
     matches!(
         c,
-        // Zero-width spaces/joiners, LRM/RLM, bidi embeddings and overrides,
-        // word joiner and invisible operators, bidi isolates, BOM.
-        '\u{200B}'..='\u{200F}'
+        // Soft hyphen, combining grapheme joiner, Arabic letter mark,
+        // Mongolian vowel separator.
+        '\u{AD}'
+            | '\u{34F}'
+            | '\u{61C}'
+            | '\u{180E}'
+            // Zero-width spaces/joiners, LRM/RLM, bidi embeddings and
+            // overrides, word joiner, invisible operators, bidi isolates and
+            // the deprecated format controls.
+            | '\u{200B}'..='\u{200F}'
             | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{2064}'
-            | '\u{2066}'..='\u{2069}'
+            | '\u{2060}'..='\u{206F}'
+            // Variation selectors, which can carry hidden bytes.
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{E0100}'..='\u{E01EF}'
             | '\u{FEFF}'
             // Unicode tag characters, used for "ASCII smuggling".
             | '\u{E0000}'..='\u{E007F}'
@@ -165,7 +174,7 @@ const fn is_invisible(c: char) -> bool {
 }
 
 /// Remove control characters (except `\n` and `\t`), zero-width and bidi
-/// formatting characters, and Unicode tag characters.
+/// formatting characters, variation selectors, and Unicode tag characters.
 ///
 /// These characters are invisible to a human reviewing a prompt but are
 /// still read by the model, which makes them a common way to hide injected
@@ -216,6 +225,17 @@ mod tests {
     fn truncate_beyond_length_is_identity() {
         assert_eq!(truncate_chars("abc", 10), "abc");
         assert_eq!(truncate_chars("abc", 0), "");
+    }
+
+    #[test]
+    fn strips_less_common_invisible_characters() {
+        // Soft hyphen, combining grapheme joiner, Arabic letter mark,
+        // Mongolian vowel separator, deprecated format controls, and both
+        // variation selector blocks (used to smuggle bytes past a reviewer).
+        let hidden = "a\u{AD}b\u{34F}c\u{61C}d\u{180E}e\u{206A}f\u{FE0F}g\u{E0100}h\u{E01EF}i";
+        assert_eq!(strip_invisible(hidden), "abcdefghi");
+        let g = ValueGuard::untrusted("doc");
+        assert_eq!(g.apply("<\u{61C}/doc>x"), "<doc>&lt;/doc&gt;x</doc>");
     }
 
     #[test]

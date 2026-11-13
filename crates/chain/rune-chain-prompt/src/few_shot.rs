@@ -1,7 +1,7 @@
 use rune_chain_core::{ChainError, PromptArgs};
 
 use crate::error::TemplateError;
-use crate::template::{PromptTemplate, StringTemplate, legacy_error, push_unique};
+use crate::template::{PromptTemplate, StringTemplate, UniqueNames, legacy_error};
 
 /// A few-shot prompt: an optional prefix, a list of worked examples each
 /// rendered through the same example template, and a suffix holding the
@@ -114,13 +114,13 @@ impl FewShotTemplate {
     }
 
     fn missing_variables(&self, args: &PromptArgs) -> Vec<String> {
-        let mut missing = Vec::new();
+        let mut missing = UniqueNames::default();
         for t in self.prefix.iter().chain(&self.suffix) {
             for v in t.missing_variables(args) {
-                push_unique(&mut missing, &v);
+                missing.push(&v);
             }
         }
-        missing
+        missing.into_vec()
     }
 }
 
@@ -131,13 +131,13 @@ impl PromptTemplate for FewShotTemplate {
 
     /// Variables of the prefix and suffix (examples bring their own).
     fn input_variables(&self) -> Vec<String> {
-        let mut vars = Vec::new();
+        let mut vars = UniqueNames::default();
         for t in self.prefix.iter().chain(&self.suffix) {
             for v in t.input_variables() {
-                push_unique(&mut vars, &v);
+                vars.push(&v);
             }
         }
-        vars
+        vars.into_vec()
     }
 }
 
