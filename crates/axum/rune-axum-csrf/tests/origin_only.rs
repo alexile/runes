@@ -457,7 +457,16 @@ async fn exempt_paths_and_prefixes() {
 #[tokio::test]
 async fn insecure_bypass_hook() {
     let app = app(CsrfLayer::origin(CsrfOriginConfig::new().insecure_bypass(
-        |parts| parts.headers.contains_key(http::header::AUTHORIZATION),
+        |parts| {
+            parts
+                .headers
+                .get(http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| {
+                    v.get(..7)
+                        .is_some_and(|s| s.eq_ignore_ascii_case("bearer "))
+                })
+        },
     )));
     assert_ok(
         app.clone(),
@@ -465,6 +474,16 @@ async fn insecure_bypass_hook() {
             ("origin", "https://evil.example"),
             ("authorization", "Bearer x"),
         ]),
+    )
+    .await;
+    // Browsers attach cached Basic credentials to cross-site posts themselves.
+    assert_rejected(
+        app.clone(),
+        post_with(&[
+            ("origin", "https://evil.example"),
+            ("authorization", "Basic dXNlcjpwYXNz"),
+        ]),
+        CsrfRejection::CrossOrigin,
     )
     .await;
     assert_rejected(

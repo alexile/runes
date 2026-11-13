@@ -215,15 +215,22 @@ impl CsrfOriginConfig {
     ///
     /// This is an escape hatch, hence the name: anything it lets through is
     /// unprotected. Use it for requests authenticated by other means, such as
-    /// an `Authorization` header that browsers never attach on their own.
+    /// a bearer token that browsers never attach on their own. Don't key it on
+    /// the mere presence of `Authorization`: browsers do resend cached Basic,
+    /// Digest and Negotiate credentials with cross-site form posts.
     /// Hooks run in the order they were added.
     ///
     /// ```rust
     /// use rune_axum_csrf::CsrfOriginConfig;
     ///
     /// // Bearer-token clients are not exposed to CSRF.
-    /// let config = CsrfOriginConfig::new()
-    ///     .insecure_bypass(|parts| parts.headers.contains_key(http::header::AUTHORIZATION));
+    /// let config = CsrfOriginConfig::new().insecure_bypass(|parts| {
+    ///     parts
+    ///         .headers
+    ///         .get(http::header::AUTHORIZATION)
+    ///         .and_then(|v| v.to_str().ok())
+    ///         .is_some_and(|v| v.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("bearer ")))
+    /// });
     /// # let _ = config;
     /// ```
     #[must_use]

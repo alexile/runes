@@ -77,7 +77,12 @@ let layer = CsrfLayer::origin(
         .trusted_origin("https://app.example.com") // separate front end
         .trust_proxy_headers(true)                  // TLS ends at the load balancer
         .exempt_prefix("/webhooks/")                // verified by their own signatures
-        .insecure_bypass(|parts| parts.headers.contains_key("authorization")),
+        // Bearer tokens only: browsers resend cached Basic credentials cross-site.
+        .insecure_bypass(|parts| {
+            parts.headers.get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.get(..7).is_some_and(|s| s.eq_ignore_ascii_case("bearer ")))
+        }),
 );
 
 let app: Router = Router::new()
@@ -92,7 +97,7 @@ let app: Router = Router::new()
 | `.trust_proxy_headers(bool)` | `false` | Take scheme and host from `Forwarded` / `X-Forwarded-Proto` / `X-Forwarded-Host`. Only behind a proxy that overwrites them. |
 | `.assume_https(bool)` | `true` | Scheme to assume when nothing else says. |
 | `.exempt_path(path)` / `.exempt_prefix(prefix)` | none | Skip the check (webhooks with their own auth). |
-| `.insecure_bypass(fn(&Parts) -> bool)` | none | Skip the check when the hook returns `true`, e.g. for bearer-token requests. |
+| `.insecure_bypass(fn(&Parts) -> bool)` | none | Skip the check when the hook returns `true`, e.g. for bearer-token requests. Not for any `Authorization` header: browsers attach Basic auth on their own. |
 | `.status(StatusCode)` | `403` | Rejection status. |
 
 Handlers don't get a `CsrfToken` extension in this mode.
