@@ -415,7 +415,8 @@ impl CspBuilder {
     ///
     /// # Errors
     ///
-    /// - [`Error::Csp`] for an empty policy or a malformed source.
+    /// - [`Error::Csp`] for an empty policy, a malformed source, or a
+    ///   directive name or value containing `;`.
     /// - [`Error::UnknownCspDirective`] for a directive no spec defines.
     /// - [`Error::StaticCspNonce`] for a hard-coded `'nonce-...'`.
     /// - [`Error::StrictDynamicWithoutNonce`] for a `'strict-dynamic'`
@@ -439,11 +440,30 @@ impl CspBuilder {
     }
 
     pub(crate) fn validate_for(&self, header: &'static str) -> Result<(), Error> {
+        // A `;` inside a name or value would end the directive early and
+        // start another one the caller never asked for.
+        let csp = |source| Error::Csp { header, source };
+        for (name, tokens) in &self.directives {
+            if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                return Err(csp(rune_csp::Error::InvalidDirectiveName {
+                    name: name.clone(),
+                }));
+            }
+            if let Some(Token::Lit(token)) = tokens
+                .iter()
+                .find(|t| matches!(t, Token::Lit(l) if l.contains(';')))
+            {
+                return Err(csp(rune_csp::Error::InvalidSource {
+                    directive: name.clone(),
+                    token: token.clone(),
+                }));
+            }
+        }
         let rendered = self.render(Some(PLACEHOLDER_NONCE));
         if HeaderValue::from_str(&rendered).is_err() {
             return Err(Error::InvalidHeaderValue { header });
         }
-        let policy = Policy::from_str(&rendered).map_err(|source| Error::Csp { header, source })?;
+        let policy = Policy::from_str(&rendered).map_err(csp)?;
         for directive in policy.directives() {
             if !directive.is_known() {
                 return Err(Error::UnknownCspDirective {
@@ -797,6 +817,41 @@ mod tests {
             .validate()
             .unwrap_err();
         assert_eq!(err, Error::InvalidHeaderValue { header: CSP });
+    }
+
+    #[test]
+    fn values_cannot_inject_directives() {
+        let injected = [
+            CspBuilder::new()
+                .default_src(&["'self'"])
+                .img_src(&["https://cdn.example; script-src *"]),
+            CspBuilder::new()
+                .default_src(&["'self'"])
+                .report_uri("/csp;script-src *"),
+            CspBuilder::new()
+                .default_src(&["'self'"])
+                .directive("img-src https://cdn.example; script-src", &["*"]),
+            CspBuilder::new()
+                .default_src(&["'self'"])
+                .directive("sandbox", &["allow-forms;", "script-src", "*"]),
+        ];
+        for builder in injected {
+            assert!(
+                matches!(
+                    builder.validate(),
+                    Err(Error::Csp {
+                        source: rune_csp::Error::InvalidSource { .. }
+                            | rune_csp::Error::InvalidDirectiveName { .. },
+                        ..
+                    })
+                ),
+                "{builder}"
+            );
+        }
+        // Line breaks only ever split sources, never the header.
+        let split = CspBuilder::new().img_src(&["'self'\r\nhttps://a.example"]);
+        assert_eq!(split.render(None), "img-src 'self' https://a.example");
+        split.validate().unwrap();
     }
 
     #[test]

@@ -749,9 +749,17 @@ impl XFrameOptions {
 ///
 /// Browsers ignore HSTS received over plain HTTP (RFC 6797 §8.1), and
 /// servers must not send it there (§7.2). The layer learns the scheme from
-/// `Forwarded: proto=`, `X-Forwarded-Proto`, or an absolute request URI.
-/// A server that terminates TLS itself usually sees none of these, which is
-/// why the default only skips requests known to be plain HTTP.
+/// `Forwarded: proto=`, `X-Forwarded-Proto`, or an absolute request URI;
+/// if any of them says HTTPS, the request counts as HTTPS. A server that
+/// terminates TLS itself usually sees none of these, which is why the
+/// default only skips requests known to be plain HTTP.
+///
+/// Clients can send those headers themselves. With no proxy in front to
+/// overwrite them, a client can make [`ExceptHttp`](Self::ExceptHttp) skip
+/// HSTS on its own responses (harmless unless a shared cache stores them)
+/// and make [`HttpsOnly`](Self::HttpsOnly) send it over plain HTTP (ignored
+/// by browsers). Use [`Always`](Self::Always) when the app is reached
+/// directly over TLS.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum HstsMode {

@@ -90,7 +90,7 @@ let layer = Helmet::new()
 let app: Router = Router::new().route("/", get(page)).layer(layer);
 ```
 
-`CspBuilder::strict()` is the nonce-based "strict CSP" (`script-src 'nonce-…' 'strict-dynamic' https: 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`). `'strict-dynamic'` without a nonce or hash, a hard-coded `'nonce-…'`, or an unknown directive is a build error.
+`CspBuilder::strict()` is the nonce-based "strict CSP" (`script-src 'nonce-…' 'strict-dynamic' https: 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`). `'strict-dynamic'` without a nonce or hash, a hard-coded `'nonce-…'`, an unknown directive, or a `;` inside a directive name or source (which would smuggle in another directive) is a build error.
 
 ### Report-only CSP and COEP
 
@@ -110,7 +110,7 @@ This sends `Reporting-Endpoints: csp="https://reports.example/csp", coep="/repor
 
 ### HSTS and HTTPS detection
 
-The layer reads the scheme from `Forwarded: proto=`, `X-Forwarded-Proto` or an absolute request URI. `HstsMode` picks the rule:
+The layer reads the scheme from every `Forwarded: proto=` and `X-Forwarded-Proto` value and an absolute request URI; if any of them says HTTPS, the request counts as HTTPS. Clients can send these headers too, so without a proxy that overwrites them a client can make `ExceptHttp` skip HSTS on its own responses; use `Always` when the app is reached directly over TLS. `HstsMode` picks the rule:
 
 | Mode | Sent when |
 |------|-----------|

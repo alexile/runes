@@ -131,36 +131,41 @@ where
     }
 }
 
-/// Whether the request came over HTTPS, as far as it tells: `Forwarded`
-/// first, then `X-Forwarded-Proto`, then an absolute URI.
+/// Whether the request came over HTTPS, as far as it tells, from every
+/// `Forwarded: proto=` and `X-Forwarded-Proto` value and an absolute URI.
+///
+/// Any HTTPS signal wins. The client can write these headers too, and a
+/// proxy that appends rather than replaces leaves the client's value in
+/// front, so a single `http` must not be enough to drop HSTS. The reverse
+/// mistake is harmless: browsers ignore HSTS sent over plain HTTP.
 fn request_is_https(headers: &HeaderMap, uri: &http::Uri) -> Option<bool> {
     let forwarded = headers
-        .get("forwarded")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| {
-            // The first element was added by the proxy closest to the client.
-            v.split(',').next()?.split(';').find_map(|pair| {
-                let (key, value) = pair.split_once('=')?;
-                key.trim()
-                    .eq_ignore_ascii_case("proto")
-                    .then(|| value.trim().trim_matches('"').to_owned())
-            })
+        .get_all("forwarded")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split([',', ';']))
+        .filter_map(|pair| {
+            let (key, value) = pair.split_once('=')?;
+            key.trim()
+                .eq_ignore_ascii_case("proto")
+                .then(|| value.trim().trim_matches('"'))
         });
-    let proto = forwarded.or_else(|| {
-        headers
-            .get("x-forwarded-proto")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
-            .map(|v| v.trim().to_owned())
-    });
-    let proto = proto.or_else(|| uri.scheme_str().map(str::to_owned))?;
-    if proto.eq_ignore_ascii_case("https") || proto.eq_ignore_ascii_case("wss") {
-        Some(true)
-    } else if proto.eq_ignore_ascii_case("http") || proto.eq_ignore_ascii_case("ws") {
-        Some(false)
-    } else {
-        None
+    let x_forwarded = headers
+        .get_all("x-forwarded-proto")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .map(str::trim);
+    let mut verdict = None;
+    for proto in forwarded.chain(x_forwarded).chain(uri.scheme_str()) {
+        if proto.eq_ignore_ascii_case("https") || proto.eq_ignore_ascii_case("wss") {
+            return Some(true);
+        }
+        if proto.eq_ignore_ascii_case("http") || proto.eq_ignore_ascii_case("ws") {
+            verdict = Some(false);
+        }
     }
+    verdict
 }
 
 /// Changes what [`HelmetLayer`] does for one route or response.
@@ -475,6 +480,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hsts_is_not_suppressed_by_a_client_chosen_proto() {
+        // A proxy that appends to what the client sent leaves the client's
+        // value first; it must not talk the layer out of sending HSTS.
+        let router = app(Helmet::new());
+        for (name, value) in [
+            ("forwarded", "proto=http, for=192.0.2.1;proto=https"),
+            ("x-forwarded-proto", "http, https"),
+        ] {
+            let resp = send(router.clone(), with_proto(name, value)).await;
+            assert!(
+                header(&resp, "strict-transport-security").is_some(),
+                "{name}: {value}"
+            );
+        }
+        let req = Request::get("/")
+            .header("x-forwarded-proto", "http")
+            .header("x-forwarded-proto", "https")
+            .body(Body::empty())
+            .unwrap();
+        let resp = send(router, req).await;
+        assert!(header(&resp, "strict-transport-security").is_some());
+    }
+
+    #[tokio::test]
     async fn hsts_https_only_and_always() {
         let https_only = app(Helmet::new().hsts(Hsts::new().mode(HstsMode::HttpsOnly)));
         let resp = get_root(https_only.clone()).await;
@@ -653,10 +682,13 @@ mod tests {
         assert_eq!(request_is_https(&headers, &uri), None);
         headers.insert("x-forwarded-proto", "HTTPS, http".parse().unwrap());
         assert_eq!(request_is_https(&headers, &uri), Some(true));
+        // Any HTTPS signal wins over a plain-HTTP one.
         headers.insert("forwarded", "for=x; proto=http".parse().unwrap());
+        assert_eq!(request_is_https(&headers, &uri), Some(true));
+        headers.insert("x-forwarded-proto", "http".parse().unwrap());
         assert_eq!(request_is_https(&headers, &uri), Some(false));
         headers.insert("forwarded", "for=x".parse().unwrap());
-        assert_eq!(request_is_https(&headers, &uri), Some(true));
+        assert_eq!(request_is_https(&headers, &uri), Some(false));
         headers.insert("x-forwarded-proto", "gopher".parse().unwrap());
         assert_eq!(request_is_https(&headers, &uri), None);
     }
