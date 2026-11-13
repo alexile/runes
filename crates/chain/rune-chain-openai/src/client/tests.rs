@@ -847,3 +847,17 @@ fn preflight_failure_short_circuits_every_entry_point() {
         assert!(matches!(llm.stream(&msgs).await, Err(e) if e.kind() == LlmErrorKind::Other));
     });
 }
+
+#[test]
+fn debug_hides_custom_header_and_query_values() {
+    let llm = OpenAi::new("sk-test-key-123456")
+        .header("X-Gateway-Token", "gw-secret-header-value")
+        .query_param("token", "gw-secret-query-value");
+    let shown = format!("{llm:?}");
+    assert!(!shown.contains("sk-test-key-123456"), "{shown}");
+    assert!(!shown.contains("gw-secret-header-value"), "{shown}");
+    assert!(!shown.contains("gw-secret-query-value"), "{shown}");
+    // The names are still useful when debugging a configuration.
+    assert!(shown.contains("X-Gateway-Token"), "{shown}");
+    assert!(shown.contains("token"), "{shown}");
+}

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -71,7 +72,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 /// println!("{}", result.generation);
 /// # });
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OpenAi {
     api_key: ApiKey,
     provider: Provider,
@@ -88,6 +89,33 @@ pub struct OpenAi {
     retry_delay: Duration,
     max_response_bytes: usize,
     client: reqwest::Client,
+}
+
+/// Shows custom header and query parameter names only: their values often
+/// carry gateway tokens.
+impl fmt::Debug for OpenAi {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names = |pairs: &[(String, String)]| -> Vec<String> {
+            pairs.iter().map(|(name, _)| name.clone()).collect()
+        };
+        f.debug_struct("OpenAi")
+            .field("api_key", &self.api_key)
+            .field("provider", &self.provider)
+            .field("quirks", &self.quirks)
+            .field("model", &self.model)
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("base_url", &self.base_url)
+            .field("query_params", &names(&self.query))
+            .field("headers", &names(&self.headers))
+            .field("allowed_http_hosts", &self.allowed_http_hosts)
+            .field("timeout", &self.timeout)
+            .field("max_retries", &self.max_retries)
+            .field("retry_delay", &self.retry_delay)
+            .field("max_response_bytes", &self.max_response_bytes)
+            .field("client", &self.client)
+            .finish()
+    }
 }
 
 fn default_http_client() -> reqwest::Client {
