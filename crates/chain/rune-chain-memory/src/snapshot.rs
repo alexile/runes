@@ -42,6 +42,47 @@ pub struct MemorySnapshot {
     /// [`SummaryBufferMemory`](crate::SummaryBufferMemory)).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+    /// Per-entity notes, least recently used first (only set by
+    /// `EntityMemory`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entities: Vec<EntitySummary>,
+}
+
+/// One entity and its running summary, as stored in a [`MemorySnapshot`].
+///
+/// # Example
+///
+/// ```rust
+/// use rune_chain_memory::EntitySummary;
+///
+/// let e = EntitySummary::new("Alice", "Works on the billing team.");
+/// assert_eq!(e.name, "Alice");
+/// ```
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct EntitySummary {
+    /// The entity's name as first seen.
+    pub name: String,
+    /// What the conversation has established about it.
+    pub summary: String,
+}
+
+impl EntitySummary {
+    /// Pair a name with its summary.
+    #[must_use]
+    pub fn new(name: impl Into<String>, summary: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            summary: summary.into(),
+        }
+    }
+}
+
+/// Redacted: prints nothing but the type name (summaries may hold PII).
+impl std::fmt::Debug for EntitySummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EntitySummary").finish_non_exhaustive()
+    }
 }
 
 impl MemorySnapshot {
@@ -65,7 +106,25 @@ impl MemorySnapshot {
             version: Self::FORMAT_VERSION,
             messages,
             summary,
+            entities: Vec::new(),
         }
+    }
+
+    /// Attach entity notes, least recently used first.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rune_chain_memory::{EntitySummary, MemorySnapshot};
+    ///
+    /// let snap = MemorySnapshot::new(Vec::new(), None)
+    ///     .with_entities(vec![EntitySummary::new("Paris", "Where the user lives.")]);
+    /// assert_eq!(snap.entities.len(), 1);
+    /// ```
+    #[must_use]
+    pub fn with_entities(mut self, entities: Vec<EntitySummary>) -> Self {
+        self.entities = entities;
+        self
     }
 
     /// Reject snapshots written by a newer, incompatible format.
@@ -88,6 +147,7 @@ impl std::fmt::Debug for MemorySnapshot {
             .field("version", &self.version)
             .field("messages", &self.messages.len())
             .field("has_summary", &self.summary.is_some())
+            .field("entities", &self.entities.len())
             .finish()
     }
 }
@@ -108,8 +168,12 @@ mod tests {
 
     #[test]
     fn debug_is_redacted() {
-        let s = MemorySnapshot::new(vec![Message::human("secret")], Some("s3cret".into()));
+        let s = MemorySnapshot::new(vec![Message::human("secret")], Some("s3cret".into()))
+            .with_entities(vec![EntitySummary::new("Bob", "sekret")]);
         let d = format!("{s:?}");
-        assert!(!d.contains("secret") && !d.contains("s3cret"), "{d}");
+        assert!(
+            !d.contains("secret") && !d.contains("s3cret") && !d.contains("Bob"),
+            "{d}"
+        );
     }
 }

@@ -1,10 +1,10 @@
 [package]
 name = "rune-chain-memory"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "In-process conversation memory implementations for the rune-chain LLM orchestration framework"
+description = "In-process conversation memory for rune-chain: windowed, token-budget and summary buffers, plus optional vector-retrieval and entity memories"
 license.workspace = true
 keywords = ["llm", "langchain", "memory", "conversation", "ai"]
 categories = ["asynchronous", "data-structures"]
@@ -16,6 +16,15 @@ publish = true
 rune-chain-core.workspace = true
 async-trait.workspace = true
 serde.workspace = true
+rune-chain-embed = { workspace = true, optional = true }
+rune-vectorstore = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[features]
+## `VectorMemory`: recall relevant past exchanges from a vector store.
+vector = ["dep:rune-chain-embed", "dep:rune-vectorstore"]
+## `EntityMemory`: LLM-maintained notes about the entities in a conversation.
+entity = ["dep:serde_json"]
 
 [dev-dependencies]
 rune-chain-core = { workspace = true, features = ["testing"] }
@@ -23,6 +32,9 @@ tokio = { workspace = true, features = ["full"] }
 tokio-test.workspace = true
 proptest.workspace = true
 serde_json.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

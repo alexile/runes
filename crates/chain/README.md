@@ -13,7 +13,7 @@ LLM orchestration: core traits, OpenAI/Anthropic/Ollama providers, prompts, memo
 | [`rune-chain-knowledge-graph`](rune-chain-knowledge-graph) | GraphRAG for the rune-chain LLM framework: schema-validated entity and relation extraction, entity resolution, provenance, and bounded k-hop retrieval with cited context |
 | [`rune-chain-llm`](rune-chain-llm) | LlmChain for rune-chain: prompt template + LLM + memory, with structured output, output parsers, streaming into memory, usage and finish reason |
 | [`rune-chain-loader`](rune-chain-loader) | Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV and jailed directory walks with limits |
-| [`rune-chain-memory`](rune-chain-memory) | In-process conversation memory implementations for the rune-chain LLM orchestration framework |
+| [`rune-chain-memory`](rune-chain-memory) | In-process conversation memory for rune-chain: windowed, token-budget and summary buffers, plus optional vector-retrieval and entity memories |
 | [`rune-chain-ollama`](rune-chain-ollama) | Ollama (local models) provider for rune-chain: streaming, native tool calls, structured output, embeddings, model management |
 | [`rune-chain-openai`](rune-chain-openai) | OpenAI and OpenAI-compatible (Azure, Mistral, Groq, Together, DeepSeek, OpenRouter, vLLM, LM Studio) LLM provider for rune-chain: streaming, tools, structured output |
 | [`rune-chain-output-parser`](rune-chain-output-parser) | Typed LLM output for rune-chain: instructor-style extraction with re-ask, JSON Schema validation, partial streaming, and classic parsers |

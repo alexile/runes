@@ -6,7 +6,7 @@ use rune_chain_core::{ChainError, Llm, Memory, Message, Role};
 
 use crate::budget::Buffer;
 use crate::token::{CharEstimator, TokenCounter};
-use crate::util::{lock, truncate_chars};
+use crate::util::{ErrorHook, lock, neutralize, report, truncate_chars};
 use crate::{DEFAULT_MAX_MESSAGES, MemorySnapshot};
 
 /// Default cap on the running summary length, in characters.
@@ -134,11 +134,6 @@ impl<L: Llm + ?Sized> LlmSummarizer<L> {
     }
 }
 
-/// Stop untrusted text from closing our delimiters early.
-fn neutralize(s: &str) -> String {
-    s.replace("</", "<\\/")
-}
-
 impl<L: Llm + ?Sized> std::fmt::Debug for LlmSummarizer<L> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LlmSummarizer").finish_non_exhaustive()
@@ -197,7 +192,8 @@ impl Drop for CompactGuard<'_> {
 /// **Errors:** a summarizer failure inside `add` is not propagated (the
 /// message is stored, the history simply stays over budget until the next
 /// successful compaction; [`max_messages`](Self::max_messages) still bounds
-/// it). Call [`compact`](Self::compact) to compact explicitly and observe errors.
+/// it). Register [`on_error`](Self::on_error) to log such failures, or call
+/// [`compact`](Self::compact) to compact explicitly and observe errors.
 ///
 /// **Security:** the summary is model output derived from user turns. It is
 /// capped at [`max_summary_chars`](Self::max_summary_chars), and its role is
@@ -238,6 +234,7 @@ pub struct SummaryBufferMemory {
     pin_system: bool,
     summary_role: Role,
     summary_prefix: String,
+    on_error: Option<ErrorHook>,
     state: Mutex<State>,
 }
 
@@ -262,6 +259,7 @@ impl SummaryBufferMemory {
             pin_system: true,
             summary_role: Role::System,
             summary_prefix: DEFAULT_SUMMARY_PREFIX.to_owned(),
+            on_error: None,
             state: Mutex::new(State::default()),
         }
     }
@@ -307,6 +305,36 @@ impl SummaryBufferMemory {
     #[must_use]
     pub fn summary_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.summary_prefix = prefix.into();
+        self
+    }
+
+    /// Call `hook` with summarizer errors that [`add`](Memory::add) swallows,
+    /// for logging or metrics. It runs without any lock held.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::{Arc, Mutex};
+    /// use rune_chain_memory::SummaryBufferMemory;
+    /// use rune_chain_core::{ChainError, Memory, Message};
+    ///
+    /// # tokio_test::block_on(async {
+    /// let failing = |_: Option<&str>, _: &[Message]| -> Result<String, ChainError> {
+    ///     Err(ChainError::Other("model unavailable".into()))
+    /// };
+    /// let seen = Arc::new(Mutex::new(Vec::new()));
+    /// let log = Arc::clone(&seen);
+    /// let mem = SummaryBufferMemory::new(failing, 1)
+    ///     .with_counter(|_: &Message| 1)
+    ///     .on_error(move |e: &ChainError| log.lock().unwrap().push(e.to_string()));
+    /// mem.add(Message::human("a")).await.unwrap();
+    /// mem.add(Message::human("b")).await.unwrap();
+    /// assert_eq!(seen.lock().unwrap().len(), 1);
+    /// # });
+    /// ```
+    #[must_use]
+    pub fn on_error(mut self, hook: impl Fn(&ChainError) + Send + Sync + 'static) -> Self {
+        self.on_error = Some(Arc::new(hook));
         self
     }
 
@@ -473,7 +501,9 @@ impl Memory for SummaryBufferMemory {
             s.buf.trim(usize::MAX, 0, self.max_messages);
         }
         // Best effort: see the type-level docs on errors.
-        let _ = self.compact().await;
+        if let Err(e) = self.compact().await {
+            report(self.on_error.as_ref(), &e);
+        }
         Ok(())
     }
 

@@ -3379,11 +3379,13 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-memory"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "proptest",
  "rune-chain-core",
+ "rune-chain-embed",
+ "rune-vectorstore",
  "serde",
  "serde_json",
  "tokio",

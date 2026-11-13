@@ -12,6 +12,25 @@
 //! | [`WindowedMemory`] | last `N` messages (+ optional pinned system prompt) | window |
 //! | [`TokenBufferMemory`] | newest messages fitting a token budget, system prompt pinned | tokens + message cap |
 //! | [`SummaryBufferMemory`] | recent turns verbatim + an LLM-written summary of older ones | tokens + message cap + summary length |
+//! | `VectorMemory` (feature `vector`) | past exchanges in a vector store; injects the most relevant ones | stored exchanges + exchange length + injected length |
+//! | `EntityMemory` (feature `entity`) | LLM-written notes per entity; injects those the input mentions | entity count (LRU) + name/summary length + injected length |
+//!
+//! The two retrieval memories inject their context as one [`Role::Human`]
+//! message fenced as untrusted data, never into the system prompt. Because
+//! [`Memory::messages`] does not receive the new input, both offer a
+//! `prepare(input)` method to call before reading history; without it they
+//! use the last human message.
+//!
+//! [`Role::Human`]: rune_chain_core::Role::Human
+//! [`Memory::messages`]: rune_chain_core::Memory::messages
+//!
+//! # Features
+//!
+//! - `vector`: `VectorMemory`, backed by `rune-vectorstore` and
+//!   `rune-chain-embed`.
+//! - `entity`: `EntityMemory`, using any `Llm` with structured output.
+//!
+//! Both are off by default so the core stays dependency-light.
 //!
 //! Every type also offers `snapshot()` / `restore()` with a serde-serializable
 //! [`MemorySnapshot`] for persisting conversations.
@@ -19,7 +38,8 @@
 //! # Safety properties
 //!
 //! - No lock is ever held across an `.await`, and user callbacks
-//!   ([`TokenCounter`], [`Summarizer`]) never run while a lock is held.
+//!   ([`TokenCounter`], [`Summarizer`], LLMs, embedders, stores, error hooks)
+//!   never run while a lock is held.
 //! - Lock poisoning is recovered from instead of propagating panics.
 //! - All types except an unconfigured [`SimpleMemory`] have bounded storage,
 //!   and `restore` re-applies bounds, so untrusted input cannot grow memory
@@ -81,20 +101,38 @@
 //! ```
 
 mod budget;
+#[cfg(feature = "entity")]
+mod entity;
+#[cfg(any(feature = "vector", feature = "entity"))]
+mod recent;
 mod simple;
 mod snapshot;
 mod summary;
 mod token;
 mod util;
+#[cfg(feature = "vector")]
+mod vector;
 mod windowed;
 
+#[cfg(feature = "entity")]
+pub use entity::{
+    DEFAULT_ENTITY_HEADER, DEFAULT_ENTITY_RECENT, DEFAULT_EXTRACT_INSTRUCTIONS,
+    DEFAULT_MAX_ENTITIES, DEFAULT_MAX_ENTITIES_PER_TURN, DEFAULT_MAX_ENTITY_CONTEXT_CHARS,
+    DEFAULT_MAX_ENTITY_SUMMARY_CHARS, DEFAULT_MAX_NAME_CHARS, DEFAULT_UPDATE_INSTRUCTIONS,
+    EntityMemory,
+};
 pub use simple::SimpleMemory;
-pub use snapshot::MemorySnapshot;
+pub use snapshot::{EntitySummary, MemorySnapshot};
 pub use summary::{
     DEFAULT_MAX_SUMMARY_CHARS, DEFAULT_SUMMARY_PREFIX, LlmSummarizer, Summarizer,
     SummaryBufferMemory,
 };
 pub use token::{CharEstimator, TokenBufferMemory, TokenCounter};
+#[cfg(feature = "vector")]
+pub use vector::{
+    DEFAULT_MAX_CONTEXT_CHARS, DEFAULT_MAX_EXCHANGE_CHARS, DEFAULT_MAX_TURNS,
+    DEFAULT_VECTOR_HEADER, DEFAULT_VECTOR_TOP_K, NAMESPACE_KEY, VectorMemory,
+};
 pub use windowed::WindowedMemory;
 
 /// Default hard cap on stored messages for [`TokenBufferMemory`] and

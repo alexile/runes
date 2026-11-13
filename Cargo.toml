@@ -314,7 +314,7 @@ rune-chain-anthropic = { path = "crates/chain/rune-chain-anthropic", version = "
 rune-chain-core = { path = "crates/chain/rune-chain-core", version = "0.2.1" }
 rune-chain-embed = { path = "crates/chain/rune-chain-embed", version = "0.3.0" }
 rune-chain-llm = { path = "crates/chain/rune-chain-llm", version = "0.3.0" }
-rune-chain-memory = { path = "crates/chain/rune-chain-memory", version = "0.2.0" }
+rune-chain-memory = { path = "crates/chain/rune-chain-memory", version = "0.2.1" }
 rune-chain-openai = { path = "crates/chain/rune-chain-openai", version = "0.2.0" }
 rune-chain-output-parser = { path = "crates/chain/rune-chain-output-parser", version = "0.2.0" }
 rune-chain-prompt = { path = "crates/chain/rune-chain-prompt", version = "0.2.0" }
