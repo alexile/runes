@@ -1,7 +1,11 @@
 //! Regression tests for the classic CORS misconfigurations, one per item,
 //! run end to end through an Axum router.
 
-#![allow(clippy::unwrap_used, clippy::panic, reason = "test helpers fail loudly")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test helpers fail loudly"
+)]
 
 use std::time::Duration;
 
