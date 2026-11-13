@@ -274,7 +274,9 @@ impl Histogram {
             return 0.0;
         }
         let bits = -math::log2(to_f64(top) / to_f64(self.total));
-        bits.clamp(0.0, 8.0)
+        // Equal in theory for uniform counts, but the Shannon sum can round
+        // a hair lower; keep the documented ordering.
+        bits.clamp(0.0, 8.0).min(self.shannon())
     }
 
     /// Pearson chi-square statistic against a uniform byte distribution,
@@ -501,6 +503,20 @@ mod tests {
         assert_eq!(hist.chi_square(), None);
         assert_eq!(hist.mean(), None);
         assert_eq!(hist.most_common(), None);
+    }
+
+    #[test]
+    fn min_entropy_never_exceeds_shannon() {
+        // Uniform over three values: both are log2(3), but the sum of three
+        // terms rounds one ulp below the single logarithm.
+        for len in 1..=256u32 {
+            let data: Vec<u8> = (0..len).map(|i| u8::try_from(i).unwrap_or(0)).collect();
+            let hist = Histogram::from_bytes(&data);
+            assert!(
+                hist.min_entropy() <= hist.shannon(),
+                "{len} distinct values"
+            );
+        }
     }
 
     #[test]

@@ -167,7 +167,7 @@ impl Profiler {
             self.counts[usize::from(byte)] += 1;
             self.seen += 1;
             if self.seen == self.next_emit {
-                self.next_emit += self.step;
+                self.next_emit = self.next_emit.saturating_add(self.step);
                 let offset = self.seen - self.window as u64;
                 self.last_offset = Some(offset);
                 let entropy = self.current_entropy();
@@ -522,6 +522,13 @@ mod tests {
             let last = profile.last().unwrap();
             assert_eq!(last.range().end, data.len() as u64);
         }
+    }
+
+    #[test]
+    fn huge_step_does_not_overflow() {
+        let profile = entropy_profile(b"abcdef", 2, usize::MAX).unwrap();
+        let offsets: Vec<u64> = profile.iter().map(|w| w.offset).collect();
+        assert_eq!(offsets, [0, 4]);
     }
 
     #[test]
