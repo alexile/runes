@@ -18,8 +18,8 @@ Detection reuses the workspace's patterns rather than copying them:
 
 - **Credentials**: the `rune-leak` ruleset (AWS, GitHub, Slack, Stripe, `password = "…"`, …),
   plus your own `SecretRule`s.
-- **Tokens and PII**: `rune-regex-sec` for emails, IPv4/IPv6, JWTs and PEM private-key
-  headers; local patterns for bearer tokens, credit cards, SSNs and US phone numbers.
+- **Tokens and PII**: `rune-regex-sec` for emails, IPv4/IPv6 and JWTs; local patterns for
+  whole PEM private-key blocks, bearer tokens, credit cards, SSNs and US phone numbers.
 - **Entropy**: `rune-entropy` flags any token above 4.5 bits/byte (API keys, random secrets).
 
 A `Policy` picks the categories and how each is replaced:
@@ -122,7 +122,7 @@ The CLI streams line by line, so it works on unbounded input.
 | Category       | Placeholder      | Source |
 |----------------|------------------|--------|
 | `BearerToken`  | `[BEARER]`       | `Bearer <token>` |
-| `PrivateKey`   | `[PRIVATE_KEY]`  | `rune-regex-sec` |
+| `PrivateKey`   | `[PRIVATE_KEY]`  | PEM block, `BEGIN` through `END` |
 | `Jwt`          | `[JWT]`          | `rune-regex-sec` |
 | `Credential`   | `[CREDENTIAL]`   | `rune-leak` ruleset |
 | `CreditCard`   | `[CC]`           | Visa / Mastercard / Amex / Discover |

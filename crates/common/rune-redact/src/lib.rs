@@ -8,9 +8,9 @@
 //! - **Credentials** ([`Category::Credential`]): the `rune-leak` ruleset
 //!   (AWS, GitHub, Slack, Stripe, private-key, `password = "…"`, …), plus
 //!   any extra [`SecretRule`]s.
-//! - **Structured tokens and PII**: `rune-regex-sec` for emails, IPv4, IPv6,
-//!   JWTs and PEM private-key headers; local patterns for bearer tokens,
-//!   credit cards, SSNs and US phone numbers.
+//! - **Structured tokens and PII**: `rune-regex-sec` for emails, IPv4, IPv6
+//!   and JWTs; local patterns for whole PEM private-key blocks, bearer
+//!   tokens, credit cards, SSNs and US phone numbers.
 //! - **Entropy** ([`Category::HighEntropy`]): `rune-entropy` flags any
 //!   whitespace-delimited token above a threshold (default `4.5` bits/byte).
 //!

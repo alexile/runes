@@ -168,9 +168,7 @@ impl Redactor {
             };
             match category {
                 Category::BearerToken => regex_spans(bearer_re(), text, &mut accept),
-                Category::PrivateKey => {
-                    slice_spans(text, rune_regex_sec::match_private_key(text), &mut accept);
-                }
+                Category::PrivateKey => private_key_spans(text, &mut accept),
                 Category::Jwt => slice_spans(text, rune_regex_sec::match_jwt(text), &mut accept),
                 Category::Credential => {
                     if let Some(ruleset) = &self.inner.ruleset {
@@ -364,6 +362,79 @@ fn regex_spans(re: Option<&Regex>, text: &str, accept: &mut impl FnMut(usize, us
     }
 }
 
+/// Finds PEM private keys: each `-----BEGIN … PRIVATE KEY-----` line through
+/// its `-----END …-----` line. A block with no END line (truncated, or not
+/// fully arrived yet) runs over the base64 and `Name: value` header lines
+/// that follow it, so the key body is never left behind. Line breaks may be
+/// real or JSON-escaped (`\\n`).
+fn private_key_spans(text: &str, accept: &mut impl FnMut(usize, usize)) {
+    let (Some(begin_re), Some(end_re)) = (pem_begin_re(), pem_end_re()) else {
+        return;
+    };
+    let begins: Vec<_> = begin_re.find_iter(text).collect();
+    for (i, begin) in begins.iter().enumerate() {
+        let limit = begins.get(i + 1).map_or(text.len(), regex::Match::start);
+        let rest = text.get(begin.end()..limit).unwrap_or_default();
+        let end = end_re.find(rest).map_or_else(
+            || pem_body_end(text, begin.end(), limit),
+            |m| begin.end() + m.end(),
+        );
+        accept(begin.start(), end);
+    }
+}
+
+/// The end of the run of PEM body lines (`Name: value` headers, then
+/// base64, with blank lines anywhere) that starts right after `from`, not
+/// past `limit`.
+fn pem_body_end(text: &str, from: usize, limit: usize) -> usize {
+    let text = text.get(..limit).unwrap_or(text);
+    let mut end = from;
+    let mut pos = from;
+    let mut in_body = false;
+    loop {
+        let rest = text.get(pos..).unwrap_or_default();
+        let Some(sep) = ["\r\n", "\n", "\\r\\n", "\\n"]
+            .into_iter()
+            .find(|sep| rest.starts_with(sep))
+        else {
+            return end;
+        };
+        let line = rest.get(sep.len()..).unwrap_or_default();
+        let line = line
+            .get(..line.find(['\r', '\n', '\\']).unwrap_or(line.len()))
+            .unwrap_or_default();
+        let trimmed = line.trim_matches([' ', '\t']);
+        let base64 = trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='));
+        let header = !in_body
+            && trimmed.split_once(": ").is_some_and(|(name, _)| {
+                !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            });
+        if !base64 && !header {
+            return end;
+        }
+        in_body |= base64 && !trimmed.is_empty();
+        pos += sep.len() + line.len();
+        if !trimmed.is_empty() {
+            end = pos;
+        }
+    }
+}
+
+fn pem_begin_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    cached(
+        &RE,
+        r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----",
+    )
+}
+
+fn pem_end_re() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    cached(&RE, r"-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----")
+}
+
 /// Converts sub-slices of `text` (as `rune-regex-sec` returns them) to spans.
 fn slice_spans(text: &str, parts: Vec<&str>, accept: &mut impl FnMut(usize, usize)) {
     let base = text.as_ptr().addr();
@@ -457,6 +528,8 @@ mod tests {
             phone_re(),
             ssn_re(),
             bearer_re(),
+            pem_begin_re(),
+            pem_end_re(),
         ] {
             assert!(re.is_some());
         }
@@ -627,6 +700,44 @@ mod tests {
 
     const fn rune_finding_severity() -> rune_finding::Severity {
         rune_finding::Severity::High
+    }
+
+    const PEM_KEY: &str = "-----BEGIN PRIVATE KEY-----\n\
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgf+/P7VnzoQyH+/F6\n\
+n3sVp0RGmSdIKYeaFxns1vjuXfmhRANCAAQV7oIVVRc7OI2lrPc6WNmi7ZmQywRK\n\
+g8mi6bswL0UwjsNB4JWJNvAlVqinM2nbksSeEKFga2saLK8v92voHvOh\n\
+-----END PRIVATE KEY-----";
+
+    // Regression: only the `-----BEGIN ... PRIVATE KEY-----` line was
+    // matched, so the base64 body (the key itself) was left in the output.
+    #[test]
+    fn private_key_body_is_redacted() {
+        for header in ["PRIVATE KEY", "RSA PRIVATE KEY", "ENCRYPTED PRIVATE KEY"] {
+            let pem = PEM_KEY.replace("PRIVATE KEY", header);
+            let text = format!("key:\n{pem}\nafter");
+            let out = only(Category::PrivateKey).redact(&text);
+            assert_eq!(out, "key:\n[PRIVATE_KEY]\nafter", "{header}");
+        }
+    }
+
+    #[test]
+    fn private_key_without_end_or_with_escaped_newlines() {
+        let r = only(Category::PrivateKey);
+        let truncated = PEM_KEY.replace("-----END PRIVATE KEY-----", "");
+        assert_eq!(
+            r.redact(&format!("{truncated}\nnext: a b\n")),
+            "[PRIVATE_KEY]\n\nnext: a b\n"
+        );
+        let json = format!(r#"{{"key":"{}"}}"#, PEM_KEY.replace('\n', "\\n"));
+        assert_eq!(r.redact(&json), r#"{"key":"[PRIVATE_KEY]"}"#);
+        let json = format!(r#"{{"key":"{}"}}"#, truncated.replace('\n', "\\n"));
+        assert_eq!(r.redact(&json), r#"{"key":"[PRIVATE_KEY]\n"}"#);
+        let pgp = "-----BEGIN PGP PRIVATE KEY BLOCK-----\nVersion: x 1\n\nlQOYBF\n=a1b2\n\
+                   -----END PGP PRIVATE KEY BLOCK-----";
+        assert_eq!(r.redact(pgp), "[PRIVATE_KEY]");
+        // Two blocks stay two detections.
+        let two = format!("{PEM_KEY}\n{PEM_KEY}");
+        assert_eq!(r.redact(&two), "[PRIVATE_KEY]\n[PRIVATE_KEY]");
     }
 
     #[test]

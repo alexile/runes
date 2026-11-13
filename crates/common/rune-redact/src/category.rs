@@ -22,8 +22,9 @@ use std::fmt;
 pub enum Category {
     /// `Authorization: Bearer <token>` values.
     BearerToken,
-    /// PEM private-key headers (`-----BEGIN RSA PRIVATE KEY-----`), from
-    /// `rune-regex-sec`.
+    /// PEM private keys, the whole block from `-----BEGIN … PRIVATE KEY-----`
+    /// to its END line (or through the base64 lines that follow, when the
+    /// END line is missing).
     PrivateKey,
     /// JSON Web Tokens (`eyJ….….…`), from `rune-regex-sec`.
     Jwt,

@@ -388,7 +388,7 @@ rune-proxy-protocol = { path = "crates/net/rune-proxy-protocol", version = "0.1.
 rune-rdap = { path = "crates/net/rune-rdap", version = "0.1.0" }
 # Default features off; members enable `embedded` themselves.
 rune-psl = { path = "crates/common/rune-psl", version = "0.1.1", default-features = false }
-rune-redact = { path = "crates/common/rune-redact", version = "0.2.0" }
+rune-redact = { path = "crates/common/rune-redact", version = "0.2.1" }
 rune-referrer-policy = { path = "crates/web/rune-referrer-policy", version = "0.1.0" }
 rune-regex-sec = { path = "crates/common/rune-regex-sec", version = "0.2.1" }
 rune-relay = { path = "crates/common/rune-relay", version = "0.1.0" }

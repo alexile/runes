@@ -28,8 +28,9 @@ pub const DEFAULT_MAX_BUFFER: usize = 64 * 1024;
 /// crossing that point is still redacted whole.
 ///
 /// With [`line_boundaries`](Self::with_line_boundaries) on, every complete
-/// line is emitted as soon as its newline arrives and no detection crosses a
-/// newline: the right mode for logs.
+/// line is emitted as soon as its newline arrives: the right mode for logs.
+/// The one multi-line detection, a PEM private key, is held back until its
+/// END line arrives (or the buffer limit forces it out, redacted).
 ///
 /// # Example
 ///
@@ -161,8 +162,8 @@ impl StreamRedactor {
 
     fn drain(&mut self, all: bool) -> String {
         let len = self.buf.len();
-        // No detector matches across a newline, so everything up to the last
-        // newline is final in line mode.
+        // Only private keys match across a newline (handled below), so
+        // everything up to the last newline is otherwise final in line mode.
         let line_cut = if self.line_boundaries {
             self.buf.rfind('\n').map_or(0, |i| i + 1)
         } else {
@@ -182,7 +183,16 @@ impl StreamRedactor {
             // (`password = "…"`) work per line, so whole lines keep them.
             let mut cut = head
                 .rfind('\n')
-                .map_or_else(|| safe_cut(&self.buf, &detections, target), |i| i + 1);
+                .map_or_else(|| safe_cut(&self.buf, &detections, target), |i| i + 1)
+                .max(line_cut);
+            // Never emit part of a detection, and hold back a private key
+            // whose END line has not arrived yet: more of it may follow.
+            if let Some(d) = detections
+                .iter()
+                .find(|d| d.start < cut && (cut < d.end || is_open_key(&self.buf, d)))
+            {
+                cut = d.start;
+            }
             if cut == 0 && len > self.max_buffer.max(self.window.saturating_mul(2)) {
                 // Forced: never split a detection, extend past it instead.
                 cut = detections
@@ -190,7 +200,7 @@ impl StreamRedactor {
                     .find(|d| d.start < target && target < d.end)
                     .map_or(target, |d| d.end);
             }
-            cut.max(line_cut)
+            cut
         };
         if cut == 0 {
             return String::new();
@@ -208,6 +218,19 @@ impl StreamRedactor {
 
 /// Moves `cut` back until it is neither inside a detection nor inside a run
 /// of non-whitespace.
+/// Whether `d` is a private key whose END line is not in `buf` and whose
+/// body may still continue in the next chunk (nothing but blank space or a
+/// partial line follows it).
+fn is_open_key(buf: &str, d: &crate::Detection) -> bool {
+    d.category == crate::Category::PrivateKey
+        && !d.value(buf).unwrap_or_default().contains("-----END")
+        && !buf
+            .get(d.end..)
+            .unwrap_or_default()
+            .trim_start()
+            .contains('\n')
+}
+
 fn safe_cut(buf: &str, detections: &[crate::Detection], mut cut: usize) -> usize {
     loop {
         let before = cut;
@@ -380,6 +403,33 @@ mod tests {
                 for lines in [false, true] {
                     let mut s = r.stream().with_window(window).with_line_boundaries(lines);
                     assert_eq!(chunked(&mut s, SAMPLE, size), want, "size {size}");
+                }
+            }
+        }
+    }
+
+    // Regression: a PEM private key spans several lines, and line mode
+    // (or a window cut at a newline) emitted the first lines before the
+    // END line arrived, so the key body went out unredacted.
+    #[test]
+    fn private_key_split_across_chunks_is_redacted_whole() {
+        let text = "before\n-----BEGIN PRIVATE KEY-----\n\
+            MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgf+/P7VnzoQyH+/F6\n\
+            n3sVp0RGmSdIKYeaFxns1vjuXfmhRANCAAQV7oIVVRc7OI2lrPc6WNmi7ZmQywRK\n\
+            g8mi6bswL0UwjsNB4JWJNvAlVqinM2nbksSeEKFga2saLK8v92voHvOh\n\
+            -----END PRIVATE KEY-----\nafter a@b.io\n";
+        let r = Redactor::new(Policy::none().with_category(Category::PrivateKey)).unwrap();
+        let want = "before\n[PRIVATE_KEY]\nafter a@b.io\n";
+        assert_eq!(r.redact(text), want);
+        for size in [1, 7, 30, 64, 100] {
+            for window in [32, 64, 1024] {
+                for lines in [false, true] {
+                    let mut s = r.stream().with_window(window).with_line_boundaries(lines);
+                    assert_eq!(
+                        chunked(&mut s, text, size),
+                        want,
+                        "size {size} window {window} lines {lines}"
+                    );
                 }
             }
         }
