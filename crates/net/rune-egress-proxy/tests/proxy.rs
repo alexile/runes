@@ -339,3 +339,30 @@ fn slow_clients_time_out() {
     // The proxy gives up and closes without a response.
     assert_eq!(stream.read_to_end(&mut rest).unwrap(), 0);
 }
+
+// Regression: the head timeout applied to each read, so a client sending a
+// byte just under every timeout held its connection (and thread) open for
+// as long as it liked. It now bounds the whole head.
+#[test]
+fn trickling_clients_time_out_on_the_whole_head() {
+    let proxy =
+        start_tcp(Proxy::new(Policy::new()).with_head_timeout(Some(Duration::from_millis(300))));
+    let stream = tcp(proxy);
+    let mut writer = stream.try_clone().unwrap();
+    let trickle = thread::spawn(move || {
+        // 40 bytes at 50 ms each: 2 s in total, never 300 ms apart.
+        for byte in b"CONNECT a.test:443 HTTP/1.1\r\nX-Pad: abc" {
+            if writer.write_all(&[*byte]).is_err() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+    let started = std::time::Instant::now();
+    let mut reader = stream;
+    let mut rest = Vec::new();
+    let _ = reader.read_to_end(&mut rest);
+    let took = started.elapsed();
+    assert!(took < Duration::from_millis(1500), "closed after {took:?}");
+    trickle.join().unwrap();
+}

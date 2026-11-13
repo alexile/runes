@@ -5,7 +5,7 @@ use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rune_host_match::Hostname;
 
@@ -272,7 +272,9 @@ impl Proxy {
     /// and the [observer](Proxy::with_observer) an [`Event`]. Errors are
     /// I/O failures on the client connection.
     pub fn handle<S: Stream>(&self, mut client: S) -> io::Result<()> {
-        client.set_read_timeout(self.head_timeout)?;
+        // The timeout bounds the whole head, not each read: a client that
+        // trickles a byte at a time must not hold the connection forever.
+        let deadline = self.head_timeout.map(|timeout| Instant::now() + timeout);
         let mut buf = Vec::with_capacity(1024);
         let mut chunk = [0u8; 1024];
         let request = loop {
@@ -283,6 +285,13 @@ impl Proxy {
                     self.emit(&Event::Rejected { error: &error });
                     return reply(&mut client, error.status().unwrap_or(400));
                 }
+            }
+            if let Some(deadline) = deadline {
+                let left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(io::ErrorKind::TimedOut.into());
+                }
+                client.set_read_timeout(Some(left))?;
             }
             let n = match client.read(&mut chunk) {
                 Ok(0) => return Ok(()),

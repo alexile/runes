@@ -85,8 +85,11 @@ rune-egress-proxy --listen 127.0.0.1:3128 \
 ## Limits
 
 This is a tunnel, not a firewall: it constrains only clients that use it
-and cannot see inside TLS. Only `CONNECT` is supported; plain-HTTP
-forwarding (`GET http://…`) gets `501`. Open tunnels have no idle timeout.
+and cannot see inside TLS. Only the `CONNECT` target is checked, not the
+TLS SNI or `Host` inside the tunnel, so an allowed name on a shared CDN can
+reach other sites on that CDN (domain fronting). Only `CONNECT` is
+supported; plain-HTTP forwarding (`GET http://…`) gets `501`. Open tunnels
+have no idle timeout.
 
 ## License
 

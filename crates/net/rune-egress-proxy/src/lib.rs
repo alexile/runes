@@ -69,8 +69,11 @@
 //! This is a tunnel, not a firewall: it constrains only clients that use
 //! it, and it cannot see inside TLS. For a hard boundary, give the client a
 //! network namespace with no other route and expose the proxy through a
-//! bind-mounted Unix socket ([`Proxy::serve_unix`]). Connections are served
-//! one thread each, with no idle timeout once a tunnel is open.
+//! bind-mounted Unix socket ([`Proxy::serve_unix`]). Only the `CONNECT`
+//! target is checked, not the TLS SNI or `Host` inside the tunnel, so an
+//! allowed name served by a shared CDN can be used to reach other sites on
+//! that CDN (domain fronting). Connections are served one thread each, with
+//! no idle timeout once a tunnel is open.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
