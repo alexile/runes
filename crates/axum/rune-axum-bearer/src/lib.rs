@@ -75,8 +75,17 @@ use std::convert::Infallible;
 ///
 /// let app: Router = Router::new().route("/api", get(handler));
 /// ```
-#[derive(Debug, Clone)]
+///
+/// `Debug` output redacts the token, so logging the extractor does not leak
+/// a credential.
+#[derive(Clone)]
 pub struct BearerToken(pub String);
+
+impl std::fmt::Debug for BearerToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("BearerToken").field(&"[redacted]").finish()
+    }
+}
 
 /// Rejection returned by [`BearerToken`] when extraction fails.
 ///
@@ -341,5 +350,11 @@ mod tests {
             response.headers().get("x-token").unwrap().to_str().unwrap(),
             jwt
         );
+    }
+
+    #[test]
+    fn debug_never_prints_the_token() {
+        let rendered = format!("{:?}", BearerToken("s3cr3t-token".to_owned()));
+        assert!(!rendered.contains("s3cr3t-token"), "{rendered}");
     }
 }
