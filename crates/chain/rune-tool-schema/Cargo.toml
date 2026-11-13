@@ -1,10 +1,10 @@
 [package]
 name = "rune-tool-schema"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "MCP-shaped tool descriptor: name, description, JSON-schema input, safety level and category"
+description = "Tool definitions for LLM function calling: MCP descriptor, OpenAI/Anthropic/Gemini export with schema lint, argument validation and text hygiene"
 license.workspace = true
 keywords = ["mcp", "llm", "tools", "agent", "json-schema"]
 categories = ["data-structures", "encoding"]
@@ -18,6 +18,7 @@ publish = true
 schemars = ["dep:schemars"]
 
 [dependencies]
+regex.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

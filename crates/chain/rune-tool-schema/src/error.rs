@@ -1,6 +1,7 @@
 //! The crate's error type.
 
-/// Why a descriptor, name, category or MCP tool definition was rejected.
+/// Why a descriptor, name, category, schema or tool definition was
+/// rejected.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -29,6 +30,49 @@ pub enum Error {
         tool: String,
         /// `inputSchema` or `outputSchema`.
         field: &'static str,
+    },
+    /// A schema cannot be compiled for argument checking.
+    #[error("invalid schema at {pointer:?}: {reason}")]
+    InvalidSchema {
+        /// JSON Pointer to the problem inside the schema.
+        pointer: String,
+        /// What is wrong.
+        reason: String,
+    },
+    /// The input schema uses a keyword the target provider rejects and
+    /// that cannot be rewritten; see [`Dialect::lint`](crate::Dialect::lint).
+    #[error("tool {tool:?}: {dialect} cannot accept the schema at {pointer:?}: {reason}")]
+    UnsupportedSchema {
+        /// The tool the schema belongs to.
+        tool: String,
+        /// The target dialect.
+        dialect: &'static str,
+        /// JSON Pointer to the keyword.
+        pointer: String,
+        /// Why.
+        reason: String,
+    },
+    /// Model-facing text contains an invisible or bidirectional character
+    /// (see [`is_hidden_char`](crate::is_hidden_char)).
+    #[error("tool {tool:?}: hidden character U+{:04X} in {location}", u32::from(*character))]
+    HiddenCharacter {
+        /// The tool concerned.
+        tool: String,
+        /// `title`, `description`, `tags`, or a JSON Pointer into the
+        /// input schema prefixed with `inputSchema`.
+        location: String,
+        /// The character found.
+        character: char,
+    },
+    /// The description is longer than the cap in force.
+    #[error("tool {tool:?}: description is {chars} characters, more than the {max} allowed")]
+    DescriptionTooLong {
+        /// The tool concerned.
+        tool: String,
+        /// Its length in characters.
+        chars: usize,
+        /// The cap.
+        max: usize,
     },
     /// The `_meta` entry this crate writes could not be read back.
     #[error("tool {tool:?}: malformed `_meta` entry {key:?}: {reason}")]

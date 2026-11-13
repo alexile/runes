@@ -1,9 +1,14 @@
 //! [`ToolDescriptor`]: the protocol-neutral description of one tool.
 
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{Error, McpTool, SafetyLevel, ToolCategory, ToolHints};
+use crate::dialect::{convert, envelope, find_hidden_in, sanitize_annotations};
+use crate::{
+    ArgumentError, Dialect, Error, ExportOptions, McpTool, ProviderTool, SafetyLevel,
+    SchemaFinding, ToolCategory, ToolHints, Validator, find_hidden, strip_hidden,
+};
 
 /// Longest tool name MCP accepts, in characters.
 pub const MAX_NAME_LEN: usize = 128;
@@ -211,6 +216,266 @@ impl ToolDescriptor {
     pub fn to_mcp(&self) -> Result<McpTool, Error> {
         self.validate()?;
         Ok(McpTool::from_descriptor(self))
+    }
+
+    /// Export for one provider with the default [`ExportOptions`]; see
+    /// [`Self::export_with`].
+    ///
+    /// ```
+    /// use rune_tool_schema::{Dialect, ToolDescriptor};
+    /// use serde_json::json;
+    ///
+    /// let tool = ToolDescriptor::new("get_weather", "Current weather for a city.")
+    ///     .with_input_schema(json!({
+    ///         "type": "object",
+    ///         "properties": {
+    ///             "city": { "type": "string" },
+    ///             "units": { "type": "string", "enum": ["c", "f"] }
+    ///         },
+    ///         "required": ["city"]
+    ///     }));
+    ///
+    /// let anthropic = tool.export(Dialect::Anthropic)?;
+    /// assert_eq!(anthropic.definition["input_schema"]["required"], json!(["city"]));
+    ///
+    /// let strict = tool.export(Dialect::OpenAiStrict)?;
+    /// let function = &strict.definition["function"];
+    /// assert_eq!(function["strict"], true);
+    /// assert_eq!(function["parameters"]["required"], json!(["city", "units"]));
+    /// assert_eq!(function["parameters"]["additionalProperties"], false);
+    /// assert_eq!(
+    ///     function["parameters"]["properties"]["units"]["type"],
+    ///     json!(["string", "null"])
+    /// );
+    ///
+    /// let gemini = tool.export(Dialect::Gemini)?;
+    /// assert_eq!(gemini.definition["parameters"]["type"], "OBJECT");
+    /// # Ok::<(), rune_tool_schema::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::export_with`].
+    pub fn export(&self, dialect: Dialect) -> Result<ProviderTool, Error> {
+        self.export_with(dialect, &ExportOptions::default())
+    }
+
+    /// Export as a tool definition in `dialect`'s format.
+    ///
+    /// The descriptor is [validated](Self::validate), the name is checked
+    /// against the provider's rules, the description is sanitized (or
+    /// checked, see [`ExportOptions::sanitize`]) and capped, and the input
+    /// schema is rewritten into the provider's subset. Every rewrite and
+    /// removal is listed in [`ProviderTool::findings`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidName`] for a name the provider refuses,
+    /// [`Error::HiddenCharacter`], [`Error::DescriptionTooLong`],
+    /// [`Error::UnsupportedSchema`] for a schema the provider would reject
+    /// even after rewriting, or whatever [`Self::validate`] reports.
+    pub fn export_with(
+        &self,
+        dialect: Dialect,
+        options: &ExportOptions,
+    ) -> Result<ProviderTool, Error> {
+        self.validate()?;
+        dialect.validate_name(&self.name)?;
+        let description = if options.sanitize {
+            strip_hidden(&self.description)
+        } else {
+            self.check_text("description", &self.description)?;
+            self.description.as_str().into()
+        };
+        self.check_length(&description, options.max_description_chars)?;
+        let mut schema = self.input_schema.clone();
+        if options.sanitize {
+            sanitize_annotations(&mut schema, 0);
+        }
+        self.check_schema_text(&schema)?;
+        let (converted, findings) = convert(dialect, &schema);
+        if let Some(blocking) = findings.iter().find(|f| f.is_blocking()) {
+            return Err(Error::UnsupportedSchema {
+                tool: self.name.clone(),
+                dialect: dialect.as_str(),
+                pointer: blocking.pointer.clone(),
+                reason: blocking.message.clone(),
+            });
+        }
+        Ok(ProviderTool {
+            dialect,
+            definition: envelope(dialect, &self.name, &description, converted),
+            findings,
+        })
+    }
+
+    /// The input-schema keywords `dialect` would reject or ignore; see
+    /// [`Dialect::lint`].
+    #[must_use]
+    pub fn lint(&self, dialect: Dialect) -> Vec<SchemaFinding> {
+        dialect.lint(&self.input_schema)
+    }
+
+    /// Check the model-facing text: no [hidden characters](crate::is_hidden_char)
+    /// in the title, description, tags or anywhere in the schemas (keys
+    /// included), and a description of at most `max_description_chars`
+    /// characters ([`MAX_DESCRIPTION_CHARS`](crate::MAX_DESCRIPTION_CHARS)
+    /// is a reasonable default).
+    ///
+    /// ```
+    /// use rune_tool_schema::{Error, ToolDescriptor, MAX_DESCRIPTION_CHARS};
+    ///
+    /// let tool = ToolDescriptor::new("add", "Adds numbers.\u{202e}gnorI");
+    /// assert!(matches!(
+    ///     tool.check_hygiene(MAX_DESCRIPTION_CHARS),
+    ///     Err(Error::HiddenCharacter { character: '\u{202e}', .. })
+    /// ));
+    /// assert!(tool.sanitized().check_hygiene(MAX_DESCRIPTION_CHARS).is_ok());
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error::HiddenCharacter`] or [`Error::DescriptionTooLong`].
+    pub fn check_hygiene(&self, max_description_chars: usize) -> Result<(), Error> {
+        if let Some(title) = &self.title {
+            self.check_text("title", title)?;
+        }
+        self.check_text("description", &self.description)?;
+        for tag in &self.tags {
+            self.check_text("tags", tag)?;
+        }
+        self.check_length(&self.description, max_description_chars)?;
+        self.check_schema_text(&self.input_schema)?;
+        if let Some(output) = &self.output_schema
+            && let Some((pointer, character)) = find_hidden_in(output, &mut String::new(), 0)
+        {
+            return Err(Error::HiddenCharacter {
+                tool: self.name.clone(),
+                location: format!("outputSchema{pointer}"),
+                character,
+            });
+        }
+        Ok(())
+    }
+
+    /// Remove [hidden characters](crate::is_hidden_char) from the title,
+    /// description and tags, and from `description` and `title` strings
+    /// inside the schemas. Property names and values are left alone, since
+    /// changing them would change the tool's interface;
+    /// [`Self::check_hygiene`] still reports hidden characters there.
+    #[must_use]
+    pub fn sanitized(mut self) -> Self {
+        if let Some(title) = &mut self.title {
+            *title = strip_hidden(title).into_owned();
+        }
+        self.description = strip_hidden(&self.description).into_owned();
+        for tag in &mut self.tags {
+            *tag = strip_hidden(tag).into_owned();
+        }
+        sanitize_annotations(&mut self.input_schema, 0);
+        if let Some(output) = &mut self.output_schema {
+            sanitize_annotations(output, 0);
+        }
+        self
+    }
+
+    /// Compile the input schema into a reusable [`Validator`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidSchema`] when the schema cannot be compiled.
+    pub fn validator(&self) -> Result<Validator, Error> {
+        Validator::new(&self.input_schema)
+    }
+
+    /// Check model-produced arguments against the input schema. Compiles
+    /// the schema on every call; keep a [`Self::validator`] for hot paths.
+    ///
+    /// ```
+    /// use rune_tool_schema::{single_input_schema, ArgumentError, ToolDescriptor};
+    /// use serde_json::json;
+    ///
+    /// let tool = ToolDescriptor::new("echo", "Echo.").with_input_schema(single_input_schema("Text"));
+    /// assert!(tool.validate_arguments(&json!({ "input": "hi" })).is_ok());
+    /// let err = tool.validate_arguments(&json!({ "input": 1 })).unwrap_err();
+    /// assert_eq!(err.to_string(), "invalid arguments:\n/input: expected string, got integer");
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`ArgumentError::Invalid`] listing the violations, or
+    /// [`ArgumentError::Schema`] if the schema cannot be compiled.
+    pub fn validate_arguments(&self, arguments: &Value) -> Result<(), ArgumentError> {
+        self.validator()
+            .map_err(ArgumentError::Schema)?
+            .validate(arguments)
+            .map_err(ArgumentError::Invalid)
+    }
+
+    /// [`Self::validate_arguments`], then deserialize into `T`.
+    ///
+    /// ```
+    /// use rune_tool_schema::ToolDescriptor;
+    /// use serde_json::json;
+    ///
+    /// #[derive(serde::Deserialize)]
+    /// struct Args { city: String }
+    ///
+    /// let tool = ToolDescriptor::new("weather", "Weather.").with_input_schema(json!({
+    ///     "type": "object",
+    ///     "properties": { "city": { "type": "string" } },
+    ///     "required": ["city"]
+    /// }));
+    /// let args: Args = tool.parse_arguments(&json!({ "city": "Oslo" }))?;
+    /// assert_eq!(args.city, "Oslo");
+    /// # Ok::<(), rune_tool_schema::ArgumentError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::validate_arguments`] reports, or
+    /// [`ArgumentError::Deserialize`] when the arguments fit the schema but
+    /// not `T`.
+    pub fn parse_arguments<T: DeserializeOwned>(
+        &self,
+        arguments: &Value,
+    ) -> Result<T, ArgumentError> {
+        self.validate_arguments(arguments)?;
+        T::deserialize(arguments).map_err(|err| ArgumentError::Deserialize(err.to_string()))
+    }
+
+    fn check_text(&self, location: &str, text: &str) -> Result<(), Error> {
+        match find_hidden(text) {
+            None => Ok(()),
+            Some((_, character)) => Err(Error::HiddenCharacter {
+                tool: self.name.clone(),
+                location: location.to_owned(),
+                character,
+            }),
+        }
+    }
+
+    fn check_length(&self, description: &str, max: usize) -> Result<(), Error> {
+        let chars = description.chars().count();
+        if chars > max {
+            return Err(Error::DescriptionTooLong {
+                tool: self.name.clone(),
+                chars,
+                max,
+            });
+        }
+        Ok(())
+    }
+
+    fn check_schema_text(&self, schema: &Value) -> Result<(), Error> {
+        match find_hidden_in(schema, &mut String::new(), 0) {
+            None => Ok(()),
+            Some((pointer, character)) => Err(Error::HiddenCharacter {
+                tool: self.name.clone(),
+                location: format!("inputSchema{pointer}"),
+                character,
+            }),
+        }
     }
 
     /// Import an MCP `Tool` definition; see [`McpTool::to_descriptor`].
