@@ -17,7 +17,7 @@ Small utilities: encodings, hashes, ciphers, binary formats, secrets, logging.
 | [`rune-byte-magic`](rune-byte-magic) | Identify file types from magic bytes — pure Rust, no libmagic dependency |
 | [`rune-caesar`](rune-caesar) | Caesar cipher — shift-based substitution cipher with brute-force decoder |
 | [`rune-cidr`](rune-cidr) | CIDR (IPv4/IPv6) parsing, membership and range math (expand, split, aggregate, overlaps) — no dependencies beyond std |
-| [`rune-config`](rune-config) | Layered TOML configuration (defaults, files, environment, CLI) with per-key source tracking |
+| [`rune-config`](rune-config) | Layered configuration (defaults, TOML, .env, environment, overrides) with per-key source tracking, a .env parser and env-to-struct deserialization |
 | [`rune-crc32`](rune-crc32) | Compute CRC-32 checksums of byte slices and files (IEEE 802.3 / Ethernet polynomial) |
 | [`rune-dirs`](rune-dirs) | Per-app config, cache, data and state directories (XDG, macOS, Windows) from a caller-supplied environment |
 | [`rune-elf`](rune-elf) | Lightweight ELF binary parser: header, sections, segments, security flags (PIE, NX, RELRO, stack canary, FORTIFY) |

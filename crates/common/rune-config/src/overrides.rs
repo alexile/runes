@@ -4,6 +4,7 @@ use toml::Value;
 
 use crate::issue::{ConfigIssue, Source};
 use crate::key::parse_key;
+use crate::redact::{is_secret_key, scrub};
 use crate::value::ValueKind;
 
 /// One override: a value for a single key, from one variable or flag.
@@ -35,8 +36,10 @@ struct EnvVar {
 ///   variable, one key, one [`ValueKind`].
 /// - **Prefix** ([`prefix`](Self::prefix)): every variable starting with
 ///   the prefix maps to a key made from the rest of its name, lower-cased,
-///   with `__` separating key segments. With prefix `APP_`, `APP_SCAN__RATE_LIMIT`
-///   sets `scan.rate_limit`. Values use [`ValueKind::Auto`].
+///   with `__` (see [`separator`](Self::separator)) separating key
+///   segments. With prefix `APP_`, `APP_SCAN__RATE_LIMIT` sets
+///   `scan.rate_limit`. Values use [`ValueKind::Auto`], so pin the type
+///   with an explicit mapping when a string may look like a number.
 ///
 /// Prefix matches apply first, in variable-name order; explicit mappings
 /// apply after them, in the order they were added, so an explicit mapping
@@ -51,6 +54,8 @@ pub struct EnvMapping {
     vars: Vec<EnvVar>,
     prefix: Option<String>,
     ignored: Vec<String>,
+    separator: Option<String>,
+    case_insensitive: bool,
 }
 
 impl EnvMapping {
@@ -94,6 +99,32 @@ impl EnvMapping {
         self
     }
 
+    /// The text between key segments in prefix-matched names (default
+    /// `__`). An empty separator keeps the whole name as one segment.
+    #[must_use]
+    pub fn separator(mut self, separator: impl Into<String>) -> Self {
+        self.separator = Some(separator.into());
+        self
+    }
+
+    /// Matches the prefix ignoring ASCII case (`app_x` matches `APP_`).
+    /// Off by default.
+    #[must_use]
+    pub const fn case_insensitive(mut self, on: bool) -> Self {
+        self.case_insensitive = on;
+        self
+    }
+
+    fn strip_prefix<'n>(&self, prefix: &str, name: &'n str) -> Option<&'n str> {
+        if self.case_insensitive {
+            let head = name.get(..prefix.len())?;
+            head.eq_ignore_ascii_case(prefix)
+                .then(|| &name[prefix.len()..])
+        } else {
+            name.strip_prefix(prefix)
+        }
+    }
+
     /// Excludes variable `name` from prefix matching, for variables that
     /// share the prefix but are not config keys (such as `APP_CONFIG`
     /// naming the config file).
@@ -104,24 +135,42 @@ impl EnvMapping {
     }
 
     /// Resolves `vars` into overrides and issues.
+    #[must_use]
     pub fn resolve(&self, vars: &[(String, String)]) -> (Vec<Override>, Vec<ConfigIssue>) {
+        self.resolve_with(vars, |name, _| Source::Env(name.to_owned()))
+    }
+
+    /// Like [`resolve`](Self::resolve), attributing each variable (by name
+    /// and index in `vars`) with `source`.
+    pub(crate) fn resolve_with(
+        &self,
+        vars: &[(String, String)],
+        source: impl Fn(&str, usize) -> Source,
+    ) -> (Vec<Override>, Vec<ConfigIssue>) {
         let mut overrides = Vec::new();
         let mut issues = Vec::new();
 
         if let Some(prefix) = self.prefix.as_deref() {
-            let mut matched: Vec<&(String, String)> = vars
+            let separator = self.separator.as_deref().unwrap_or("__");
+            let mut matched: Vec<(usize, &str, &str, &str)> = vars
                 .iter()
-                .filter(|(name, _)| {
-                    name.starts_with(prefix)
-                        && !self.ignored.contains(name)
-                        && !self.vars.iter().any(|var| &var.name == name)
+                .enumerate()
+                .filter(|(_, (name, _))| {
+                    !self.ignored.contains(name) && !self.vars.iter().any(|var| &var.name == name)
+                })
+                .filter_map(|(index, (name, raw))| {
+                    let rest = self.strip_prefix(prefix, name)?;
+                    Some((index, name.as_str(), rest, raw.as_str()))
                 })
                 .collect();
-            matched.sort_by(|a, b| a.0.cmp(&b.0));
-            for (name, raw) in matched {
-                let source = Source::Env(name.clone());
-                let rest = &name[prefix.len()..];
-                let key: Vec<String> = rest.split("__").map(str::to_ascii_lowercase).collect();
+            matched.sort_by(|a, b| a.1.cmp(b.1));
+            for (index, name, rest, raw) in matched {
+                let source = source(name, index);
+                let key: Vec<String> = if separator.is_empty() {
+                    vec![rest.to_ascii_lowercase()]
+                } else {
+                    rest.split(separator).map(str::to_ascii_lowercase).collect()
+                };
                 if key.iter().any(String::is_empty) {
                     issues.push(ConfigIssue::new(
                         source,
@@ -140,10 +189,16 @@ impl EnvMapping {
 
         for var in &self.vars {
             // The last occurrence wins, as it would in a real environment.
-            let Some((_, raw)) = vars.iter().rev().find(|(name, _)| name == &var.name) else {
+            let Some((index, (_, raw))) = vars
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, (name, _))| name == &var.name)
+            else {
                 continue;
             };
-            let source = Source::Env(var.name.clone());
+            let source = source(&var.name, index);
+            let secret = is_secret_key(&var.name) || is_secret_key(&var.key_text);
             match (&var.key, var.kind.parse(raw)) {
                 (Err(message), _) => {
                     issues.push(ConfigIssue::new(
@@ -156,7 +211,7 @@ impl EnvMapping {
                     issues.push(ConfigIssue::new(
                         source,
                         Some(var.key_text.clone()),
-                        message,
+                        scrub(message, raw, secret),
                     ));
                 }
                 (Ok(key), Ok(value)) => overrides.push(Override {

@@ -1,12 +1,12 @@
 [package]
 name = "rune-config"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Layered TOML configuration (defaults, files, environment, CLI) with per-key source tracking"
+description = "Layered configuration (defaults, TOML, .env, environment, overrides) with per-key source tracking, a .env parser and env-to-struct deserialization"
 license.workspace = true
-keywords = ["config", "toml", "layered", "environment", "cli"]
+keywords = ["config", "dotenv", "env", "toml", "layered"]
 categories = ["config"]
 repository.workspace = true
 readme = "README.md"
@@ -15,6 +15,7 @@ publish = false
 [dependencies]
 rune-dirs.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 

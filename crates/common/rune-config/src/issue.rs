@@ -22,6 +22,19 @@ pub enum Source {
     Inline(String),
     /// An environment variable, by name.
     Env(String),
+    /// A `.env` file as a whole, for problems such as a syntax error or an
+    /// unreadable file.
+    Dotenv(PathBuf),
+    /// One variable from a `.env` file (`file` is `None` for text parsed
+    /// in memory).
+    DotenvVar {
+        /// The file the variable was read from.
+        file: Option<PathBuf>,
+        /// The variable name.
+        var: String,
+        /// 1-based line of the assignment.
+        line: usize,
+    },
     /// A command-line flag, as the user typed it (for example `--rps`).
     Cli(String),
     /// The merged configuration as a whole, for problems no single layer
@@ -38,6 +51,17 @@ impl fmt::Display for Source {
             Self::File(path) => write!(f, "file {}", path.display()),
             Self::Inline(name) => write!(f, "{name}"),
             Self::Env(var) => write!(f, "environment variable {var}"),
+            Self::Dotenv(path) => write!(f, "dotenv file {}", path.display()),
+            Self::DotenvVar {
+                file: Some(file),
+                var,
+                line,
+            } => write!(f, "{var} in {}:{line}", file.display()),
+            Self::DotenvVar {
+                file: None,
+                var,
+                line,
+            } => write!(f, "{var} in dotenv text, line {line}"),
             Self::Cli(flag) => write!(f, "command-line flag {flag}"),
             Self::Merged => f.write_str("merged configuration"),
         }

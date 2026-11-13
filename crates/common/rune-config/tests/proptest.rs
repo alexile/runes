@@ -1,7 +1,12 @@
 //! Property tests: key round trips, merge invariants, no panics.
 
 use proptest::prelude::*;
-use rune_config::{ConfigLoader, Source, Table, Value, ValueKind, format_key, parse_key};
+use std::collections::HashMap;
+
+use rune_config::{
+    ConfigLoader, Dotenv, DotenvOptions, EnvReader, Source, Table, Value, ValueKind, format_dotenv,
+    format_key, parse_key,
+};
 
 fn leaf() -> impl Strategy<Value = Value> {
     prop_oneof![
@@ -100,5 +105,58 @@ proptest! {
         let text = loaded.to_toml_string().unwrap();
         let reparsed: Table = text.parse().unwrap();
         prop_assert_eq!(&reparsed, loaded.table());
+    }
+
+    #[test]
+    fn dotenv_parser_never_panics(text in any::<String>()) {
+        let _ = Dotenv::parse(&text);
+        let _ = DotenvOptions::new().expand(true).expansion_env([("A", "1")]).parse(&text);
+    }
+
+    #[test]
+    fn dotenv_parser_never_panics_on_dotenv_like_text(
+        text in r#"([A-Za-z_ =#'"\$\{\}:\-\n\t]|export ){0,60}"#
+    ) {
+        let _ = Dotenv::parse(&text);
+        let _ = DotenvOptions::new().expand(true).parse(&text);
+    }
+
+    #[test]
+    fn dotenv_writer_round_trips(
+        pairs in prop::collection::vec(("[A-Za-z_][A-Za-z0-9_.]{0,8}", any::<String>()), 0..6)
+    ) {
+        let text = format_dotenv(pairs.iter().map(|(k, v)| (k, v))).unwrap();
+        for options in [DotenvOptions::new(), DotenvOptions::new().expand(true)] {
+            let env = options.parse(&text).unwrap();
+            let got: Vec<(String, String)> =
+                env.vars().map(|(k, v)| (k.to_owned(), v.to_owned())).collect();
+            prop_assert_eq!(&got, &pairs);
+            prop_assert_eq!(env.to_dotenv_string(), text.clone());
+        }
+    }
+
+    #[test]
+    fn unquoted_simple_values_survive(key in "[A-Z_][A-Z0-9_]{0,8}", value in "[A-Za-z0-9_./:@-]{0,20}") {
+        let env = Dotenv::parse(&format!("{key}={value}")).unwrap();
+        prop_assert_eq!(env.get(&key), Some(value.as_str()));
+    }
+
+    #[test]
+    fn env_reader_never_panics(
+        vars in prop::collection::vec(("APP_[A-Z_]{0,10}", any::<String>()), 0..6)
+    ) {
+        let _ = EnvReader::new().prefix("APP_").from_vars::<HashMap<String, Value>, _, _, _>(vars.clone());
+        let _ = EnvReader::new().prefix("app_").case_insensitive(true)
+            .from_vars::<HashMap<String, Vec<u8>>, _, _, _>(vars);
+    }
+
+    #[test]
+    fn env_reader_round_trips_integers(n in any::<i64>(), m in any::<u16>()) {
+        let vars = [("APP_N".to_owned(), n.to_string()), ("APP_M__X".to_owned(), m.to_string())];
+        let got: HashMap<String, Value> = EnvReader::new().prefix("APP_").from_vars(vars).unwrap();
+        let text = n.to_string();
+        prop_assert_eq!(got["n"].as_str(), Some(text.as_str()));
+        let typed: HashMap<String, i64> = EnvReader::new().prefix("APP_N").from_vars([("APP_N_V", n.to_string())]).unwrap();
+        prop_assert_eq!(typed["_v"], n);
     }
 }

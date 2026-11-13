@@ -26,6 +26,9 @@ pub enum ValueKind {
     /// A comma-separated list of strings. Items are trimmed and empty items
     /// dropped, so the empty string is an empty list.
     StringList,
+    /// A JSON value (`["a", 1]`, `{"host": "x"}`, `true`, `"text"`). JSON
+    /// `null` has no TOML equivalent and is rejected.
+    Json,
 }
 
 impl ValueKind {
@@ -47,6 +50,8 @@ impl ValueKind {
             Self::Boolean => boolean(raw.trim())
                 .map(Value::Boolean)
                 .ok_or_else(|| format!("expected true or false, got `{raw}`")),
+            Self::Json => serde_json::from_str::<Value>(raw)
+                .map_err(|error| format!("expected JSON: {error}")),
             Self::StringList => Ok(Value::Array(
                 raw.split(',')
                     .map(str::trim)
@@ -152,5 +157,11 @@ mod tests {
             Ok(Value::Array(vec!["a".into(), "b".into(), "c".into()]))
         );
         assert_eq!(ValueKind::StringList.parse(""), Ok(Value::Array(vec![])));
+        assert_eq!(
+            ValueKind::Json.parse(r#"["a", 1]"#),
+            Ok(Value::Array(vec!["a".into(), Value::Integer(1)]))
+        );
+        assert!(ValueKind::Json.parse("null").is_err());
+        assert!(ValueKind::Json.parse("[1,").is_err());
     }
 }
