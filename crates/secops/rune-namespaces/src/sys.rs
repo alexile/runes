@@ -72,7 +72,7 @@ impl ChildSetup {
         unsafe_code,
         reason = "prctl/setsid/unshare/sethostname are FFI calls made in the forked child"
     )]
-    fn run(&self) -> std::io::Result<()> {
+    fn run(&self, parent: libc::pid_t) -> std::io::Result<()> {
         if self.new_session {
             // SAFETY: setsid takes no arguments.
             check(unsafe { libc::setsid() })?;
@@ -80,6 +80,12 @@ impl ChildSetup {
         if self.die_with_parent {
             // SAFETY: PR_SET_PDEATHSIG takes a signal number; extra args are ignored.
             check(unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) })?;
+            // If the parent died before the prctl, the signal will never
+            // come and we have been reparented: give up instead.
+            // SAFETY: getppid takes no arguments and cannot fail.
+            if unsafe { libc::getppid() } != parent {
+                return Err(std::io::Error::from_raw_os_error(libc::ESRCH));
+            }
         }
         if self.unshare_flags != 0 {
             // SAFETY: unshare takes a flag word.
@@ -125,11 +131,14 @@ impl ChildSetup {
     reason = "`CommandExt::pre_exec` is unsafe; the hook only makes async-signal-safe system calls"
 )]
 pub fn install(command: &mut Command, setup: ChildSetup) {
+    // Taken before the fork, for the child to check after setting its
+    // death signal.
+    let parent = libc::pid_t::try_from(std::process::id()).unwrap_or(libc::pid_t::MAX);
     // SAFETY: `ChildSetup::run` makes raw system calls only and touches no
     // heap state that `fork` could have left inconsistent: every buffer
     // it reads was allocated before the fork and is only borrowed.
     unsafe {
-        command.pre_exec(move || setup.run());
+        command.pre_exec(move || setup.run(parent));
     }
 }
 
@@ -149,5 +158,63 @@ pub fn inherit_fd<T: Send + Sync + 'static>(command: &mut Command, fd: RawFd, ke
             let _owned = &keep;
             check(libc::fcntl(fd, libc::F_SETFD, 0))
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HELPER: &str = "RUNE_NAMESPACES_PDEATH_HELPER";
+    const TEST: &str = "sys::tests::child_of_a_parent_that_already_died_does_not_run";
+
+    /// The parent dies after the fork but before the child sets its death
+    /// signal: the signal is never sent, so the child has to notice on its
+    /// own.
+    #[test]
+    #[allow(unsafe_code, reason = "a test hook that sleeps, and _exit")]
+    fn child_of_a_parent_that_already_died_does_not_run() {
+        if let Ok(marker) = std::env::var(HELPER) {
+            // The helper: spawn a child that waits in `pre_exec` long
+            // enough for this process to exit first.
+            std::thread::spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                // SAFETY: ends the helper at once, as a crash would.
+                unsafe { libc::_exit(0) };
+            });
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "sleep 1; touch \"$0\"", &marker]);
+            // SAFETY: the hook only sleeps.
+            unsafe {
+                command.pre_exec(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    Ok(())
+                });
+            }
+            install(
+                &mut command,
+                ChildSetup {
+                    die_with_parent: true,
+                    ..ChildSetup::default()
+                },
+            );
+            let _ = command.spawn();
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            std::process::exit(1);
+        }
+        if !std::path::Path::new("/bin/sh").exists() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("ran");
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([TEST, "--exact", "--nocapture", "--test-threads=1"])
+            .env(HELPER, &marker)
+            .status()
+            .unwrap();
+        assert!(status.success(), "{status:?}");
+        // The orphan would touch the marker about 1.4 s from now.
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        assert!(!marker.exists(), "the orphaned child ran");
     }
 }
