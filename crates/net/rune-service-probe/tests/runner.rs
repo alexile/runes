@@ -358,3 +358,20 @@ async fn probes_a_caller_supplied_stream() {
         .unwrap_err();
     assert!(matches!(err, Error::TransportMismatch { .. }), "{err}");
 }
+
+#[tokio::test]
+async fn huge_timeouts_mean_no_limit_rather_than_a_panic() {
+    let target = serve(|mut stream| async move {
+        stream.write_all(b"220 ready\r\n").await.unwrap();
+    })
+    .await;
+    let options = Options::default()
+        .with_connect_timeout(Duration::MAX)
+        .with_io_timeout(Duration::MAX)
+        .with_total_timeout(Duration::MAX);
+    let info = Runner::new(options)
+        .probe(&BannerProbe::new(), &target)
+        .await
+        .unwrap();
+    assert_eq!(info.banner.as_deref(), Some("220 ready"));
+}

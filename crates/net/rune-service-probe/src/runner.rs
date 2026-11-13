@@ -2,6 +2,7 @@
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -74,7 +75,7 @@ impl Runner {
     ) -> Result<ServiceInfo, Error> {
         let driver = Driver::new(probe, target, &self.options)?;
         let _permit = self.permits.acquire().await.ok();
-        let deadline = Instant::now() + self.options.total_timeout;
+        let deadline = after(self.options.total_timeout);
         match probe.transport() {
             Transport::Tcp => {
                 let mut stream = self.connect_tcp(target, deadline).await?;
@@ -112,7 +113,7 @@ impl Runner {
         }
         let driver = Driver::new(probe, target, &self.options)?;
         let _permit = self.permits.acquire().await.ok();
-        let deadline = Instant::now() + self.options.total_timeout;
+        let deadline = after(self.options.total_timeout);
         self.drive_stream(driver, stream, deadline).await
     }
 
@@ -130,7 +131,7 @@ impl Runner {
     }
 
     fn io_deadline(&self, deadline: Instant) -> Instant {
-        deadline.min(Instant::now() + self.options.io_timeout)
+        deadline.min(after(self.options.io_timeout))
     }
 
     async fn resolve(&self, target: &Target, deadline: Instant) -> Result<SocketAddr, Error> {
@@ -155,7 +156,7 @@ impl Runner {
     }
 
     async fn connect_tcp(&self, target: &Target, deadline: Instant) -> Result<TcpStream, Error> {
-        let deadline = deadline.min(Instant::now() + self.options.connect_timeout);
+        let deadline = deadline.min(after(self.options.connect_timeout));
         let addr = self.resolve(target, deadline).await?;
         match timeout_at(deadline, TcpStream::connect(addr)).await {
             Ok(Ok(stream)) => Ok(stream),
@@ -169,7 +170,7 @@ impl Runner {
     }
 
     async fn connect_udp(&self, target: &Target, deadline: Instant) -> Result<UdpSocket, Error> {
-        let deadline = deadline.min(Instant::now() + self.options.connect_timeout);
+        let deadline = deadline.min(after(self.options.connect_timeout));
         let addr = self.resolve(target, deadline).await?;
         let local: SocketAddr = if addr.is_ipv4() {
             (Ipv4Addr::UNSPECIFIED, 0).into()
@@ -262,6 +263,18 @@ impl Runner {
         driver.finish(end)
     }
 }
+
+/// `timeout` from now. A timeout too large to add to the clock (such as
+/// `Duration::MAX`, meaning "no limit") becomes about thirty years.
+fn after(timeout: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(timeout)
+        .or_else(|| now.checked_add(FAR_FUTURE))
+        .unwrap_or(now)
+}
+
+/// Stand-in for a timeout too large to represent.
+const FAR_FUTURE: Duration = Duration::from_secs(30 * 365 * 24 * 60 * 60);
 
 fn connect_timeout(target: &Target) -> Error {
     Error::ConnectTimeout {
