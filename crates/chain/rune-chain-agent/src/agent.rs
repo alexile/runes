@@ -10,10 +10,13 @@ use crate::builder::toolbox_builder;
 use crate::event::{AgentEvent, StopReason};
 use crate::runner::{CallStyle, ToolInvocation, Toolbox};
 
-const ACTION_PREFIX: &str = "Action:";
-const ACTION_INPUT_PREFIX: &str = "Action Input:";
-const FINAL_ANSWER_PREFIX: &str = "Final Answer:";
+const ACTION: &str = "Action";
+const ACTION_INPUT: &str = "Action Input";
+const FINAL_ANSWER: &str = "Final Answer";
+const OBSERVATION: &str = "Observation";
 const OBSERVATION_PREFIX: &str = "Observation:";
+const FORMAT_HINT: &str = "Observation: could not parse your reply. Reply with either \
+    `Action: <tool name>` followed by `Action Input: <input>`, or with `Final Answer: <answer>`.";
 
 /// The outcome of a `ReAct` agent run.
 #[derive(Debug, Clone)]
@@ -41,7 +44,11 @@ pub struct AgentResult {
 /// On each iteration the agent:
 /// 1. Sends the accumulated conversation to the LLM.
 /// 2. Cuts the response at any `Observation:` line the model invented, then
-///    parses `Action:` / `Action Input:` to find a tool call.
+///    parses `Action:` / `Action Input:` to find a tool call. The markers are
+///    matched case-insensitively and may carry markdown emphasis. A reply that
+///    asks for an action never counts as final, even if it also contains a
+///    `Final Answer:`, and a reply with neither gets a format reminder as its
+///    observation.
 /// 3. Checks the call (known tool, input valid for the tool's schema, approval
 ///    where required), runs it with a timeout and appends the size-capped,
 ///    fenced result as `Observation:`.
@@ -126,7 +133,12 @@ impl AgentExecutor {
             out.output.clone_from(&response);
             out.scratchpad.push(response.clone());
 
-            if let Some(answer) = extract_final_answer(&response) {
+            // An action wins over a final answer in the same reply: the model
+            // cannot know the tool's result yet, so that answer is made up.
+            let action = extract_action(&response);
+            if action.is_none()
+                && let Some(answer) = extract_final_answer(&response)
+            {
                 tb.emit(&AgentEvent::FinalAnswer {
                     output: answer.clone(),
                 });
@@ -139,7 +151,7 @@ impl AgentExecutor {
             }
             out.iterations += 1;
 
-            if let Some((tool_name, tool_input)) = extract_action(&response) {
+            if let Some((tool_name, tool_input)) = action {
                 let call =
                     ToolCall::new(format!("react_{}", out.iterations), tool_name, tool_input);
                 let mut invocations = tb
@@ -160,7 +172,8 @@ impl AgentExecutor {
                     out.tool_invocations.push(inv);
                 }
             } else {
-                messages.push(Message::ai(response));
+                out.scratchpad.push(FORMAT_HINT.to_owned());
+                messages.push(Message::ai(format!("{response}\n{FORMAT_HINT}")));
             }
         }
     }
@@ -227,53 +240,85 @@ fn build_system_prompt(tools: &[&dyn Tool]) -> String {
     )
 }
 
+/// If `line` starts with `marker` and a colon, the text after the colon.
+///
+/// Models drift from the exact format, so case is ignored and markdown
+/// emphasis or a heading mark around the marker is skipped:
+/// `**Final Answer:** 42`, `final answer: 42` and `## Action: x` all match.
+fn marker_rest<'a>(line: &'a str, marker: &str) -> Option<&'a str> {
+    let line = line.trim_start_matches(|c: char| c.is_whitespace() || c == '*' || c == '#');
+    let head = line.get(..marker.len())?;
+    if !head.eq_ignore_ascii_case(marker) {
+        return None;
+    }
+    let rest = line[marker.len()..].trim_start_matches('*');
+    Some(rest.strip_prefix(':')?.trim_start_matches('*'))
+}
+
+/// Byte offset of each line start, paired with the line.
+fn lines_with_offsets(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    text.split_inclusive('\n').scan(0, |offset, line| {
+        let start = *offset;
+        *offset += line.len();
+        Some((start, line))
+    })
+}
+
 /// Drop everything from the first `Observation:` line on: observations come
 /// from tools, never from the model, so a model-written one is a hallucination
 /// (or an echoed injection) and must not be parsed or kept.
 fn strip_invented_observation(response: &str) -> &str {
-    let mut offset = 0;
-    for line in response.split_inclusive('\n') {
-        if line.trim_start().starts_with(OBSERVATION_PREFIX) {
+    for (offset, line) in lines_with_offsets(response) {
+        if marker_rest(line, OBSERVATION).is_some() {
             return response[..offset].trim_end();
         }
-        offset += line.len();
     }
     response
 }
 
+/// Everything after the first `Final Answer:` marker, across lines.
 fn extract_final_answer(response: &str) -> Option<String> {
-    response
-        .lines()
-        .find(|line| line.trim_start().starts_with(FINAL_ANSWER_PREFIX))
-        .map(|line| {
-            line.trim_start()
-                .trim_start_matches(FINAL_ANSWER_PREFIX)
-                .trim()
-                .to_string()
-        })
+    lines_with_offsets(response).find_map(|(offset, line)| {
+        let rest = marker_rest(line, FINAL_ANSWER)?;
+        let start = offset + (line.len() - rest.len());
+        Some(response[start..].trim().to_owned())
+    })
 }
 
+/// The last `Action:` before the first `Action Input:`, and the input: the
+/// rest of the reply after that marker (multi-line input is common for code
+/// or pretty-printed JSON), stopping at a `Final Answer:` line and with one
+/// surrounding code fence removed.
 fn extract_action(response: &str) -> Option<(String, String)> {
-    let mut action: Option<String> = None;
-    let mut action_input: Option<String> = None;
-
-    for line in response.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with(ACTION_PREFIX) && !trimmed.starts_with(ACTION_INPUT_PREFIX) {
-            action = Some(trimmed.trim_start_matches(ACTION_PREFIX).trim().to_string());
-        } else if trimmed.starts_with(ACTION_INPUT_PREFIX) {
-            action_input = Some(
-                trimmed
-                    .trim_start_matches(ACTION_INPUT_PREFIX)
-                    .trim()
-                    .to_string(),
-            );
+    let mut action: Option<&str> = None;
+    let mut lines = lines_with_offsets(response);
+    for (offset, line) in lines.by_ref() {
+        if let Some(rest) = marker_rest(line, ACTION_INPUT) {
+            let name = action?.trim().trim_matches(['`', '*']).trim();
+            let start = offset + (line.len() - rest.len());
+            let end = lines
+                .find(|(_, l)| marker_rest(l, FINAL_ANSWER).is_some())
+                .map_or(response.len(), |(o, _)| o);
+            let input = strip_code_fence(&response[start..end]);
+            return Some((name.to_owned(), input.to_owned()));
+        }
+        if let Some(rest) = marker_rest(line, ACTION) {
+            action = Some(rest);
         }
     }
+    None
+}
 
-    match (action, action_input) {
-        (Some(name), Some(input)) => Some((name, input)),
-        _ => None,
+/// Remove one ```` ``` ```` fence (with an optional info string such as
+/// `json`) wrapped around the whole of `text`.
+fn strip_code_fence(text: &str) -> &str {
+    let text = text.trim();
+    let Some(body) = text.strip_prefix("```").and_then(|b| b.strip_suffix("```")) else {
+        return text;
+    };
+    match body.split_once('\n') {
+        Some((_, rest)) => rest.trim(),
+        None => body.trim(),
     }
 }
 
@@ -328,6 +373,32 @@ mod tests {
     fn extract_action_requires_both_fields() {
         let response = "Thought: Let me try.\nAction: calculator";
         assert!(extract_action(response).is_none());
+    }
+
+    #[test]
+    fn markers_ignore_case_and_markdown() {
+        assert_eq!(
+            marker_rest("**Final Answer:** 42", FINAL_ANSWER),
+            Some(" 42")
+        );
+        assert_eq!(marker_rest("## action: x", ACTION), Some(" x"));
+        assert_eq!(marker_rest("**Observation**: y", OBSERVATION), Some(" y"));
+        assert_eq!(marker_rest("Action Input: x", ACTION), None);
+        assert_eq!(marker_rest("Actions: x", ACTION), None);
+        assert_eq!(marker_rest("Acti", ACTION), None);
+        assert_eq!(marker_rest("Äction: x", ACTION), None);
+    }
+
+    #[test]
+    fn action_input_runs_to_a_final_answer_line_and_drops_a_fence() {
+        let r = "Action: `run`\nAction Input: ```sql\nselect 1;\nselect 2;\n```\nFinal Answer: x";
+        assert_eq!(
+            extract_action(r),
+            Some(("run".to_owned(), "select 1;\nselect 2;".to_owned()))
+        );
+        assert_eq!(strip_code_fence("```a```"), "a");
+        assert_eq!(strip_code_fence("``` not closed"), "``` not closed");
+        assert!(extract_action("Action Input: x\nAction: t").is_none());
     }
 
     #[test]

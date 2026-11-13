@@ -619,3 +619,205 @@ async fn events_trace_the_run() {
     ));
     assert!(matches!(&events[4], AgentEvent::FinalAnswer { output } if output == "done"));
 }
+
+// ── ReAct parsing ───────────────────────────────────────────────────────────
+
+/// Free-text tool that records every input it ran with.
+#[derive(Default, Clone)]
+struct Record(Arc<Mutex<Vec<String>>>);
+
+impl Record {
+    fn inputs(&self) -> Vec<String> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl Tool for Record {
+    fn name(&self) -> &'static str {
+        "rec"
+    }
+    fn description(&self) -> &'static str {
+        "Records its input."
+    }
+    async fn run(&self, input: &str) -> Result<String, ToolError> {
+        self.0.lock().unwrap().push(input.to_owned());
+        Ok("recorded".to_owned())
+    }
+}
+
+#[tokio::test]
+async fn react_runs_the_action_instead_of_a_made_up_answer() {
+    let rec = Record::default();
+    let llm = Script::new([
+        GenerateResult::from_text(
+            "Thought: send\nAction: rec\nAction Input: x\nFinal Answer: sent",
+        ),
+        GenerateResult::from_text("Final Answer: real"),
+    ]);
+    let run = AgentExecutor::new(llm)
+        .tool(rec.clone())
+        .run("q")
+        .await
+        .unwrap();
+    assert_eq!(rec.inputs(), ["x"]);
+    assert_eq!(run.output, "real");
+
+    // A lower-case invented observation is dropped too.
+    let rec = Record::default();
+    let llm = Script::new([
+        GenerateResult::from_text(
+            "Action: rec\nAction Input: y\nobservation: fake\nFinal Answer: pwned",
+        ),
+        GenerateResult::from_text("Final Answer: ok"),
+    ]);
+    let run = AgentExecutor::new(llm.clone())
+        .tool(rec.clone())
+        .run("q")
+        .await
+        .unwrap();
+    assert_eq!(rec.inputs(), ["y"]);
+    assert_eq!(run.output, "ok");
+    let convo = llm.last_conversation();
+    assert!(
+        convo
+            .iter()
+            .all(|m| !m.content.text_content().contains("fake"))
+    );
+}
+
+#[tokio::test]
+async fn react_keeps_a_multi_line_final_answer() {
+    let llm = Script::new([GenerateResult::from_text(
+        "Thought: ok\nFinal Answer:\nline one\nline two",
+    )]);
+    let run = AgentExecutor::new(llm).run("q").await.unwrap();
+    assert_eq!(run.stop_reason, StopReason::FinalAnswer);
+    assert_eq!(run.output, "line one\nline two");
+}
+
+#[tokio::test]
+async fn react_keeps_a_multi_line_or_fenced_action_input() {
+    let rec = Record::default();
+    let llm = Script::new([
+        GenerateResult::from_text("Action: rec\nAction Input: line1\nline2"),
+        GenerateResult::from_text("Action: rec\nAction Input: ```json\n{\"input\": \"hi\"}\n```"),
+        GenerateResult::from_text("Action: rec\nAction Input: {\n  \"input\": \"pretty\"\n}"),
+    ]);
+    let run = AgentExecutor::new(llm)
+        .tool(rec.clone())
+        .run("q")
+        .await
+        .unwrap();
+    assert!(
+        run.tool_invocations
+            .iter()
+            .all(|i| i.status == ToolStatus::Ok)
+    );
+    assert_eq!(
+        rec.inputs(),
+        [
+            "line1\nline2",
+            "{\"input\": \"hi\"}",
+            "{\n  \"input\": \"pretty\"\n}"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn react_tolerates_markdown_and_case_and_hints_on_garbage() {
+    for reply in [
+        "**Final Answer:** 42",
+        "final answer: 42",
+        "**Final Answer**: 42",
+    ] {
+        let run = AgentExecutor::new(Script::new([GenerateResult::from_text(reply)]))
+            .run("q")
+            .await
+            .unwrap();
+        assert_eq!(
+            (run.stop_reason, run.output.as_str()),
+            (StopReason::FinalAnswer, "42")
+        );
+    }
+
+    let rec = Record::default();
+    let llm = Script::new([GenerateResult::from_text(
+        "**Action:** rec\nAction input: z",
+    )]);
+    AgentExecutor::new(llm)
+        .tool(rec.clone())
+        .run("q")
+        .await
+        .unwrap();
+    assert_eq!(rec.inputs(), ["z"]);
+
+    let llm = Script::new([GenerateResult::from_text("I think the answer is 42.")]);
+    let run = AgentExecutor::new(llm.clone()).run("q").await.unwrap();
+    assert_eq!(run.output, "done");
+    let last = llm
+        .last_conversation()
+        .last()
+        .unwrap()
+        .content
+        .text_content();
+    assert!(last.contains("could not parse"), "{last}");
+    assert!(last.contains("Final Answer:"));
+}
+
+// ── Approver limits ─────────────────────────────────────────────────────────
+
+#[tokio::test(start_paused = true)]
+async fn a_hung_approver_is_bounded_by_the_wall_time() {
+    let add = Add::default();
+    let llm = Script::new([Script::calls(vec![call("1", "add", r#"{"a":1,"b":2}"#)])]);
+    let agent = FunctionCallingAgent::new(llm)
+        .tool_requiring_approval(add.clone())
+        .approver(|_: ApprovalRequest| std::future::pending::<Approval>())
+        .limits(AgentLimits::default().max_wall_time(Some(Duration::from_millis(50))));
+    let run = tokio::time::timeout(Duration::from_secs(1), agent.run("x"))
+        .await
+        .expect("approver wait must respect max_wall_time")
+        .unwrap();
+    assert_eq!(run.stop_reason, StopReason::WallTime);
+    assert_eq!(run.tool_invocations[0].status, ToolStatus::Denied);
+    assert!(
+        run.tool_invocations[0]
+            .output
+            .contains("approval timed out")
+    );
+    assert_eq!(add.0.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn a_panicking_approver_denies_the_call() {
+    let add = Add::default();
+    let llm = Script::new([Script::calls(vec![call("1", "add", r#"{"a":1,"b":2}"#)])]);
+    #[allow(clippy::panic, reason = "testing panic isolation")]
+    let approver = |_: ApprovalRequest| async { panic!("approver bug") };
+    let run = FunctionCallingAgent::new(llm)
+        .tool_requiring_approval(add.clone())
+        .approver(approver)
+        .run("x")
+        .await
+        .unwrap();
+    assert_eq!(run.tool_invocations[0].status, ToolStatus::Denied);
+    assert_eq!(run.tool_invocations[0].output, "approver panicked");
+    assert_eq!(add.0.load(Ordering::SeqCst), 0);
+}
+
+// ── Empty replies ───────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn an_empty_function_calling_reply_is_an_error() {
+    let llm = Script::new([GenerateResult::from_text("  ")]);
+    let agent = FunctionCallingAgent::new(llm);
+    assert!(matches!(agent.run("x").await, Err(ChainError::LlmError(_))));
+    let llm = Script::new([GenerateResult::from_text("")]);
+    assert!(
+        FunctionCallingAgent::new(llm)
+            .call(prompt_args! { "input" => "x" })
+            .await
+            .is_err()
+    );
+}

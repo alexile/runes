@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use rune_chain_core::{
-    Chain, ChainError, GenerateResult, Llm, Message, PromptArgs, TokenUsage, ToolCall, ToolChoice,
+    Chain, ChainError, GenerateResult, Llm, LlmError, Message, PromptArgs, TokenUsage, ToolCall,
+    ToolChoice,
 };
 use tokio::time::Instant;
 
@@ -128,8 +129,9 @@ impl FunctionCallingAgent {
     ///
     /// # Errors
     ///
-    /// LLM failures, an invalid tool set (bad or duplicate names), and tool
-    /// failures under [`ToolErrorMode::Abort`](crate::ToolErrorMode::Abort). Hitting a limit is not an
+    /// LLM failures (including a reply with neither text nor tool calls), an
+    /// invalid tool set (bad or duplicate names), and tool failures under
+    /// [`ToolErrorMode::Abort`](crate::ToolErrorMode::Abort). Hitting a limit is not an
     /// error: it shows up in [`FunctionAgentResult::stop_reason`].
     pub async fn run(&self, input: &str) -> Result<FunctionAgentResult, ChainError> {
         let tb = &self.toolbox;
@@ -172,6 +174,11 @@ impl FunctionCallingAgent {
             out.output.clone_from(&result.generation);
 
             if !result.wants_tool_calls() {
+                if result.generation.trim().is_empty() {
+                    return Err(ChainError::LlmError(LlmError::invalid_response(
+                        "the model returned an empty reply and no tool calls",
+                    )));
+                }
                 tb.emit(&AgentEvent::FinalAnswer {
                     output: out.output.clone(),
                 });

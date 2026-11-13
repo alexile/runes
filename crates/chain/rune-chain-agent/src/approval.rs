@@ -40,6 +40,12 @@ pub enum Approval {
 
 /// Decides whether a tool call that requires approval may run.
 ///
+/// When one model turn asks for several gated calls, `approve` may be called
+/// for them concurrently (up to [`AgentLimits::max_concurrency`](crate::AgentLimits::max_concurrency)),
+/// while ungated calls of the same turn run. A pending approval counts against
+/// [`AgentLimits::max_wall_time`](crate::AgentLimits::max_wall_time): if the
+/// budget runs out first, or `approve` panics, the call is denied.
+///
 /// Implemented for any `Fn(ApprovalRequest) -> impl Future<Output = Approval>`:
 ///
 /// ```rust

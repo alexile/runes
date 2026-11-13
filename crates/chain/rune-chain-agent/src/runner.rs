@@ -397,7 +397,17 @@ impl Toolbox {
                 tool: reg.definition.name.clone(),
                 arguments: input.clone(),
             };
-            match approver.approve(request).await {
+            // The approver is caller code that may wait on a person: bound it
+            // by the run's deadline and fail closed if it hangs or panics.
+            let pending = AssertUnwindSafe(approver.approve(request)).catch_unwind();
+            let decision = match deadline {
+                Some(d) => tokio::time::timeout_at(d, pending)
+                    .await
+                    .map_err(|_| (ToolStatus::Denied, "approval timed out".to_owned()))?,
+                None => pending.await,
+            }
+            .map_err(|_| (ToolStatus::Denied, "approver panicked".to_owned()))?;
+            match decision {
                 Approval::Allow => {}
                 Approval::Deny(reason) => {
                     return Err((ToolStatus::Denied, format!("denied by approver: {reason}")));
@@ -412,6 +422,9 @@ impl Toolbox {
             }
         }
 
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            return Err(err("not run: the wall-time budget is used up".to_owned()));
+        }
         let timeout = match (self.limits.tool_timeout, deadline) {
             (Some(t), Some(d)) => Some(t.min(d.saturating_duration_since(Instant::now()))),
             (t, None) => t,
