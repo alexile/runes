@@ -176,8 +176,9 @@ impl CompiledPattern {
 /// Expands a version template with capture groups.
 ///
 /// `groups[0]` is the whole match. `\N` is group N (empty when it did not match);
-/// `\N?a:b` is `a` when group N matched non-empty, else `b`. The result
-/// is trimmed and at most 64 characters.
+/// `\N?a:b` is `a` when group N matched non-empty, else `b`, with `\N`
+/// expanded in the chosen branch (a ternary is not nested, as in
+/// Wappalyzer). The result is trimmed and at most 64 characters.
 #[must_use]
 pub fn resolve_version(template: &str, groups: &[Option<&str>]) -> String {
     let group = |index: usize| {
@@ -189,13 +190,15 @@ pub fn resolve_version(template: &str, groups: &[Option<&str>]) -> String {
     };
     let bytes = template.as_bytes();
     // Ternary form: the whole template is `\N?a:b`.
-    if bytes.len() >= 3 && bytes[0] == b'\\' && bytes[1].is_ascii_digit() && bytes[2] == b'?' {
-        let index = usize::from(bytes[1] - b'0');
-        let rest = &template[3..];
-        let (yes, no) = rest.split_once(':').unwrap_or((rest, ""));
-        let chosen = if group(index).is_some() { yes } else { no };
-        return resolve_version(chosen, groups);
-    }
+    let template =
+        if bytes.len() >= 3 && bytes[0] == b'\\' && bytes[1].is_ascii_digit() && bytes[2] == b'?' {
+            let index = usize::from(bytes[1] - b'0');
+            let rest = &template[3..];
+            let (yes, no) = rest.split_once(':').unwrap_or((rest, ""));
+            if group(index).is_some() { yes } else { no }
+        } else {
+            template
+        };
     let mut out = String::new();
     let mut chars = template.chars().peekable();
     while let Some(c) = chars.next() {
@@ -265,6 +268,16 @@ mod tests {
         assert_eq!(resolve_version(r"\9", &groups), "");
         assert_eq!(resolve_version("\\", &groups), "\\");
         assert_eq!(resolve_version("é\\1", &groups), "é3.7.1");
+    }
+
+    // Regression: a ternary branch was resolved as a template again, so a
+    // rule file could nest `\1?` deep enough to overflow the stack.
+    #[test]
+    fn ternary_branches_are_expanded_once() {
+        let groups = [Some("x"), Some("1.0"), Some("2.0")];
+        let nested = r"\1?".repeat(200_000);
+        assert_eq!(resolve_version(&nested, &groups), "1.0?".repeat(16));
+        assert_eq!(resolve_version(r"\1?\2?a:b", &groups), "2.0?a");
     }
 
     #[test]
