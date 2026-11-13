@@ -269,7 +269,7 @@ impl Registry {
             (Matcher::Ip(nets), Query::Ip(ip)) => {
                 lookup_ip(nets, ip_bits(*ip), prefix_in_128(*ip, max_len(*ip)))
             }
-            (Matcher::Ip(nets), Query::Network { addr, prefix }) => {
+            (Matcher::Ip(nets), Query::Network { addr, prefix }) if *prefix <= max_len(*addr) => {
                 lookup_ip(nets, ip_bits(*addr), prefix_in_128(*addr, *prefix))
             }
             (Matcher::Asn(ranges), Query::Autnum(asn)) => ranges
@@ -539,6 +539,25 @@ mod tests {
         assert!(r.lookup(&q("example.com")).is_none());
         // Labels, not characters: "kuk" is not under "uk".
         assert!(r.lookup(&q("kuk")).is_none());
+    }
+
+    #[test]
+    fn out_of_range_network_prefix_finds_nothing() {
+        // `Query::Network` can be built without `Query::network`'s check.
+        let r = reg(
+            RegistryKind::Ipv4,
+            r#"[[["0.0.0.0/0"],["https://all.example/"]]]"#,
+        );
+        let addr = "192.0.2.0".parse().unwrap();
+        for prefix in [33, 200, u8::MAX] {
+            assert!(r.lookup(&Query::Network { addr, prefix }).is_none());
+        }
+        let r = reg(
+            RegistryKind::Ipv6,
+            r#"[[["::/0"],["https://all.example/"]]]"#,
+        );
+        let addr = "2001:db8::".parse().unwrap();
+        assert!(r.lookup(&Query::Network { addr, prefix: 129 }).is_none());
     }
 
     #[test]

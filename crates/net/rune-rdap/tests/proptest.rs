@@ -60,3 +60,83 @@ proptest! {
         }
     }
 }
+
+const SEEDS: [&[u8]; 6] = [
+    include_bytes!("fixtures/autnum-arin-15169.json"),
+    include_bytes!("fixtures/domain-example.com.json"),
+    include_bytes!("fixtures/error-arin-400.json"),
+    include_bytes!("fixtures/ip-arin-8.8.8.8.json"),
+    include_bytes!("fixtures/ip-ripe-193.0.6.139.json"),
+    include_bytes!("fixtures/nameserver-a.iana-servers.net.json"),
+];
+
+const BOOTSTRAP: [(RegistryKind, &[u8]); 5] = [
+    (
+        RegistryKind::Asn,
+        include_bytes!("fixtures/bootstrap-asn.json"),
+    ),
+    (
+        RegistryKind::Dns,
+        include_bytes!("fixtures/bootstrap-dns.json"),
+    ),
+    (
+        RegistryKind::Ipv4,
+        include_bytes!("fixtures/bootstrap-ipv4.json"),
+    ),
+    (
+        RegistryKind::Ipv6,
+        include_bytes!("fixtures/bootstrap-ipv6.json"),
+    ),
+    (
+        RegistryKind::ObjectTags,
+        include_bytes!("fixtures/bootstrap-object-tags.json"),
+    ),
+];
+
+fn mutate(seed: &[u8], edits: &[(prop::sample::Index, u8)]) -> Vec<u8> {
+    let mut bytes = seed.to_vec();
+    for (at, byte) in edits {
+        let i = at.index(bytes.len());
+        bytes[i] = *byte;
+    }
+    bytes
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(128))]
+
+    /// Real responses with a few bytes changed, read through every accessor.
+    #[test]
+    fn mutated_responses_never_panic(
+        which in any::<prop::sample::Index>(),
+        edits in proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..6),
+    ) {
+        let body = mutate(SEEDS[which.index(SEEDS.len())], &edits);
+        if let Ok(object) = parse_object(&body) {
+            let _ = (object.handle(), object.events().len(), object.status().len());
+            let _ = object.entities().len();
+            if let Some(domain) = object.as_domain() {
+                let _ = (domain.name(), domain.nameserver_names().count(), domain.registrar_name());
+                let _ = (domain.registrar_iana_id(), domain.registration(), domain.expiration());
+                let _ = (domain.abuse_email(), domain.all_entities().len(), domain.last_changed());
+            }
+            if let Some(network) = object.as_ip_network() {
+                let _ = (network.abuse_email(), network.all_entities().len());
+            }
+        }
+        let _ = interpret(&Response::new(400, body));
+    }
+
+    /// Bootstrap files with a few bytes changed, then looked up.
+    #[test]
+    fn mutated_bootstrap_never_panics(
+        which in 0usize..5,
+        edits in proptest::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 1..6),
+        q in query(),
+    ) {
+        let (kind, seed) = BOOTSTRAP[which];
+        if let Ok(registry) = Registry::parse(kind, &mutate(seed, &edits)) {
+            let _ = registry.lookup(&q);
+        }
+    }
+}
