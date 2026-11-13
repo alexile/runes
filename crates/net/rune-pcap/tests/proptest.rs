@@ -206,3 +206,121 @@ proptest! {
         }
     }
 }
+
+/// Calls every accessor of a parsed block, the way a dump tool would.
+fn touch(block: &Block<'_>) {
+    let options = match block {
+        Block::SectionHeader(shb) => {
+            let _ = (shb.hardware(), shb.os(), shb.user_application());
+            shb.options
+        }
+        Block::InterfaceDescription(idb) => {
+            let _ = (idb.name(), idb.description(), idb.os(), idb.hardware());
+            let _ = (idb.mac_addr(), idb.speed(), idb.filter(), idb.fcs_len());
+            let _ = idb.ts_resolution().to_timestamp(u64::MAX);
+            let _ = idb.ts_offset();
+            idb.options
+        }
+        Block::EnhancedPacket(epb) => {
+            for res in 0..=u8::MAX {
+                let _ = epb.timestamp(TsResolution::from_byte(res), i64::MIN);
+                let _ = epb.timestamp(TsResolution::from_byte(res), i64::MAX);
+            }
+            let _ = (epb.flags(), epb.drop_count(), epb.packet_id(), epb.queue());
+            epb.options
+        }
+        Block::SimplePacket(spb) => {
+            let _ = (spb.packet(0), spb.packet(1), spb.packet(u32::MAX));
+            return;
+        }
+        Block::NameResolution(nrb) => {
+            for record in &nrb.records {
+                let _ = record.ip_addr();
+                let _ = record.names().count();
+            }
+            nrb.options
+        }
+        Block::InterfaceStatistics(isb) => {
+            let _ = (isb.received(), isb.dropped(), isb.os_dropped());
+            let _ = (isb.filter_accepted(), isb.delivered());
+            isb.options
+        }
+        Block::DecryptionSecrets(dsb) => dsb.options,
+        Block::ObsoletePacket(pb) => pb.options,
+        _ => return,
+    };
+    for option in &options {
+        let _ = option;
+    }
+    let _ = options.comments().count();
+    let _ = (
+        options.u8(1),
+        options.u32(2),
+        options.u64(3),
+        options.str(4),
+    );
+}
+
+fn mutate(
+    mut file: Vec<u8>,
+    edits: &[(prop::sample::Index, u8, bool)],
+    cut: prop::sample::Index,
+) -> Vec<u8> {
+    for (at, byte, insert) in edits {
+        let i = at.index(file.len());
+        if *insert {
+            file.insert(i, *byte);
+        } else {
+            file[i] = *byte;
+        }
+    }
+    file.truncate(cut.index(file.len() + 1));
+    file
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    #[test]
+    fn block_accessors_never_panic_on_mutated_files(
+        which in 0usize..4,
+        edits in proptest::collection::vec(
+            (any::<prop::sample::Index>(), any::<u8>(), any::<bool>()), 1..8),
+        cut in any::<prop::sample::Index>(),
+    ) {
+        let seeds: [&[u8]; 4] = [
+            include_bytes!("fixtures/le-nanos.pcapng"),
+            include_bytes!("fixtures/be-micros-two-sections.pcapng"),
+            include_bytes!("fixtures/libpcap-micros.pcap"),
+            include_bytes!("fixtures/libpcap-nanos.pcap"),
+        ];
+        let file = mutate(seeds[which].to_vec(), &edits, cut);
+        let mut r = PcapNgReader::new(file.as_slice());
+        while let Ok(Some(block)) = r.next_block() {
+            touch(&block);
+        }
+        let _ = r.interfaces();
+        if let Ok(mut r) = CaptureReader::new(file.as_slice()) {
+            while let Ok(Some(rec)) = r.next_packet() {
+                let _ = (rec.dissect(), rec.is_truncated(), rec.timestamp);
+            }
+        }
+        // The zero-copy entry points, on the same bytes.
+        let mut at = 0;
+        let mut endian = Endian::Little;
+        while let Some(rest) = file.get(at..).filter(|rest| !rest.is_empty()) {
+            let Ok((block, next_endian, used)) = Block::parse(rest, endian) else {
+                break;
+            };
+            touch(&block);
+            endian = next_endian;
+            at += used;
+        }
+        if let Ok(header) = PcapHeader::parse(&file) {
+            let mut rest = file.get(24..).unwrap_or_default();
+            while let Ok((_, _, used)) = header.parse_record(rest) {
+                rest = &rest[used..];
+            }
+        }
+    }
+}
