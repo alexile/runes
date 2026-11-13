@@ -2,7 +2,7 @@
 //! [`Imported`], the extension that keeps what the finding model has no
 //! member for.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use rune_finding::{
     Confidence, Cvss, Evidence, Finding, Location, Remediation, Severity, Taxonomy, TaxonomyRef,
@@ -167,13 +167,14 @@ impl FromSarif for Imported {
         let result = context.result();
         let driver = &run.tool.driver;
         let mut tags: Vec<String> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
         let rule_tags = context.rule().map(|rule| rule.properties.tags.iter());
         for tag in rule_tags
             .into_iter()
             .flatten()
             .chain(&result.properties.tags)
         {
-            if !tags.contains(tag) {
+            if seen.insert(tag) {
                 tags.push(tag.clone());
             }
         }
@@ -320,6 +321,15 @@ impl ToSarif for Imported {
 /// Reading never fails: a member that does not parse is left out of the
 /// finding, and stays available to the extension.
 ///
+/// # Untrusted input
+///
+/// Each finding owns copies of what it takes from its rule and run (rule
+/// id, short description, tags, help URI, tool name). A log can give
+/// thousands of tiny results one rule with megabytes of such text, so the
+/// memory `read` needs grows with results × rule size, not with the size of
+/// the log. Bound the input size and the number of results before reading
+/// logs from untrusted sources.
+///
 /// # Examples
 ///
 /// ```
@@ -452,8 +462,10 @@ fn read_result<X: FromSarif>(run: &Run, result: &model::Result) -> Finding<X> {
             .into_iter()
             .flatten()
             .chain(&properties.tags);
+        let mut seen: HashSet<TaxonomyRef> = taxonomy.iter().cloned().collect();
         for entry in tags.filter_map(|tag| taxonomy_from_tag(tag)) {
-            if !taxonomy.contains(&entry) {
+            if !seen.contains(&entry) {
+                seen.insert(entry.clone());
                 taxonomy.push(entry);
             }
         }
