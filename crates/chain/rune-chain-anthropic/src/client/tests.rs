@@ -148,11 +148,77 @@ fn tool_call_without_text_or_valid_json_still_serializes() {
 }
 
 #[test]
-fn tool_result_without_call_id_is_marked_unknown() {
+fn tool_result_without_call_id_fails_before_sending() {
     let mut msg = Message::tool_result("x", "out");
     msg.tool_call_id = None;
+    let err = Anthropic::new("k")
+        .preflight(&[Message::human("q"), msg], None, false)
+        .unwrap_err();
+    assert_eq!(err.kind(), LlmErrorKind::Other);
+    assert!(err.message().contains("tool_call_id"));
+}
+
+#[test]
+fn empty_assistant_turns_are_left_out_except_at_the_end() {
+    let v = body(
+        &[
+            Message::human("q"),
+            Message::ai(""),
+            Message::human("again"),
+        ],
+        &[],
+        None,
+    );
+    let msgs = v["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert!(msgs.iter().all(|m| m["role"] == "user"));
+
+    let parts = Message::ai(MessageContent::Parts(vec![ContentPart::text("")]));
+    let v = body(
+        &[Message::human("q"), parts, Message::human("again")],
+        &[],
+        None,
+    );
+    assert_eq!(v["messages"].as_array().unwrap().len(), 2);
+
+    // An empty final assistant turn is allowed and kept.
+    let v = body(&[Message::human("q"), Message::ai("")], &[], None);
+    assert_eq!(
+        v["messages"][1],
+        json!({ "role": "assistant", "content": "" })
+    );
+}
+
+#[test]
+fn empty_text_parts_are_dropped() {
+    let msg = Message::human(MessageContent::Parts(vec![
+        ContentPart::text(""),
+        ContentPart::text("hi"),
+    ]));
     let v = body(&[msg], &[], None);
-    assert_eq!(v["messages"][0]["content"][0]["tool_use_id"], "unknown");
+    assert_eq!(
+        v["messages"][0]["content"],
+        json!([{ "type": "text", "text": "hi" }])
+    );
+}
+
+#[test]
+fn system_message_parts_reach_the_request() {
+    let sys = Message::system(MessageContent::Parts(vec![ContentPart::text("Be terse.")]));
+    let v = body(&[sys, Message::human("Hi")], &[], None);
+    assert_eq!(v["system"], "Be terse.");
+}
+
+#[test]
+fn null_usage_and_delta_in_stream_events_are_tolerated() {
+    let ev: crate::types::SseEvent =
+        serde_json::from_str(r#"{"type":"message_delta","delta":null,"usage":null}"#).unwrap();
+    assert!(matches!(ev, crate::types::SseEvent::MessageDelta { .. }));
+    let ev: crate::types::SseEvent = serde_json::from_str(
+        r#"{"type":"message_start","message":{"id":"m","model":"x","usage":null}}"#,
+    )
+    .unwrap();
+    assert!(matches!(ev, crate::types::SseEvent::MessageStart { .. }));
 }
 
 #[test]

@@ -276,9 +276,9 @@ pub enum SseEvent {
         index: usize,
     },
     MessageDelta {
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         delta: MessageDeltaBody,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "null_as_default")]
         usage: UsageReport,
     },
     MessageStop,
@@ -295,8 +295,18 @@ pub struct StreamMessageStart {
     pub id: String,
     #[serde(default)]
     pub model: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub usage: UsageReport,
+}
+
+/// Read `null` as the type's default; some gateways send `null` for objects
+/// the API itself would leave out.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Default, Deserialize)]

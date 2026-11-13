@@ -347,12 +347,14 @@ fn content_to_api(content: &MessageContent) -> ApiMessageContent {
         MessageContent::Parts(parts) => ApiMessageContent::Blocks(
             parts
                 .iter()
-                .map(|p| match p {
-                    ContentPart::Text { text } => ApiContentBlock::text(text.clone()),
-                    ContentPart::Image { image } => ApiContentBlock::Image {
+                .filter_map(|p| match p {
+                    // The API rejects empty text blocks.
+                    ContentPart::Text { text } if text.is_empty() => None,
+                    ContentPart::Text { text } => Some(ApiContentBlock::text(text.clone())),
+                    ContentPart::Image { image } => Some(ApiContentBlock::Image {
                         source: image_to_api(image),
                         cache_control: None,
-                    },
+                    }),
                 })
                 .collect(),
         ),
@@ -387,13 +389,17 @@ fn thinking_blocks(msg: &Message) -> Vec<ApiContentBlock> {
 }
 
 fn partition_messages(messages: &[Message]) -> (Option<String>, Vec<ApiMessage>) {
-    let mut system_parts: Vec<&str> = Vec::new();
+    let mut system_parts: Vec<String> = Vec::new();
     let mut api_messages: Vec<ApiMessage> = Vec::new();
+    let last = messages.len().saturating_sub(1);
 
-    for msg in messages {
+    for (i, msg) in messages.iter().enumerate() {
         match msg.role {
             Role::System => {
-                system_parts.push(msg.content.as_text());
+                let text = msg.content.text_content();
+                if !text.is_empty() {
+                    system_parts.push(text);
+                }
             }
             Role::Human => {
                 api_messages.push(ApiMessage {
@@ -404,9 +410,20 @@ fn partition_messages(messages: &[Message]) -> (Option<String>, Vec<ApiMessage>)
             Role::Ai => {
                 let thinking = thinking_blocks(msg);
                 if msg.tool_calls.is_empty() && thinking.is_empty() {
+                    let content = content_to_api(&msg.content);
+                    // Only the final assistant turn may be empty (for example
+                    // a reply that came back with no content blocks); earlier
+                    // ones are left out so the API doesn't reject the request.
+                    let empty = match &content {
+                        ApiMessageContent::Text(text) => text.is_empty(),
+                        ApiMessageContent::Blocks(blocks) => blocks.is_empty(),
+                    };
+                    if empty && i != last {
+                        continue;
+                    }
                     api_messages.push(ApiMessage {
                         role: "assistant",
-                        content: content_to_api(&msg.content),
+                        content,
                     });
                 } else {
                     // Thinking must come first, before text and tool use.
@@ -431,10 +448,8 @@ fn partition_messages(messages: &[Message]) -> (Option<String>, Vec<ApiMessage>)
             }
             Role::Tool => {
                 let block = ApiContentBlock::ToolResult {
-                    tool_use_id: msg
-                        .tool_call_id
-                        .clone()
-                        .unwrap_or_else(|| "unknown".to_string()),
+                    // `preflight` rejects tool messages without an id.
+                    tool_use_id: msg.tool_call_id.clone().unwrap_or_default(),
                     content: msg.content.text_content(),
                     cache_control: None,
                 };
@@ -544,6 +559,11 @@ impl Anthropic {
         http::check_base_url(&self.base_url)?;
         self.cache.check_order().map_err(LlmError::other)?;
         for msg in messages {
+            if msg.role == Role::Tool && msg.tool_call_id.is_none() {
+                return Err(LlmError::other(
+                    "tool message without tool_call_id: the API needs the id of the tool call it answers",
+                ));
+            }
             if let MessageContent::Parts(parts) = &msg.content {
                 for part in parts {
                     if let ContentPart::Image { image } = part {
@@ -973,6 +993,9 @@ impl rune_chain_core::Llm for Anthropic {
             .map(|m| m.to_generate_result())
     }
 
+    /// Streams text only. The final chunk carries no stop reason or token
+    /// usage; use [`Anthropic::stream_message`] when you need those (its
+    /// [`StreamEvent::Done`] holds the full [`MessageResponse`]).
     async fn stream(
         &self,
         messages: &[Message],
