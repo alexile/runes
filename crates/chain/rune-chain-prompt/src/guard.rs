@@ -6,6 +6,7 @@
 //! delimiter early, invisible or direction-flipping characters, and
 //! unbounded payloads.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::panic::RefUnwindSafe;
 use std::sync::Arc;
@@ -42,6 +43,10 @@ pub enum ValueGuard {
     EscapeXml,
     /// XML-escape the value, then wrap it in `<tag>` … `</tag>` so the model
     /// can tell data from instructions and the value cannot close the tag.
+    ///
+    /// Characters that cannot appear in an XML name are dropped from the
+    /// tag, and a tag left empty or not starting with a letter or `_`
+    /// becomes `data`.
     XmlTag(String),
     /// Remove invisible and control characters (see [`strip_invisible`]).
     StripInvisible,
@@ -74,7 +79,10 @@ impl ValueGuard {
     pub fn apply(&self, value: &str) -> String {
         match self {
             Self::EscapeXml => escape_xml(value),
-            Self::XmlTag(tag) => format!("<{tag}>{}</{tag}>", escape_xml(value)),
+            Self::XmlTag(tag) => {
+                let tag = xml_tag_name(tag);
+                format!("<{tag}>{}</{tag}>", escape_xml(value))
+            }
             Self::StripInvisible => strip_invisible(value),
             Self::Truncate(max) => truncate_chars(value, *max).to_owned(),
             Self::Chain(guards) => guards
@@ -127,6 +135,21 @@ impl fmt::Debug for ValueGuard {
     }
 }
 
+/// `tag` reduced to characters valid in an XML name, or `data` if nothing
+/// usable is left.
+fn xml_tag_name(tag: &str) -> Cow<'_, str> {
+    let name_char = |c: char| c.is_alphanumeric() || matches!(c, '_' | '-' | '.');
+    let name: Cow<'_, str> = if tag.chars().all(name_char) {
+        Cow::Borrowed(tag)
+    } else {
+        Cow::Owned(tag.chars().filter(|&c| name_char(c)).collect())
+    };
+    match name.chars().next() {
+        Some(c) if c.is_alphabetic() || c == '_' => name,
+        _ => Cow::Borrowed("data"),
+    }
+}
+
 /// Escape the five XML special characters.
 ///
 /// ```rust
@@ -149,7 +172,7 @@ pub fn escape_xml(value: &str) -> String {
 }
 
 /// Whether `c` is invisible or can reorder how surrounding text displays.
-const fn is_invisible(c: char) -> bool {
+pub const fn is_invisible(c: char) -> bool {
     matches!(
         c,
         // Soft hyphen, combining grapheme joiner, Arabic letter mark,
@@ -241,5 +264,21 @@ mod tests {
     #[test]
     fn strips_carriage_return_and_bidi() {
         assert_eq!(strip_invisible("a\r\u{2066}b\u{2069}\t"), "ab\t");
+    }
+
+    #[test]
+    fn xml_tag_name_is_sanitised() {
+        let tag = |t: &str| ValueGuard::XmlTag(t.into()).apply("x");
+        assert_eq!(tag("doc"), "<doc>x</doc>");
+        assert_eq!(
+            tag("user_input-1.v2"),
+            "<user_input-1.v2>x</user_input-1.v2>"
+        );
+        assert_eq!(tag("a><b"), "<ab>x</ab>");
+        assert_eq!(tag("doc id=\"1\""), "<docid1>x</docid1>");
+        assert_eq!(tag(""), "<data>x</data>");
+        assert_eq!(tag("<>"), "<data>x</data>");
+        assert_eq!(tag("1st"), "<data>x</data>");
+        assert_eq!(tag("-x"), "<data>x</data>");
     }
 }

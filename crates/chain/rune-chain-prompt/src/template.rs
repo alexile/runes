@@ -1,10 +1,11 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use rune_chain_core::{ChainError, PromptArgs};
 use serde_json::Value;
 
 use crate::error::TemplateError;
-use crate::guard::ValueGuard;
+use crate::guard::{ValueGuard, is_invisible};
 
 /// A template that produces a formatted `String` from [`PromptArgs`].
 ///
@@ -37,7 +38,7 @@ fn push_literal(segments: &mut Vec<Segment>, text: &str) {
 
 fn valid_name(name: &str) -> bool {
     name.chars()
-        .all(|c| c != '{' && c != '}' && !c.is_whitespace() && !c.is_control())
+        .all(|c| c != '{' && c != '}' && !c.is_whitespace() && !c.is_control() && !is_invisible(c))
 }
 
 /// Parse a template. In lenient mode malformed syntax is recovered from the
@@ -79,7 +80,7 @@ fn parse(template: &str, strict: bool) -> Result<Vec<Segment>, TemplateError> {
                         position: pos,
                         message: format!(
                             "invalid variable name `{var}`: names cannot contain braces, \
-                             whitespace or control characters"
+                             whitespace, control or invisible formatting characters"
                         ),
                     });
                 }
@@ -105,10 +106,10 @@ fn parse(template: &str, strict: bool) -> Result<Vec<Segment>, TemplateError> {
 }
 
 /// Render a JSON value the way it is inserted into a prompt.
-fn value_text(value: &Value) -> String {
+fn value_text(value: &Value) -> Cow<'_, str> {
     match value {
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
+        Value::String(s) => Cow::Borrowed(s),
+        other => Cow::Owned(other.to_string()),
     }
 }
 
@@ -258,8 +259,9 @@ impl StringTemplate {
     /// Create a template, rejecting malformed syntax.
     ///
     /// Errors with [`TemplateError::Syntax`] on an unclosed `{`, an
-    /// unmatched `}`, or a variable name containing braces, whitespace or
-    /// control characters (such as `{ name }`).
+    /// unmatched `}`, or a variable name containing braces, whitespace,
+    /// control characters or invisible formatting characters such as a
+    /// zero-width space or byte-order mark (`{ name }`, `{\u{200B}name}`).
     ///
     /// # Example
     ///
@@ -442,27 +444,40 @@ impl StringTemplate {
             return Err(TemplateError::MissingVariables(missing));
         }
         let mut out = String::with_capacity(self.source.len());
+        // Once past `max_len`, stop building the string and only measure the
+        // rest, so the error can still report the full length.
+        let mut len = 0usize;
+        let mut too_long = false;
         for seg in &self.segments {
-            match seg {
-                Segment::Literal(text) => out.push_str(text),
+            let piece = match seg {
+                Segment::Literal(text) => Cow::Borrowed(text.as_str()),
                 Segment::Var(name) => {
                     if let Some(value) = args.get(name) {
                         let text = value_text(value);
                         match self.guards.get(name).or(self.default_guard.as_ref()) {
-                            Some(guard) => out.push_str(&guard.apply(&text)),
-                            None => out.push_str(&text),
+                            Some(guard) => Cow::Owned(guard.apply(&text)),
+                            None => text,
                         }
                     } else if let Some(value) = self.partials.get(name) {
-                        out.push_str(&value_text(value));
+                        value_text(value)
+                    } else {
+                        continue;
                     }
                 }
+            };
+            len = len.saturating_add(piece.len());
+            if too_long {
+                continue;
+            }
+            if self.max_len.is_some_and(|max| len > max) {
+                too_long = true;
+                out = String::new();
+            } else {
+                out.push_str(&piece);
             }
         }
         match self.max_len {
-            Some(max) if out.len() > max => Err(TemplateError::TooLong {
-                len: out.len(),
-                max,
-            }),
+            Some(max) if too_long => Err(TemplateError::TooLong { len, max }),
             _ => Ok(out),
         }
     }
@@ -599,6 +614,44 @@ mod tests {
             tmpl.format(&PromptArgs::new()),
             Err(ChainError::Other(_))
         ));
+    }
+
+    #[test]
+    fn strict_rejects_invisible_chars_in_names() {
+        for t in ["{\u{FEFF}name}", "{na\u{200B}me}", "{name\u{202E}}"] {
+            assert!(
+                matches!(
+                    StringTemplate::try_new(t),
+                    Err(TemplateError::Syntax { position: 0, .. })
+                ),
+                "{t:?}"
+            );
+        }
+        // Outside a placeholder they are ordinary text, and lenient parsing
+        // keeps accepting them.
+        let tmpl = StringTemplate::try_new("\u{FEFF}Hi {name}").unwrap();
+        assert_eq!(tmpl.input_variables(), ["name"]);
+        assert_eq!(
+            StringTemplate::new("{\u{200B}x}").input_variables(),
+            ["\u{200B}x"]
+        );
+    }
+
+    #[test]
+    fn max_len_error_reports_the_full_length() {
+        let args = prompt_args! { "a" => "toolong", "b" => 7, "c" => "a<b" };
+        let tmpl = StringTemplate::new("{a}-{b}-{c}{d}")
+            .with_partial("d", "!!")
+            .guard("c", ValueGuard::EscapeXml)
+            .with_max_len(3);
+        assert_eq!(
+            tmpl.try_format(&args).unwrap_err(),
+            TemplateError::TooLong { len: 18, max: 3 }
+        );
+        assert_eq!(
+            tmpl.with_max_len(18).try_format(&args).unwrap(),
+            "toolong-7-a&lt;b!!"
+        );
     }
 
     #[test]

@@ -161,6 +161,10 @@ impl MessageTemplate {
 /// every inserted message, and the [`ChatTemplate`]'s
 /// [maximum length](ChatTemplate::with_max_len) counts inserted messages too.
 ///
+/// Inserted messages keep their roles, including `system`. If the history
+/// comes from an untrusted source, filter or remap roles before passing it
+/// in, or a crafted item can pose as a system instruction.
+///
 /// # Example
 ///
 /// ```rust
@@ -201,7 +205,9 @@ impl MessagesPlaceholder {
 
     /// Make the placeholder optional: a missing or `null` variable inserts
     /// nothing instead of failing, and the variable is not listed as an
-    /// input variable.
+    /// input variable. Code that decides what to pass by reading
+    /// [`ChatTemplate::input_variables`] will therefore not see it; supply
+    /// optional history keys explicitly.
     #[must_use]
     pub const fn optional(mut self) -> Self {
         self.optional = true;
@@ -271,9 +277,15 @@ impl MessagesPlaceholder {
         }
     }
 
-    fn resolve(&self, args: &PromptArgs) -> Result<Vec<Message>, TemplateError> {
+    /// Decode the kept messages one at a time and pass each to `emit`, so a
+    /// caller can measure and drop them without holding the whole history.
+    fn resolve(
+        &self,
+        args: &PromptArgs,
+        mut emit: impl FnMut(Message),
+    ) -> Result<(), TemplateError> {
         let value = match args.get(&self.name) {
-            None | Some(Value::Null) if self.optional => return Ok(Vec::new()),
+            None | Some(Value::Null) if self.optional => return Ok(()),
             None => return Err(TemplateError::MissingVariables(vec![self.name.clone()])),
             Some(v) => v,
         };
@@ -284,25 +296,83 @@ impl MessagesPlaceholder {
             )));
         };
         let skip = self.last.map_or(0, |n| items.len().saturating_sub(n));
-        items[skip..]
-            .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                let index = skip + i;
-                if !item.is_object() {
-                    return Err(self.invalid(format!(
-                        "item {index}: expected a message object, got {}",
-                        json_kind(item)
-                    )));
-                }
-                let mut message = serde_json::from_value::<Message>(item.clone())
-                    .map_err(|e| self.invalid(format!("item {index}: {e}")))?;
-                if let Some(guard) = &self.guard {
-                    guard_content(&mut message.content, guard);
-                }
-                Ok(message)
-            })
-            .collect()
+        for (i, item) in items[skip..].iter().enumerate() {
+            let index = skip + i;
+            if !item.is_object() {
+                return Err(self.invalid(format!(
+                    "item {index}: expected a message object, got {}",
+                    json_kind(item)
+                )));
+            }
+            let mut message = serde_json::from_value::<Message>(item.clone())
+                .map_err(|e| self.invalid(format!("item {index}: {e}")))?;
+            if let Some(guard) = &self.guard {
+                guard_content(&mut message.content, guard);
+            }
+            emit(message);
+        }
+        Ok(())
+    }
+}
+
+/// Byte length of a message's text as [`MessageContent::text_content`]
+/// would return it (text parts joined by one space), without building it.
+fn text_len(content: &MessageContent) -> usize {
+    match content {
+        MessageContent::Text(s) => s.len(),
+        MessageContent::Parts(parts) => {
+            let (count, bytes) = parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.len()),
+                    ContentPart::Image { .. } => None,
+                })
+                .fold((0usize, 0usize), |(n, sum), len| {
+                    (n + 1, sum.saturating_add(len))
+                });
+            bytes.saturating_add(count.saturating_sub(1))
+        }
+    }
+}
+
+/// Collects rendered messages while keeping a running total for
+/// `max_len`. Once the total is over the limit, messages are measured and
+/// dropped, so an oversized prompt is never held in memory as a whole.
+struct Budget<T> {
+    max: Option<usize>,
+    len: usize,
+    out: Vec<T>,
+}
+
+impl<T> Budget<T> {
+    const fn new(max: Option<usize>) -> Self {
+        Self {
+            max,
+            len: 0,
+            out: Vec::new(),
+        }
+    }
+
+    /// Add `item`, whose text is `len` bytes long.
+    fn push(&mut self, item: T, len: usize) {
+        let Some(max) = self.max else {
+            self.out.push(item);
+            return;
+        };
+        let was_over = self.len > max;
+        self.len = self.len.saturating_add(len);
+        if self.len <= max {
+            self.out.push(item);
+        } else if !was_over {
+            self.out = Vec::new();
+        }
+    }
+
+    fn finish(self) -> Result<Vec<T>, TemplateError> {
+        match self.max {
+            Some(max) if self.len > max => Err(TemplateError::TooLong { len: self.len, max }),
+            _ => Ok(self.out),
+        }
     }
 }
 
@@ -538,20 +608,23 @@ impl ChatTemplate {
     /// assert_eq!(rendered[1].placeholder, None);
     /// ```
     pub fn render(&self, args: &PromptArgs) -> Result<Vec<RenderedMessage>, ChainError> {
-        let mut out = Vec::new();
+        let mut out = Budget::new(self.max_len);
         for slot in self.slots() {
             match slot {
-                Slot::Message(m) => out.push(RenderedMessage::template(m.format(args)?)),
-                Slot::Placeholder(p) => out.extend(
-                    p.resolve(args)
-                        .map_err(legacy_error)?
-                        .into_iter()
-                        .map(|message| RenderedMessage::placeholder(message, p.name())),
-                ),
+                Slot::Message(m) => {
+                    let message = m.format(args)?;
+                    let len = text_len(&message.content);
+                    out.push(RenderedMessage::template(message), len);
+                }
+                Slot::Placeholder(p) => p
+                    .resolve(args, |message| {
+                        let len = text_len(&message.content);
+                        out.push(RenderedMessage::placeholder(message, p.name()), len);
+                    })
+                    .map_err(legacy_error)?,
             }
         }
-        self.check_rendered_len(&out)?;
-        Ok(out)
+        Ok(out.finish()?)
     }
 
     /// Like [`format_messages`](Self::format_messages), but a
@@ -575,39 +648,18 @@ impl ChatTemplate {
         if !missing.is_empty() {
             return Err(TemplateError::MissingVariables(missing));
         }
-        let mut out = Vec::new();
+        let mut out = Budget::new(self.max_len);
+        let mut push = |message: Message| {
+            let len = text_len(&message.content);
+            out.push(message, len);
+        };
         for slot in self.slots() {
             match slot {
-                Slot::Message(m) => out.push(m.try_format(args)?),
-                Slot::Placeholder(p) => out.extend(p.resolve(args)?),
+                Slot::Message(m) => push(m.try_format(args)?),
+                Slot::Placeholder(p) => p.resolve(args, &mut push)?,
             }
         }
-        self.check_len(&out)?;
-        Ok(out)
-    }
-
-    fn check_len(&self, messages: &[Message]) -> Result<(), TemplateError> {
-        self.check_total(messages.iter().map(|m| m.content.text_content().len()))
-    }
-
-    fn check_rendered_len(&self, messages: &[RenderedMessage]) -> Result<(), TemplateError> {
-        self.check_total(
-            messages
-                .iter()
-                .map(|r| r.message.content.text_content().len()),
-        )
-    }
-
-    fn check_total(&self, lens: impl Iterator<Item = usize>) -> Result<(), TemplateError> {
-        let Some(max) = self.max_len else {
-            return Ok(());
-        };
-        let len = lens.fold(0usize, usize::saturating_add);
-        if len > max {
-            Err(TemplateError::TooLong { len, max })
-        } else {
-            Ok(())
-        }
+        out.finish()
     }
 
     /// The variables `args` does not supply, across all slots, in order of
@@ -1010,6 +1062,24 @@ mod tests {
         assert_ne!(a, MessagesPlaceholder::new("h"));
         assert_eq!(a.value_guard(), Some(&ValueGuard::EscapeXml));
         assert_eq!(MessagesPlaceholder::new("h").last(3).last_n(), Some(3));
+    }
+
+    #[test]
+    fn text_len_matches_text_content() {
+        let cases = [
+            MessageContent::Text("héllo".into()),
+            MessageContent::Parts(vec![]),
+            MessageContent::Parts(vec![ContentPart::image_url("https://example.com/a.png")]),
+            MessageContent::Parts(vec![
+                ContentPart::text("ab"),
+                ContentPart::image_url("https://example.com/a.png"),
+                ContentPart::text(""),
+                ContentPart::text("cd"),
+            ]),
+        ];
+        for c in cases {
+            assert_eq!(text_len(&c), c.text_content().len(), "{c:?}");
+        }
     }
 
     #[test]
