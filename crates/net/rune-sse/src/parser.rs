@@ -8,6 +8,9 @@ use crate::{Error, Event, Item};
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
+/// Default for [`Options::max_id_len`].
+pub const DEFAULT_MAX_ID_LEN: usize = 1024;
+
 /// Settings for a [`Parser`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -18,6 +21,11 @@ pub struct Options {
     /// Largest data buffer, in bytes, of one event. A larger event raises
     /// [`Error::EventTooLarge`]. Default 16 MiB.
     pub max_event_len: usize,
+    /// Longest `id` value, in bytes, the parser accepts. The last event id
+    /// is copied into every event that follows, so a long one would
+    /// multiply memory; an `id` field over this limit is ignored, like one
+    /// containing NUL. Default [`DEFAULT_MAX_ID_LEN`] (1 KiB).
+    pub max_id_len: usize,
     /// Whether comment lines are reported as [`Item::Comment`]. Default
     /// `false`: comments (typically keep-alives) are dropped.
     pub comments: bool,
@@ -28,12 +36,30 @@ impl Default for Options {
         Self {
             max_line_len: 8 << 20,
             max_event_len: 16 << 20,
+            max_id_len: DEFAULT_MAX_ID_LEN,
             comments: false,
         }
     }
 }
 
 impl Options {
+    /// Sets [`Options::max_id_len`].
+    ///
+    /// ```
+    /// use rune_sse::{Options, Parser};
+    ///
+    /// let mut parser = Parser::with_options(Options::default().with_max_id_len(4));
+    /// parser.push(b"id: 1234\ndata: a\n\nid: 12345\ndata: b\n\n");
+    /// assert_eq!(parser.next_event().unwrap()?.id, "1234");
+    /// assert_eq!(parser.next_event().unwrap()?.id, "1234");
+    /// # Ok::<(), rune_sse::Error>(())
+    /// ```
+    #[must_use]
+    pub const fn with_max_id_len(mut self, max_id_len: usize) -> Self {
+        self.max_id_len = max_id_len;
+        self
+    }
+
     /// Sets [`Options::max_line_len`].
     #[must_use]
     pub const fn with_max_line_len(mut self, max_line_len: usize) -> Self {
@@ -289,7 +315,9 @@ impl Parser {
                     self.data.push('\n');
                 }
             }
-            "id" if !value.contains('\0') => value.clone_into(&mut self.last_event_id),
+            "id" if value.len() <= self.options.max_id_len && !value.contains('\0') => {
+                value.clone_into(&mut self.last_event_id);
+            }
             "retry" if !value.is_empty() && value.bytes().all(|b| b.is_ascii_digit()) => {
                 // A value too large for u64 is ignored, like any invalid one.
                 if let Ok(millis) = value.parse::<u64>() {
@@ -342,6 +370,29 @@ mod tests {
 
     fn ev(event: &str, data: &str, id: &str) -> Event {
         Event::new(data).with_event(event).with_id(id)
+    }
+
+    #[test]
+    fn a_long_id_is_not_copied_into_every_event() {
+        // One 64 KiB id followed by a thousand 6-byte events: every event
+        // carries the id, so a long one must not multiply memory.
+        let mut input = format!("id: {}\n", "x".repeat(64 << 10)).into_bytes();
+        input.extend("data\n\n".repeat(1000).bytes());
+        let mut parser = Parser::new();
+        parser.push(&input);
+        let parsed = events(&mut parser);
+        assert_eq!(parsed.len(), 1000);
+        let id_bytes: usize = parsed.iter().map(|event| event.id.len()).sum();
+        assert!(
+            id_bytes <= 1000 * DEFAULT_MAX_ID_LEN,
+            "{id_bytes} bytes of ids"
+        );
+        assert_eq!(parser.last_event_id(), "");
+        // Ids up to the limit are kept.
+        let mut parser = Parser::new();
+        let id = "y".repeat(DEFAULT_MAX_ID_LEN);
+        parser.push(format!("id: {id}\ndata\n\n").as_bytes());
+        assert_eq!(events(&mut parser)[0].id, id);
     }
 
     #[test]

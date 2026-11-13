@@ -23,7 +23,8 @@ adapters cover `std::io::Read` (`Reader`) and `futures::Stream`
 (`SseStream`, feature `stream`). `encode` writes events back out, for
 servers and proxies. Buffering is bounded (`Options::max_line_len`,
 `Options::max_event_len`); an oversized event is reported and skipped, and
-parsing continues.
+parsing continues. The last event id is copied into every event, so ids
+longer than `Options::max_id_len` (1 KiB by default) are ignored.
 
 ## Installation
 
@@ -93,6 +94,13 @@ use rune_sse::{Event, encode};
 let wire = encode(&Event::new("a\nb").with_event("delta").with_id("7")).unwrap();
 assert_eq!(wire, "event: delta\nid: 7\ndata: a\ndata: b\n\n");
 ```
+
+## Migrating from 0.1
+
+`id` fields longer than 1 KiB are now ignored, so the last event id stays
+what it was. Before, an 8 MiB id was copied into every later event, letting
+a few bytes per event allocate megabytes. Raise the limit with
+`Options::default().with_max_id_len(n)` if your server sends longer ids.
 
 ## License
 

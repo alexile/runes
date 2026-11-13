@@ -60,7 +60,7 @@ mod stream;
 
 pub use encode::{encode, encode_comment, encode_retry};
 pub use event::{Event, Item};
-pub use parser::{Options, Parser};
+pub use parser::{DEFAULT_MAX_ID_LEN, Options, Parser};
 pub use reader::Reader;
 #[cfg(feature = "stream")]
 pub use stream::SseStream;

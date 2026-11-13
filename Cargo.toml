@@ -413,7 +413,7 @@ rune-securitytxt = { path = "crates/web/rune-securitytxt", version = "0.1.0" }
 rune-sha256 = { path = "crates/common/rune-sha256", version = "0.2.1" }
 rune-sha512 = { path = "crates/common/rune-sha512", version = "0.2.1" }
 rune-socks = { path = "crates/net/rune-socks", version = "0.1.0" }
-rune-sse = { path = "crates/net/rune-sse", version = "0.1.0" }
+rune-sse = { path = "crates/net/rune-sse", version = "0.2.0" }
 rune-stats = { path = "crates/ts/rune-stats", version = "0.1.1" }
 rune-strace = { path = "crates/common/rune-strace", version = "0.2.0" }
 rune-strings = { path = "crates/common/rune-strings", version = "0.2.2" }

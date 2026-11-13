@@ -107,3 +107,59 @@ proptest! {
         }
     }
 }
+
+/// Field lines, line endings and junk, so the fuzzing reaches every field.
+fn piece() -> impl Strategy<Value = Vec<u8>> {
+    prop_oneof![
+        prop::sample::select(vec![
+            &b"data"[..],
+            b"data:",
+            b"data: x",
+            b"event: e",
+            b"id: 1",
+            b"id",
+            b"id:\0",
+            b"retry: 10",
+            b"retry: 99999999999999999999",
+            b": c",
+            b"\xEF\xBB\xBF",
+            b"\n",
+            b"\r",
+            b"\r\n",
+            b"\xff",
+            b"\xe2\x82",
+        ])
+        .prop_map(<[u8]>::to_vec),
+        proptest::collection::vec(any::<u8>(), 0..40),
+    ]
+}
+
+proptest! {
+    #[test]
+    fn structured_input_never_panics_and_respects_limits(
+        pieces in proptest::collection::vec(piece(), 0..60),
+        max_line in 0usize..40,
+        max_event in 0usize..60,
+        max_id in 0usize..8,
+        chunk in 1usize..32,
+    ) {
+        let options = Options::default()
+            .with_max_line_len(max_line)
+            .with_max_event_len(max_event)
+            .with_max_id_len(max_id)
+            .with_comments(true);
+        let input = pieces.concat();
+        let mut parser = Parser::with_options(options);
+        for part in input.chunks(chunk) {
+            parser.push(part);
+            for item in parser.items() {
+                if let Ok(Item::Event(event)) = item {
+                    prop_assert!(event.id.len() <= max_id);
+                    prop_assert!(event.data.len() < max_event.max(1));
+                }
+            }
+        }
+        parser.finish();
+        prop_assert!(parser.last_event_id().len() <= max_id);
+    }
+}
