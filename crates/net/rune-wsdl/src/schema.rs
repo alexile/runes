@@ -22,6 +22,11 @@ pub const SOAP_ENCODING_NAMESPACE: &str = "http://schemas.xmlsoap.org/soap/encod
 
 /// Deepest chain of simple-type restrictions, unions and lists followed.
 const MAX_SIMPLE_DEPTH: usize = 32;
+/// Most named group, attribute group and complex type expansions for one
+/// message. Expansions that add no element do not spend the node budget,
+/// so a schema whose groups each name the next one twice would otherwise
+/// take 2^n steps.
+const MAX_EXPANSIONS: usize = 100_000;
 
 /// Whether `namespace` holds the XSD built-in types (the 2001 namespace and
 /// the 1999 / 2000 drafts some old toolkits still emit).
@@ -221,27 +226,43 @@ pub struct Generator<'s, 'a> {
     schemas: &'s Schemas<'a>,
     options: &'s Options,
     nodes: usize,
+    expansions: usize,
     stack: Vec<QName>,
+    seen_warnings: std::collections::HashSet<String>,
     /// Problems met while expanding.
     pub warnings: Vec<String>,
 }
 
 impl<'s, 'a> Generator<'s, 'a> {
     /// A generator with a fresh node budget.
-    pub const fn new(schemas: &'s Schemas<'a>, options: &'s Options) -> Self {
+    pub fn new(schemas: &'s Schemas<'a>, options: &'s Options) -> Self {
         Self {
             schemas,
             options,
             nodes: 0,
+            expansions: 0,
             stack: Vec::new(),
+            seen_warnings: std::collections::HashSet::new(),
             warnings: Vec::new(),
         }
     }
 
     fn warn(&mut self, warning: String) {
-        if !self.warnings.contains(&warning) {
+        if self.seen_warnings.insert(warning.clone()) {
             self.warnings.push(warning);
         }
+    }
+
+    /// Takes one step from the expansion budget.
+    fn expand(&mut self) -> bool {
+        if self.expansions >= MAX_EXPANSIONS {
+            self.warn(format!(
+                "sample message cut off after {MAX_EXPANSIONS} type and group expansions"
+            ));
+            return false;
+        }
+        self.expansions += 1;
+        true
     }
 
     /// Takes one node from the budget.
@@ -400,6 +421,9 @@ impl<'s, 'a> Generator<'s, 'a> {
                     self.warn(format!("recursive type `{}` cut off", clark(type_name)));
                     return;
                 }
+                if !self.expand() {
+                    return;
+                }
                 self.stack.push(type_name.clone());
                 self.complex(declaration, schema, draft, depth);
                 self.stack.pop();
@@ -526,6 +550,9 @@ impl<'s, 'a> Generator<'s, 'a> {
             self.warn(format!("recursive group `{}` cut off", clark(&name)));
             return;
         }
+        if !self.expand() {
+            return;
+        }
         self.stack.push(name);
         for child in &group.children {
             if matches!(child.local.as_str(), "sequence" | "choice" | "all") {
@@ -544,6 +571,9 @@ impl<'s, 'a> Generator<'s, 'a> {
                 "attribute group `{}` nested too deep",
                 clark(&name)
             ));
+            return;
+        }
+        if !self.expand() {
             return;
         }
         let Some((schema, group)) = lookup(&self.schemas.attribute_groups, &name).copied() else {
@@ -885,5 +915,60 @@ mod tests {
         map.insert(QName::new(Some("urn:c"), "x"), 2);
         assert_eq!(lookup(&map, &QName::new(Some("urn:b"), "x")), None);
         assert_eq!(clark(&QName::new(None, "y")), "y");
+    }
+
+    /// A schema whose group `g0` names `g1` twice, `g1` names `g2` twice
+    /// and so on: no cycle, but 2^levels expansions.
+    fn fan_out(kind: &str, levels: usize) -> String {
+        use std::fmt::Write as _;
+        let mut body = String::new();
+        let (holder, item) = if kind == "group" {
+            ("<xs:sequence>", "</xs:sequence>")
+        } else {
+            ("", "")
+        };
+        for level in 0..levels {
+            let next = format!(r#"<xs:{kind} ref="t:g{}"/>"#, level + 1);
+            let _ = write!(
+                body,
+                r#"<xs:{kind} name="g{level}">{holder}{next}{next}{item}</xs:{kind}>"#
+            );
+        }
+        let _ = write!(
+            body,
+            r#"<xs:{kind} name="g{levels}">{holder}{item}</xs:{kind}>"#
+        );
+        format!(
+            r#"<types xmlns:xs="http://www.w3.org/2001/XMLSchema">
+              <xs:schema targetNamespace="urn:t" xmlns:t="urn:t">
+                <xs:element name="Root"><xs:complexType>{}<xs:{kind} ref="t:g0"/>{}</xs:complexType></xs:element>
+                {body}
+              </xs:schema></types>"#,
+            if kind == "group" { "<xs:sequence>" } else { "" },
+            if kind == "group" {
+                "</xs:sequence>"
+            } else {
+                ""
+            },
+        )
+    }
+
+    #[test]
+    fn group_fan_out_is_bounded() {
+        for kind in ["group", "attributeGroup"] {
+            let root = xml::parse(&fan_out(kind, 30)).unwrap();
+            let mut warnings = Vec::new();
+            let schemas = Schemas::collect(std::iter::once(&root), &mut warnings);
+            let options = Options::default();
+            let mut generator = Generator::new(&schemas, &options);
+            let started = std::time::Instant::now();
+            let draft = generator.global_element(&QName::new(Some("urn:t"), "Root"));
+            assert!(draft.is_some());
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "{kind}: {:?}",
+                started.elapsed()
+            );
+        }
     }
 }
