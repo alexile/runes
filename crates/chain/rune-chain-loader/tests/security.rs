@@ -324,3 +324,28 @@ fn records_cannot_spoof_loader_metadata() {
     assert_eq!(docs[0].metadata["line"], "1");
     assert_eq!(docs[0].metadata["content_sha256"], docs[0].content_sha256());
 }
+
+#[cfg(unix)]
+#[test]
+fn followed_symlinks_cannot_reach_excluded_or_hidden_entries() {
+    use std::os::unix::fs::symlink;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("private/keys")).unwrap();
+    fs::write(root.join("private/keys/key.txt"), "private").unwrap();
+    fs::write(root.join(".env.txt"), "hidden").unwrap();
+    fs::write(root.join("ok.txt"), "ok").unwrap();
+    // Aliases with innocent names pointing at an excluded directory, a file
+    // under it, and a hidden file.
+    symlink(root.join("private"), root.join("public")).unwrap();
+    symlink(root.join("private/keys/key.txt"), root.join("key.txt")).unwrap();
+    symlink(root.join(".env.txt"), root.join("env.txt")).unwrap();
+
+    let docs = DirectoryLoader::new(root)
+        .exclude_patterns(&["private"])
+        .unwrap()
+        .follow_symlinks(true)
+        .load()
+        .unwrap();
+    assert_eq!(sorted_relative(&docs), ["ok.txt"]);
+}

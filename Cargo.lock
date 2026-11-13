@@ -3375,7 +3375,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-loader"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proptest",
  "rune-chain-core",

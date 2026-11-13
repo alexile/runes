@@ -20,7 +20,9 @@ pub const DEFAULT_INCLUDE: &[&str] = &["*.txt", "*.md", "*.markdown", "*.rst", "
 /// - the walk never leaves the root: symlinks are **skipped** unless
 ///   [`follow_symlinks`](Self::follow_symlinks) is on, and even then only
 ///   targets inside the canonical root are followed, each directory at most
-///   once (so symlink loops terminate);
+///   once (so symlink loops terminate). The hidden and exclude rules are
+///   checked against both the walk path and the target's real path, so a
+///   link cannot expose an excluded or hidden entry under another name;
 /// - FIFOs, sockets and devices are skipped without being opened;
 /// - hidden entries (names starting with `.`, e.g. `.git`, `.env`) are
 ///   skipped unless [`hidden`](Self::hidden) is on;
@@ -293,14 +295,15 @@ impl Walk {
     /// Classify an entry, following a symlink only when allowed and only
     /// into the jail.
     fn classify(&self, path: &Path, file_type: fs::FileType) -> Kind {
-        if file_type.is_symlink() {
-            if !self.follow_symlinks {
-                return Kind::Skip;
-            }
+        if self.follow_symlinks {
+            // The walk path may run through a followed link, so the hidden
+            // and exclude rules must also hold for the real location;
+            // otherwise a link named `public` could expose an excluded
+            // `private` directory or a hidden `.env`.
             let Ok(target) = fs::canonicalize(path) else {
                 return Kind::Skip;
             };
-            if !self.jail.contains(&target) {
+            if !self.jail.contains(&target) || self.real_path_blocked(&target) {
                 return Kind::Skip;
             }
             return match fs::metadata(&target) {
@@ -309,13 +312,38 @@ impl Walk {
                 _ => Kind::Skip,
             };
         }
-        if file_type.is_dir() {
+        if file_type.is_symlink() {
+            Kind::Skip
+        } else if file_type.is_dir() {
             Kind::Dir
         } else if file_type.is_file() {
             Kind::File
         } else {
             Kind::Skip
         }
+    }
+
+    /// `true` if the canonical `target`, relative to the root, is hidden
+    /// (when hidden entries are off) or lies at or under an excluded path.
+    fn real_path_blocked(&self, target: &Path) -> bool {
+        let Ok(relative) = target.strip_prefix(self.jail.root()) else {
+            return true;
+        };
+        let mut prefix = String::new();
+        for component in relative.components() {
+            let name = component.as_os_str().to_string_lossy();
+            if !self.hidden && name.starts_with('.') {
+                return true;
+            }
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(&name);
+            if self.excluded(&prefix) {
+                return true;
+            }
+        }
+        false
     }
 
     fn excluded(&self, relative: &str) -> bool {
