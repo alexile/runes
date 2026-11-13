@@ -42,6 +42,10 @@ pub enum KeyExtractor {
     ///
     /// If the header is missing, empty or longer than [`MAX_KEY_LEN`] bytes, the request is
     /// keyed by client IP instead, so omitting the header never escapes the limit.
+    ///
+    /// The value is taken as sent: a client that puts a new made-up value in every request
+    /// gets a fresh bucket each time. Use this only where unknown keys are refused before
+    /// they cost anything, and keep an IP-keyed limit in front of it.
     Header(HeaderName),
 }
 

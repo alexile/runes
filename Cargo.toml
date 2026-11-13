@@ -290,7 +290,7 @@ rune-axum-health = { path = "crates/axum/rune-axum-health", version = "0.1.0" }
 rune-axum-ipfilter = { path = "crates/axum/rune-axum-ipfilter", version = "0.3.1" }
 rune-axum-jwt = { path = "crates/axum/rune-axum-jwt", version = "0.4.0" }
 rune-axum-problem = { path = "crates/axum/rune-axum-problem", version = "0.1.0" }
-rune-axum-ratelimit = { path = "crates/axum/rune-axum-ratelimit", version = "0.3.1" }
+rune-axum-ratelimit = { path = "crates/axum/rune-axum-ratelimit", version = "0.3.2" }
 rune-axum-redirect-https = { path = "crates/axum/rune-axum-redirect-https", version = "0.1.2" }
 rune-axum-requestid = { path = "crates/axum/rune-axum-requestid", version = "0.1.0" }
 rune-axum-size = { path = "crates/axum/rune-axum-size", version = "0.2.0" }

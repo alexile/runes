@@ -83,6 +83,10 @@ let layer = RateLimitLayer::new(
 );
 ```
 
+The header value is not checked: a client that sends a new made-up key with every request gets
+a new bucket every time. Keep an IP-keyed limit in front of this one, and refuse unknown keys
+before doing anything expensive.
+
 ### Redis store (shared across instances)
 
 ```rust
