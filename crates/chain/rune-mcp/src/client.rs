@@ -317,12 +317,16 @@ impl ClientHandler for Handler {
         &self,
         _context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + Send + '_ {
-        *self
+        // Both under the lock, so `list_tools` never sees one without the
+        // other.
+        let mut cache = self
             .shared
             .tools
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = None;
+            .unwrap_or_else(PoisonError::into_inner);
+        *cache = None;
         self.shared.bump(|c| c.tools += 1);
+        drop(cache);
         std::future::ready(())
     }
 
@@ -490,17 +494,19 @@ impl McpClient {
     /// [`StdioServer`]: crate::StdioServer
     #[cfg(feature = "stdio")]
     pub async fn spawn(server: &crate::StdioServer, options: ClientOptions) -> Result<Self, Error> {
-        let (transport, _stderr) = rmcp::transport::TokioChildProcess::builder(server.command()?)
-            .stderr(server.stderr_mode())
-            .spawn()
-            .map_err(|err| Error::Initialize(Box::new(err)))?;
-        Self::connect(transport, options).await
+        Self::connect(crate::stdio::spawn_transport(server)?, options).await
     }
 
     /// Connect to a Streamable HTTP endpoint with `client`, any rmcp
     /// [`StreamableHttpClient`](rmcp::transport::streamable_http_client::StreamableHttpClient)
     /// (for example `reqwest::Client` with rmcp's
     /// `transport-streamable-http-client-reqwest` feature).
+    ///
+    /// Turn redirects off in that client
+    /// (`reqwest::redirect::Policy::none()`). A stock `reqwest::Client`
+    /// follows redirects to other hosts and to plain `http://`, carrying
+    /// the [`with_header`](crate::HttpClientConfig::with_header) headers
+    /// along, which also gets around the HTTPS check on `config`.
     ///
     /// # Errors
     ///
@@ -610,6 +616,9 @@ impl McpClient {
     /// the request fails; [`Error::Rejected`] for a bad definition in
     /// strict mode.
     pub async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, Error> {
+        // A list_changed that arrives while the request is in flight makes
+        // this answer stale, so it is returned but not cached.
+        let generation = self.shared.changes.borrow().tools;
         let listed = with_timeout(
             "tools/list",
             self.options.request_timeout,
@@ -665,11 +674,18 @@ impl McpClient {
             );
         }
         let out = tools.values().map(|t| t.descriptor.clone()).collect();
-        *self
-            .shared
-            .tools
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(tools);
+        {
+            let mut cache = self
+                .shared
+                .tools
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            // Checked under the lock the notification handler holds while
+            // it clears the cache and bumps the counter.
+            if self.shared.changes.borrow().tools == generation {
+                *cache = Some(tools);
+            }
+        }
         self.record(rejected);
         Ok(out)
     }
@@ -813,6 +829,14 @@ impl McpClient {
                 if self.options.strict {
                     return Err(err.into());
                 }
+                self.shared
+                    .rejected
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .push(Rejection {
+                        name: clean_text(&remote.name, 128),
+                        reason: format!("not usable under the namespace: {err}"),
+                    });
                 continue;
             }
             if exposed.description.trim().is_empty() {

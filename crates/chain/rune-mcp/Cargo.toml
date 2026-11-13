@@ -1,6 +1,6 @@
 [package]
 name = "rune-mcp"
-version = "0.2.0"
+version = "0.2.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -15,7 +15,7 @@ publish = true
 [features]
 ## stdio transports: serve over the process's stdin/stdout, and spawn a local
 ## MCP server (`StdioServer`: no shell, cleared environment, killed on drop).
-stdio = ["rmcp/transport-io", "rmcp/transport-child-process", "tokio/process"]
+stdio = ["rmcp/transport-io", "rmcp/transport-child-process", "tokio/process", "dep:process-wrap"]
 ## Streamable HTTP server: a `tower` service to mount in axum or hyper.
 http-server = ["rmcp/transport-streamable-http-server"]
 ## Streamable HTTP client: `HttpClientConfig` (HTTPS unless loopback, redacted
@@ -28,6 +28,9 @@ chain = ["dep:rune-chain-core"]
 [dependencies]
 async-trait.workspace = true
 http = { workspace = true, optional = true }
+# Already pulled in by rmcp's child-process transport; used directly to put
+# spawned servers in their own process group.
+process-wrap = { version = "10.0", default-features = false, features = ["tokio1", "process-group"], optional = true }
 rmcp = { version = "3.9.0", default-features = false, features = ["server", "client"] }
 rune-chain-core = { workspace = true, optional = true }
 rune-tool-schema.workspace = true

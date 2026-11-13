@@ -921,3 +921,143 @@ async fn endless_pagination_stops_at_the_list_limit() {
     assert!(*server.pages.lock().unwrap() <= 6);
     assert!(client.rejected()[0].reason.contains("over the limit"));
 }
+
+/// A server tool that sets `done` if it ever gets to finish, after `delay`.
+fn slow_flag_server(done: Arc<std::sync::atomic::AtomicBool>, delay: Duration) -> McpServer {
+    McpServer::new("slow", "1")
+        .tool(
+            ToolDescriptor::new("slow", "Sleeps, then sets a flag."),
+            tool_fn(move |_args| {
+                let done = Arc::clone(&done);
+                async move {
+                    tokio::time::sleep(delay).await;
+                    done.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(ToolOutput::text("finished"))
+                }
+            }),
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn cancelled_call_stops_the_server_handler() {
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let client = connect_rune(
+        slow_flag_server(Arc::clone(&done), Duration::from_millis(300)),
+        ClientOptions::default().with_call_timeout(Duration::from_millis(50)),
+    )
+    .await;
+    // The client times out and sends notifications/cancelled.
+    let err = client.call_tool("slow", Map::new()).await.unwrap_err();
+    assert!(matches!(err, Error::Timeout { .. }), "{err:?}");
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(
+        !done.load(std::sync::atomic::Ordering::SeqCst),
+        "handler ran to completion after the call was cancelled"
+    );
+}
+
+#[tokio::test]
+async fn closed_session_stops_the_server_handler() {
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let client = Arc::new(
+        connect_rune(
+            slow_flag_server(Arc::clone(&done), Duration::from_millis(300)),
+            ClientOptions::default(),
+        )
+        .await,
+    );
+    let caller = Arc::clone(&client);
+    let pending = tokio::spawn(async move { caller.call_tool("slow", Map::new()).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    pending.abort();
+    let _ = pending.await;
+    drop(Arc::into_inner(client).unwrap().close().await);
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(
+        !done.load(std::sync::atomic::Ordering::SeqCst),
+        "handler ran to completion after the session closed"
+    );
+}
+
+#[tokio::test]
+async fn dropped_direct_call_stops_the_handler() {
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server = slow_flag_server(Arc::clone(&done), Duration::from_millis(300));
+    let timed_out =
+        tokio::time::timeout(Duration::from_millis(50), server.call("slow", Map::new())).await;
+    assert!(timed_out.is_err());
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    assert!(!done.load(std::sync::atomic::Ordering::SeqCst));
+}
+
+/// Lists `t`, and on the first listing changes it and announces the change
+/// before answering with the old definition.
+#[derive(Clone)]
+struct ChangesWhileListing {
+    lists: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl ServerHandler for ChangesWhileListing {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_tool_list_changed()
+                .build(),
+        )
+    }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, ErrorData> {
+        let n = self.lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n == 0 {
+            context.peer.notify_tool_list_changed().await.unwrap();
+            // Let the notification get handled before the stale answer.
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            return Ok(ListToolsResult::with_all_items(vec![raw_tool("t", "old")]));
+        }
+        Ok(ListToolsResult::with_all_items(vec![raw_tool("t", "new")]))
+    }
+
+    async fn call_tool(
+        &self,
+        _request: CallToolRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResponse, ErrorData> {
+        Ok(CallToolResult::success(vec![ContentBlock::text("ran")]).into())
+    }
+}
+
+#[tokio::test]
+async fn list_changed_during_listing_is_not_lost() {
+    let server = ChangesWhileListing {
+        lists: Arc::default(),
+    };
+    let (client, _running) = connect_with(server, ClientOptions::default()).await;
+    let client = Arc::new(client);
+    let tools = client.remote_tools().await.unwrap();
+    assert_eq!(tools[0].descriptor().description, "old");
+    let err = tools[0].call(Map::new()).await.unwrap_err();
+    assert!(matches!(err, Error::DefinitionChanged(_)), "{err:?}");
+}
+
+#[tokio::test]
+async fn overlong_namespaced_names_are_reported() {
+    let long = "a".repeat(127);
+    let server = Hostile::new(vec![raw_tool(&long, "long"), raw_tool("ok", "fine")]);
+    let (client, _running) =
+        connect_with(server, ClientOptions::default().with_namespace("ns")).await;
+    let client = Arc::new(client);
+    let tools = client.remote_tools().await.unwrap();
+    let names: Vec<_> = tools.iter().map(|t| t.descriptor().name.clone()).collect();
+    assert_eq!(names, ["ns__ok"]);
+    let rejected = client.rejected();
+    assert!(
+        rejected.iter().any(|r| r.name.contains(&long)),
+        "{rejected:?}"
+    );
+}

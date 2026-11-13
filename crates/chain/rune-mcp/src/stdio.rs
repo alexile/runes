@@ -16,7 +16,10 @@ use crate::Error;
 /// [`env`](Self::env) (pass `PATH` yourself if the server needs it), so
 /// API keys and tokens in your own environment do not leak to it. Its
 /// stderr is discarded unless [`inherit_stderr`](Self::inherit_stderr) is
-/// set. The process is killed when the client is dropped or closed.
+/// set. The process is killed when the client is dropped or closed; on
+/// Unix it runs in its own process group and the whole group is killed, so
+/// servers started through a wrapper (`npx`, `uvx`, a shell script) do not
+/// outlive it.
 ///
 /// `Debug` shows the variable names, never their values.
 ///
@@ -157,13 +160,33 @@ impl StdioServer {
         Ok(command)
     }
 
-    pub(crate) fn stderr_mode(&self) -> Stdio {
+    fn stderr_mode(&self) -> Stdio {
         if self.inherit_stderr {
             Stdio::inherit()
         } else {
             Stdio::null()
         }
     }
+}
+
+/// Spawn `server` as an rmcp child-process transport.
+pub fn spawn_transport(
+    server: &StdioServer,
+) -> Result<rmcp::transport::TokioChildProcess, Error> {
+    let command = process_wrap::tokio::CommandWrap::from(server.command()?);
+    // Its own process group, so killing it also kills whatever a wrapper
+    // such as `npx`, `uvx` or a shell script started.
+    #[cfg(unix)]
+    let command = {
+        let mut command = command;
+        command.wrap(process_wrap::tokio::ProcessGroup::leader());
+        command
+    };
+    let (transport, _stderr) = rmcp::transport::TokioChildProcess::builder(command)
+        .stderr(server.stderr_mode())
+        .spawn()
+        .map_err(|err| Error::Initialize(Box::new(err)))?;
+    Ok(transport)
 }
 
 #[cfg(test)]
@@ -207,5 +230,58 @@ mod tests {
         };
         let printed = String::from_utf8_lossy(&output.stdout);
         assert_eq!(printed.trim(), "VISIBLE=yes");
+    }
+
+    /// Alive and not a zombie, going by `/proc`.
+    #[cfg(target_os = "linux")]
+    fn alive(pid: &str) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+            stat.rsplit(')')
+                .next()
+                .is_some_and(|rest| !rest.trim_start().starts_with('Z'))
+        })
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn dropping_the_transport_kills_grandchildren() {
+        let dir = std::env::temp_dir().join(format!("rune-mcp-pg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pid_file = dir.join("pid");
+        let script = format!(
+            "/bin/sleep 1000 & echo $! > {}; exec /bin/cat",
+            pid_file.display()
+        );
+        let server = StdioServer::new("/bin/sh").args(["-c", &script]);
+        let transport = spawn_transport(&server).unwrap();
+        let mut pid = String::new();
+        for _ in 0..100 {
+            if let Ok(read) = std::fs::read_to_string(&pid_file)
+                && !read.trim().is_empty()
+            {
+                pid = read.trim().to_owned();
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(!pid.is_empty(), "the wrapper never started its child");
+        assert!(alive(&pid));
+        drop(transport);
+        let mut gone = false;
+        for _ in 0..100 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if !alive(&pid) {
+                gone = true;
+                break;
+            }
+        }
+        if !gone {
+            // Don't leave it behind for the rest of the run.
+            let _ = std::process::Command::new("/bin/kill")
+                .args(["-9", &pid])
+                .status();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(gone, "grandchild {pid} outlived the transport");
     }
 }

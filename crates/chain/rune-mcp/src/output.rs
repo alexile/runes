@@ -121,15 +121,25 @@ impl ToolOutput {
                 }
             }
         }
-        self.content = content;
-        if let Some(structured) = &self.structured
-            && encoded_len(structured) > max_bytes
-        {
+        if let Some(structured) = &self.structured {
+            let size = encoded_len(structured);
             // Structured content usually repeats the text, so it gets the
             // whole limit, not what the text left over.
-            self.structured = None;
-            self.truncated = true;
+            if size > max_bytes {
+                self.structured = None;
+                self.truncated = true;
+                // With no text left the result would read as empty.
+                if !content
+                    .iter()
+                    .any(|block| matches!(block, Content::Text(_)))
+                {
+                    content.push(Content::Text(format!(
+                        "[structured content of {size} bytes dropped: over the size limit]"
+                    )));
+                }
+            }
         }
+        self.content = content;
         self
     }
 
@@ -251,6 +261,29 @@ mod tests {
         let small = ToolOutput::structured(json!({"a": 1})).capped(1024);
         assert!(!small.truncated);
         assert_eq!(small, ToolOutput::structured(json!({"a": 1})));
+    }
+
+    #[test]
+    fn dropped_structured_only_result_leaves_a_note() {
+        let out = ToolOutput {
+            content: Vec::new(),
+            structured: Some(json!({"big": "y".repeat(100)})),
+            is_error: false,
+            truncated: false,
+        }
+        .capped(50);
+        assert!(out.truncated);
+        assert!(out.structured.is_none());
+        let text = out.text_content();
+        assert!(
+            text.contains("structured content") && text.contains("dropped"),
+            "{text:?}"
+        );
+
+        // With a text copy alongside, the truncated text already says so.
+        let out = ToolOutput::structured(json!({"big": "y".repeat(100)})).capped(50);
+        assert_eq!(out.content.len(), 1);
+        assert!(out.text_content().contains("[truncated"));
     }
 
     #[test]

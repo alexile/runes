@@ -91,7 +91,12 @@ for a public deployment, and put authentication in the router.
 `http-client` brings no HTTP stack: pass any rmcp `StreamableHttpClient`,
 for example `reqwest::Client` with rmcp's
 `transport-streamable-http-client-reqwest` feature enabled in your own
-manifest.
+manifest. Build that client with redirects turned off
+(`reqwest::Client::builder().redirect(reqwest::redirect::Policy::none())`):
+a stock `reqwest::Client` follows redirects to other hosts, and to plain
+`http://`, and only strips `Authorization` and cookies on the way, so
+headers added with `HttpClientConfig::with_header` (an API key, say) would
+be sent to wherever the server redirects.
 
 ## Installation
 

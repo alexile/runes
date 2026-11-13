@@ -283,6 +283,8 @@ impl McpServer {
     /// by the policy. A denied call or invalid arguments are an `Ok` result
     /// with [`is_error`](ToolOutput::is_error) set, exactly as a client
     /// would see it.
+    ///
+    /// Dropping the returned future aborts the handler's task.
     pub async fn call(
         &self,
         name: &str,
@@ -291,7 +293,7 @@ impl McpServer {
         let entry = self
             .visible_entry(name)
             .ok_or_else(|| Error::UnknownTool(clean_text(name, 128)))?;
-        Ok(self.run(entry, arguments).await)
+        Ok(self.run(entry, arguments, std::future::pending()).await)
     }
 
     fn visible_entry(&self, name: &str) -> Option<Arc<Entry>> {
@@ -302,7 +304,15 @@ impl McpServer {
             .cloned()
     }
 
-    async fn run(&self, entry: Arc<Entry>, arguments: Map<String, Value>) -> ToolOutput {
+    /// Run the tool's handler in its own task. The task is aborted when
+    /// `cancelled` completes (the client cancelled the request or the
+    /// session ended), on timeout, or when this future is dropped.
+    async fn run(
+        &self,
+        entry: Arc<Entry>,
+        arguments: Map<String, Value>,
+        cancelled: impl Future<Output = ()>,
+    ) -> ToolOutput {
         let name = &entry.descriptor.name;
         let call = ToolCall::new(&entry.descriptor, &arguments, Side::Server);
         if let Decision::Deny(reason) = gate(self.inner.policy.as_ref(), &call) {
@@ -312,18 +322,19 @@ impl McpServer {
             return ToolOutput::error(format!("invalid arguments for tool {name:?}: {reason}"));
         }
         let handler = Arc::clone(&entry.handler);
-        let task = tokio::spawn(async move { handler.call(arguments).await });
-        let abort = task.abort_handle();
-        let joined = match self.inner.call_timeout {
-            Some(after) => {
-                if let Ok(joined) = tokio::time::timeout(after, task).await {
-                    joined
-                } else {
-                    abort.abort();
-                    return ToolOutput::error(format!("tool {name:?} timed out after {after:?}"));
-                }
+        let task = AbortOnDrop(tokio::spawn(async move { handler.call(arguments).await }));
+        let finished = async {
+            match self.inner.call_timeout {
+                Some(after) => tokio::time::timeout(after, task).await.map_err(|_| after),
+                None => Ok(task.await),
             }
-            None => task.await,
+        };
+        let joined = match until_cancelled(finished, cancelled).await {
+            Some(Ok(joined)) => joined,
+            Some(Err(after)) => {
+                return ToolOutput::error(format!("tool {name:?} timed out after {after:?}"));
+            }
+            None => return ToolOutput::error(format!("tool {name:?} cancelled")),
         };
         match joined {
             Ok(Ok(output)) => output,
@@ -436,7 +447,7 @@ impl ServerHandler for McpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let Some(entry) = self.visible_entry(&request.name) else {
             return Err(ErrorData::invalid_params(
@@ -444,7 +455,13 @@ impl ServerHandler for McpServer {
                 None,
             ));
         };
-        let output = self.run(entry, request.arguments.unwrap_or_default()).await;
+        let output = self
+            .run(
+                entry,
+                request.arguments.unwrap_or_default(),
+                context.ct.cancelled(),
+            )
+            .await;
         Ok(to_call_tool_result(output).into())
     }
 
@@ -465,7 +482,7 @@ impl ServerHandler for McpServer {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, ErrorData> {
         let Some(entry) = self.inner.resources.get(&request.uri).cloned() else {
             return Err(ErrorData::resource_not_found(
@@ -475,7 +492,10 @@ impl ServerHandler for McpServer {
         };
         let uri = request.uri;
         let handler = Arc::clone(&entry.handler);
-        let joined = tokio::spawn(async move { handler.read(&uri).await }).await;
+        let task = AbortOnDrop(tokio::spawn(async move { handler.read(&uri).await }));
+        let Some(joined) = until_cancelled(task, context.ct.cancelled()).await else {
+            return Err(ErrorData::internal_error("request cancelled", None));
+        };
         match joined {
             Ok(Ok(contents)) => Ok(ReadResourceResult::new(
                 contents
@@ -506,7 +526,7 @@ impl ServerHandler for McpServer {
     async fn get_prompt(
         &self,
         request: GetPromptRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<GetPromptResponse, ErrorData> {
         let Some(entry) = self.inner.prompts.get(&request.name).cloned() else {
             return Err(ErrorData::invalid_params(
@@ -536,7 +556,10 @@ impl ServerHandler for McpServer {
             }
         }
         let handler = Arc::clone(&entry.handler);
-        let joined = tokio::spawn(async move { handler.get(arguments).await }).await;
+        let task = AbortOnDrop(tokio::spawn(async move { handler.get(arguments).await }));
+        let Some(joined) = until_cancelled(task, context.ct.cancelled()).await else {
+            return Err(ErrorData::internal_error("request cancelled", None));
+        };
         match joined {
             Ok(Ok(messages)) => {
                 let mut result = GetPromptResult::new(
@@ -549,6 +572,44 @@ impl ServerHandler for McpServer {
             Err(_) => Err(ErrorData::internal_error(INTERNAL_FAILURE, None)),
         }
     }
+}
+
+/// A spawned handler task that is aborted when dropped, so a request that
+/// is abandoned does not leave its work running in the background.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl<T> Future for AbortOnDrop<T> {
+    type Output = Result<T, tokio::task::JoinError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.0).poll(cx)
+    }
+}
+
+/// `work`'s output, or `None` if `cancelled` completes first (`work` is
+/// then dropped).
+async fn until_cancelled<F: Future>(
+    work: F,
+    cancelled: impl Future<Output = ()>,
+) -> Option<F::Output> {
+    let mut work = std::pin::pin!(work);
+    let mut cancelled = std::pin::pin!(cancelled);
+    std::future::poll_fn(|cx| {
+        if let std::task::Poll::Ready(output) = work.as_mut().poll(cx) {
+            return std::task::Poll::Ready(Some(output));
+        }
+        cancelled.as_mut().poll(cx).map(|()| None)
+    })
+    .await
 }
 
 /// A server session in progress; see [`McpServer::serve`].
