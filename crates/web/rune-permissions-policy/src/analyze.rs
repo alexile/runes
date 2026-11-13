@@ -1,5 +1,6 @@
 //! Weakness analysis and the mapping to `rune_finding`.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use rune_finding::{Confidence, Evidence, Finding, Location, Remediation, Severity, TaxonomyRef};
@@ -366,13 +367,12 @@ pub fn analyze(policy: &PermissionsPolicy, options: &Options) -> Vec<Weakness> {
             "The policy declares no feature",
         ));
     }
-    for (i, d) in policy.directives.iter().enumerate() {
+    let mut declared: HashMap<&str, usize> = HashMap::new();
+    for d in &policy.directives {
         // Report a repeated feature once, at its second declaration.
-        let earlier = policy.directives[..i]
-            .iter()
-            .filter(|e| e.feature == d.feature)
-            .count();
-        if earlier == 1 {
+        let earlier = declared.entry(d.feature.as_str()).or_insert(0);
+        *earlier += 1;
+        if *earlier == 2 {
             let which = if legacy { "first" } else { "last" };
             out.push(
                 Weakness::new(
@@ -411,9 +411,8 @@ pub fn analyze(policy: &PermissionsPolicy, options: &Options) -> Vec<Weakness> {
         }
         let sensitivity = known.map(|f| f.sensitivity);
         let members = &d.allowlist.members;
-        if d.allowlist.allows_all()
-            && let Some(s) = sensitivity
-        {
+        let allows_all = d.allowlist.allows_all();
+        if allows_all && let Some(s) = sensitivity {
             let severity = match s {
                 Sensitivity::High => Severity::Medium,
                 Sensitivity::Moderate => Severity::Low,
@@ -433,8 +432,9 @@ pub fn analyze(policy: &PermissionsPolicy, options: &Options) -> Vec<Weakness> {
             );
         }
         let mut src_seen = false;
-        for (j, m) in members.iter().enumerate() {
-            if members[..j].contains(m) || (m != &Member::All && d.allowlist.allows_all()) {
+        let mut seen = HashSet::new();
+        for m in members {
+            if !seen.insert(m) || (m != &Member::All && allows_all) {
                 out.push(
                     Weakness::new(
                         WeaknessKind::RedundantMember,

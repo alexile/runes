@@ -1,5 +1,6 @@
 //! The policy model, both header syntaxes, and canonical serialization.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use crate::Error;
@@ -265,10 +266,21 @@ impl PermissionsPolicy {
     /// The effective directive of every feature, once each, in first-seen
     /// order.
     pub fn effective(&self) -> impl Iterator<Item = &Directive> {
-        self.directives.iter().enumerate().filter_map(|(i, d)| {
-            let first = self.directives[..i].iter().all(|e| e.feature != d.feature);
-            if first { self.get(&d.feature) } else { None }
-        })
+        // feature -> (index of its first declaration, index of the one that counts)
+        let mut slots: HashMap<&str, (usize, usize)> = HashMap::new();
+        for (i, d) in self.directives.iter().enumerate() {
+            let slot = slots.entry(d.feature.as_str()).or_insert((i, i));
+            if self.syntax == Syntax::PermissionsPolicy {
+                slot.1 = i;
+            }
+        }
+        self.directives
+            .iter()
+            .enumerate()
+            .filter_map(move |(i, d)| match slots.get(d.feature.as_str()) {
+                Some(&(first, winner)) if first == i => self.directives.get(winner),
+                _ => None,
+            })
     }
 
     /// Converts the effective policy to `Permissions-Policy` syntax, for
