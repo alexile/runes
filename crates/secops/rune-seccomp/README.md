@@ -15,6 +15,13 @@ seccomp-bpf filter and installs it:
 - **Allowlist builder**: deny by default and allow the listed calls, or
   deny only the listed ones (`syscalls::DANGEROUS` is a starting list
   adapted from Docker's default profile). Calls are named or numbered.
+- **Argument conditions**: `Options::with_syscall_if` lists a call only
+  for some arguments (`ArgMatch::none_of(0, CLONE_NEWUSER)` allows
+  `clone` without a new user namespace); comparisons cover all 64 bits.
+  Seccomp sees registers only, never what a pointer points to.
+- **Per-call actions**: `Options::with_syscall_action` gives one call its
+  own action, such as `ENOSYS` for `clone3`, whose flags live in memory
+  the filter cannot read, so that libc falls back to `clone`.
 - **Actions**: fail with an errno, `trap` (`SIGSYS`), `log` (allow and
   audit, to find out what an allowlist misses), or kill the thread or
   process.

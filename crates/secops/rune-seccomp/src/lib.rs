@@ -71,7 +71,9 @@ pub mod syscalls;
 mod table;
 
 pub use action::{Action, ActionSet, MAX_ERRNO};
-pub use filter::{Compatibility, Options, Program, Report, Status, compile, install, install_with};
+pub use filter::{
+    ArgMatch, Compatibility, Options, Program, Report, Status, compile, install, install_with,
+};
 pub use support::{Support, detect};
 pub use syscalls::{Arch, Syscall};
 

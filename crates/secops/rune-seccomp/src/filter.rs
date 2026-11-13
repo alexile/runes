@@ -3,7 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use seccompiler::{BpfProgram, SeccompFilter};
+use seccompiler::{
+    BpfProgram, SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompFilter, SeccompRule,
+};
 
 use crate::action::MAX_ERRNO;
 use crate::bpf;
@@ -24,6 +26,87 @@ pub enum Compatibility {
     /// Fail with [`Error::Unsupported`] or [`Error::ActionUnavailable`]
     /// unless the filter can be installed exactly as requested.
     HardRequirement,
+}
+
+/// A condition on one argument of a system call: `(args[index] & mask) ==
+/// value`, compared over all 64 bits (the filter checks both 32-bit halves).
+///
+/// Seccomp only sees the argument registers, so a condition can test flags
+/// and numbers but not what a pointer points to.
+///
+/// ```
+/// use rune_seccomp::ArgMatch;
+///
+/// // No CLONE_NEWUSER (0x1000_0000) in the first argument.
+/// let condition = ArgMatch::none_of(0, 0x1000_0000);
+/// assert!(condition.matches(&[0x0011, 0, 0, 0, 0, 0]));
+/// assert!(!condition.matches(&[0x1000_0011, 0, 0, 0, 0, 0]));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ArgMatch {
+    index: u8,
+    mask: u64,
+    value: u64,
+}
+
+impl ArgMatch {
+    /// Matches when `args[index] & mask == value & mask`. `index` must be
+    /// below 6, which [`compile`] checks.
+    #[must_use]
+    pub const fn masked_eq(index: u8, mask: u64, value: u64) -> Self {
+        Self {
+            index,
+            mask,
+            value: value & mask,
+        }
+    }
+
+    /// Matches when none of `bits` is set in `args[index]`.
+    #[must_use]
+    pub const fn none_of(index: u8, bits: u64) -> Self {
+        Self::masked_eq(index, bits, 0)
+    }
+
+    /// The argument's index, from 0.
+    #[must_use]
+    pub const fn index(self) -> u8 {
+        self.index
+    }
+
+    /// The bits compared.
+    #[must_use]
+    pub const fn mask(self) -> u64 {
+        self.mask
+    }
+
+    /// The value the masked argument must equal.
+    #[must_use]
+    pub const fn value(self) -> u64 {
+        self.value
+    }
+
+    /// Whether a call with `args` meets the condition, as the compiled
+    /// filter decides it. An out-of-range index never matches.
+    #[must_use]
+    pub fn matches(self, args: &[u64; 6]) -> bool {
+        args.get(usize::from(self.index))
+            .is_some_and(|arg| arg & self.mask == self.value)
+    }
+
+    fn to_seccompiler(self) -> Result<SeccompCondition, Error> {
+        if self.index >= 6 {
+            return Err(Error::InvalidFilter {
+                reason: format!("argument index {} is out of range (0 to 5)", self.index),
+            });
+        }
+        SeccompCondition::new(
+            self.index,
+            SeccompCmpArgLen::Qword,
+            SeccompCmpOp::MaskedEq(self.mask),
+            self.value,
+        )
+        .map_err(|err| invalid(&err))
+    }
 }
 
 /// A seccomp-bpf filter: a list of system calls, what happens to them, and
@@ -49,6 +132,14 @@ pub struct Options {
     /// Install the filter on every thread of the process (Linux 3.17),
     /// rather than only the calling one. Default: `false`.
     pub all_threads: bool,
+    /// Argument conditions for listed calls: a call listed here gets the
+    /// listed action only when its arguments meet every condition, and the
+    /// default action otherwise. Set with [`Options::with_syscall_if`].
+    pub conditions: BTreeMap<Syscall, Vec<ArgMatch>>,
+    /// Calls with an action of their own, checked before the list and the
+    /// conditions, such as `ENOSYS` for a call libc should fall back from.
+    /// Set with [`Options::with_syscall_action`].
+    pub actions: BTreeMap<Syscall, Action>,
 }
 
 impl Default for Options {
@@ -71,6 +162,8 @@ impl Options {
             default_action: otherwise,
             compatibility: Compatibility::BestEffort,
             all_threads: false,
+            conditions: BTreeMap::new(),
+            actions: BTreeMap::new(),
         }
     }
 
@@ -84,24 +177,85 @@ impl Options {
             default_action: Action::Allow,
             compatibility: Compatibility::BestEffort,
             all_threads: false,
+            conditions: BTreeMap::new(),
+            actions: BTreeMap::new(),
         }
     }
 
-    /// Adds a system call, by name or number, to the list.
+    /// Adds a system call, by name or number, to the list, dropping any
+    /// [conditions](Options::with_syscall_if) given for it before.
     #[must_use]
     pub fn with_syscall(mut self, syscall: impl Into<Syscall>) -> Self {
-        self.syscalls.insert(syscall.into());
+        let syscall = syscall.into();
+        self.conditions.remove(&syscall);
+        self.syscalls.insert(syscall);
         self
     }
 
-    /// Adds several system calls to the list.
+    /// Adds several system calls to the list, as [`Options::with_syscall`].
     #[must_use]
-    pub fn with_syscalls<I>(mut self, syscalls: I) -> Self
+    pub fn with_syscalls<I>(self, syscalls: I) -> Self
     where
         I: IntoIterator,
         I::Item: Into<Syscall>,
     {
-        self.syscalls.extend(syscalls.into_iter().map(Into::into));
+        syscalls.into_iter().fold(self, Self::with_syscall)
+    }
+
+    /// Lists a system call, but only for calls whose arguments meet every
+    /// one of `conditions` (see [`Options::conditions`]). In an allowlist
+    /// this allows the call only with those arguments; in a denylist it
+    /// denies it only with them.
+    ///
+    /// ```
+    /// use rune_seccomp::{Action, Arch, ArgMatch, Options, compile, syscalls};
+    ///
+    /// # if Arch::native().is_none() { return Ok(()); }
+    /// // Threads and fork, but no new user namespace.
+    /// let options = Options::allowlist(Action::EPERM)
+    ///     .with_syscall_if("clone", [ArgMatch::none_of(0, 0x1000_0000)]);
+    /// let program = compile(&options)?;
+    /// let clone = syscalls::resolve("clone").unwrap_or_default();
+    /// assert_eq!(program.evaluate_with_args(clone, [0x11, 0, 0, 0, 0, 0]), Some(Action::Allow));
+    /// assert_eq!(
+    ///     program.evaluate_with_args(clone, [0x1000_0011, 0, 0, 0, 0, 0]),
+    ///     Some(Action::EPERM)
+    /// );
+    /// # Ok::<(), rune_seccomp::Error>(())
+    /// ```
+    #[must_use]
+    pub fn with_syscall_if(
+        mut self,
+        syscall: impl Into<Syscall>,
+        conditions: impl IntoIterator<Item = ArgMatch>,
+    ) -> Self {
+        let syscall = syscall.into();
+        self.conditions
+            .entry(syscall.clone())
+            .or_default()
+            .extend(conditions);
+        self.syscalls.insert(syscall);
+        self
+    }
+
+    /// Gives a system call its own action, whatever the list says (see
+    /// [`Options::actions`]).
+    ///
+    /// ```
+    /// use rune_seccomp::{Action, Arch, Options, compile, syscalls};
+    ///
+    /// # if Arch::native().is_none() { return Ok(()); }
+    /// let options = Options::allowlist(Action::EPERM)
+    ///     .with_syscall("clone")
+    ///     .with_syscall_action("clone3", Action::ENOSYS);
+    /// let program = compile(&options)?;
+    /// let clone3 = syscalls::resolve("clone3").unwrap_or_default();
+    /// assert_eq!(program.evaluate(clone3), Some(Action::ENOSYS));
+    /// # Ok::<(), rune_seccomp::Error>(())
+    /// ```
+    #[must_use]
+    pub fn with_syscall_action(mut self, syscall: impl Into<Syscall>, action: Action) -> Self {
+        self.actions.insert(syscall.into(), action);
         self
     }
 
@@ -206,7 +360,33 @@ impl Program {
     /// not a valid system call number.
     #[must_use]
     pub fn evaluate(&self, number: i64) -> Option<Action> {
-        self.evaluate_raw(self.arch.audit_value(), u32::try_from(number).ok()?)
+        self.evaluate_with_args(number, [0; 6])
+    }
+
+    /// [`Program::evaluate`] for a call made with the given arguments, for
+    /// filters with [argument conditions](Options::with_syscall_if).
+    ///
+    /// ```
+    /// use rune_seccomp::{Action, Arch, ArgMatch, Options, compile, syscalls};
+    ///
+    /// # if Arch::native().is_none() { return Ok(()); }
+    /// // Allow `personality(0)` only.
+    /// let options = Options::allowlist(Action::EPERM)
+    ///     .with_syscall_if("personality", [ArgMatch::masked_eq(0, u64::MAX, 0)]);
+    /// let program = compile(&options)?;
+    /// let personality = syscalls::resolve("personality").unwrap_or_default();
+    /// assert_eq!(program.evaluate_with_args(personality, [0; 6]), Some(Action::Allow));
+    /// assert_eq!(
+    ///     program.evaluate_with_args(personality, [0x0040_0000, 0, 0, 0, 0, 0]),
+    ///     Some(Action::EPERM)
+    /// );
+    /// # Ok::<(), rune_seccomp::Error>(())
+    /// ```
+    #[must_use]
+    pub fn evaluate_with_args(&self, number: i64, args: [u64; 6]) -> Option<Action> {
+        let number = u32::try_from(number).ok()?;
+        bpf::run(&self.instructions, self.arch.audit_value(), number, args)
+            .and_then(Action::from_ret)
     }
 
     /// What the program decides for a call with the raw `seccomp_data`
@@ -214,7 +394,7 @@ impl Program {
     /// call (`number | 0x4000_0000`).
     #[must_use]
     pub fn evaluate_raw(&self, audit_arch: u32, number: u32) -> Option<Action> {
-        bpf::run(&self.instructions, audit_arch, number).and_then(Action::from_ret)
+        bpf::run(&self.instructions, audit_arch, number, [0; 6]).and_then(Action::from_ret)
     }
 }
 
@@ -225,16 +405,21 @@ pub fn compile(options: &Options) -> Result<Program, Error> {
     let arch = Arch::native().ok_or(Error::UnsupportedArch {
         arch: std::env::consts::ARCH,
     })?;
-    for action in [options.listed_action, options.default_action] {
+    let actions = [options.listed_action, options.default_action];
+    for action in actions.iter().chain(options.actions.values()) {
         if let Action::Errno(errno) = action
-            && errno > MAX_ERRNO
+            && *errno > MAX_ERRNO
         {
             return Err(Error::InvalidFilter {
                 reason: format!("errno {errno} is larger than {MAX_ERRNO}"),
             });
         }
     }
-    if options.listed_action == options.default_action {
+    // The list does nothing when both actions agree, which is a mistake
+    // unless some calls have their own action (a fallback can make the two
+    // agree, see `plan`).
+    let list_is_moot = options.listed_action == options.default_action;
+    if list_is_moot && options.actions.is_empty() {
         return Err(Error::InvalidFilter {
             reason: format!(
                 "listed and default actions are both {}",
@@ -243,38 +428,82 @@ pub fn compile(options: &Options) -> Result<Program, Error> {
         });
     }
 
-    let mut numbers = BTreeSet::new();
     let mut skipped = Vec::new();
+    // `None` lists the call unconditionally; otherwise the call is listed
+    // when any of the rules (each a set of conditions) holds.
+    let mut rules: BTreeMap<i64, Option<Vec<SeccompRule>>> = BTreeMap::new();
     for syscall in &options.syscalls {
-        match syscall {
-            Syscall::Name(name) => match syscalls::resolve(name) {
-                Some(number) => {
-                    numbers.insert(number);
-                }
-                None if syscalls::is_known(name) => skipped.push(name.clone()),
-                None => return Err(Error::UnknownSyscall { name: name.clone() }),
-            },
-            Syscall::Number(number) => {
-                if !(0..i64::from(bpf::X32_SYSCALL_BIT)).contains(number) {
-                    return Err(Error::InvalidFilter {
-                        reason: format!("system call number {number} is out of range"),
-                    });
-                }
-                numbers.insert(*number);
+        let Some(number) = resolve(syscall, &mut skipped)? else {
+            continue;
+        };
+        let rule = match options.conditions.get(syscall) {
+            Some(conditions) if !conditions.is_empty() => {
+                let conditions = conditions
+                    .iter()
+                    .map(|condition| condition.to_seccompiler())
+                    .collect::<Result<_, _>>()?;
+                Some(SeccompRule::new(conditions).map_err(|err| invalid(&err))?)
             }
+            _ => None,
+        };
+        match (
+            rules.entry(number).or_insert_with(|| Some(Vec::new())),
+            rule,
+        ) {
+            (Some(existing), Some(rule)) => existing.push(rule),
+            (entry, _) => *entry = None,
         }
     }
+    let mut overrides = BTreeMap::new();
+    for (syscall, action) in &options.actions {
+        if let Some(number) = resolve(syscall, &mut skipped)? {
+            overrides.insert(number, *action);
+        }
+    }
+    if list_is_moot {
+        rules.clear();
+    }
+    let numbers = rules.len();
 
-    let rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> =
-        numbers.iter().map(|number| (*number, Vec::new())).collect();
+    let rules: BTreeMap<i64, Vec<SeccompRule>> = rules
+        .into_iter()
+        .map(|(number, rules)| (number, rules.unwrap_or_default()))
+        .collect();
+    // seccompiler refuses identical actions even with nothing listed; the
+    // listed action is never used then, so any other one will do.
+    let listed_action = if list_is_moot {
+        if options.default_action == Action::Allow {
+            Action::KillProcess
+        } else {
+            Action::Allow
+        }
+    } else {
+        options.listed_action
+    };
     let filter = SeccompFilter::new(
         rules,
         options.default_action.into_seccompiler(),
-        options.listed_action.into_seccompiler(),
+        listed_action.into_seccompiler(),
         arch.target(),
     )
     .map_err(|err| invalid(&err))?;
     let mut instructions = BpfProgram::try_from(filter).map_err(|err| invalid(&err))?;
+
+    // Calls with their own action go right after seccompiler's
+    // three-instruction architecture check (and the x32 guard below).
+    let mut prologue = Vec::new();
+    if !overrides.is_empty() {
+        prologue.push(bpf::stmt(bpf::LD_W_ABS, bpf::NR_OFFSET));
+        for (number, action) in &overrides {
+            let number = u32::try_from(*number).map_err(|_| Error::InvalidFilter {
+                reason: format!("system call number {number} is out of range"),
+            })?;
+            prologue.push(bpf::jump(bpf::JMP_JEQ_K, number, 0, 1));
+            prologue.push(bpf::stmt(bpf::RET_K, action.to_ret()));
+        }
+    }
+    let at = 3.min(instructions.len());
+    instructions.splice(at..at, prologue);
 
     if arch == Arch::X86_64 {
         // x32 calls carry the x86_64 architecture tag and a number with
@@ -301,9 +530,35 @@ pub fn compile(options: &Options) -> Result<Program, Error> {
     Ok(Program {
         instructions,
         arch,
-        rules: numbers.len(),
+        rules: numbers,
         skipped,
     })
+}
+
+/// The native number of `syscall`, or `None` (and the name added to
+/// `skipped`) for a call that only exists on another architecture.
+fn resolve(syscall: &Syscall, skipped: &mut Vec<String>) -> Result<Option<i64>, Error> {
+    match syscall {
+        Syscall::Name(name) => match syscalls::resolve(name) {
+            Some(number) => Ok(Some(number)),
+            None if syscalls::is_known(name) => {
+                if !skipped.contains(name) {
+                    skipped.push(name.clone());
+                }
+                Ok(None)
+            }
+            None => Err(Error::UnknownSyscall { name: name.clone() }),
+        },
+        Syscall::Number(number) => {
+            if (0..i64::from(bpf::X32_SYSCALL_BIT)).contains(number) {
+                Ok(Some(*number))
+            } else {
+                Err(Error::InvalidFilter {
+                    reason: format!("system call number {number} is out of range"),
+                })
+            }
+        }
+    }
 }
 
 /// `BPF_MAXINSNS`.
@@ -330,8 +585,21 @@ pub enum Status {
 }
 
 /// What [`install`] did.
+///
+/// Check [`Report::status`]: on a kernel without seccomp, [`install`]
+/// succeeds with [`Status::NotEnforced`] and nothing is filtered. Ignoring
+/// the report is a warning:
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// fn restrict() -> Result<(), rune_seccomp::Error> {
+///     rune_seccomp::install(&rune_seccomp::Options::default())?;
+///     Ok(())
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use = "check `status`: the filter may not be enforced at all"]
 pub struct Report {
     /// How much of the filter is in force.
     pub status: Status,
@@ -394,7 +662,9 @@ fn plan(options: &Options, support: Support) -> Result<Plan, Error> {
         };
         match action.fallback() {
             Some(fallback) if !strict && available.contains(fallback) => {
-                substitutions.push((action, fallback));
+                if !substitutions.contains(&(action, fallback)) {
+                    substitutions.push((action, fallback));
+                }
                 Ok(fallback)
             }
             _ => Err(unavailable),
@@ -402,13 +672,23 @@ fn plan(options: &Options, support: Support) -> Result<Plan, Error> {
     };
     let listed_action = substitute(options.listed_action)?;
     let default_action = substitute(options.default_action)?;
+    let mut planned = options
+        .clone()
+        .with_listed_action(listed_action)
+        .with_default_action(default_action);
+    for action in planned.actions.values_mut() {
+        let fallback = substitute(*action)?;
+        *action = fallback;
+    }
+    let skip = listed_action == default_action
+        && planned
+            .actions
+            .values()
+            .all(|action| *action == default_action);
     Ok(Plan {
-        options: options
-            .clone()
-            .with_listed_action(listed_action)
-            .with_default_action(default_action),
+        options: planned,
         substitutions,
-        skip: listed_action == default_action,
+        skip,
     })
 }
 
@@ -640,6 +920,201 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    fn args(first: u64) -> [u64; 6] {
+        [first, 0, 0, 0, 0, 0]
+    }
+
+    #[test]
+    fn conditions_restrict_a_listed_call() {
+        let Some(_) = native() else { return };
+        let none = ArgMatch::none_of(0, 0x1000_0000);
+        let program = compile(
+            &Options::allowlist(Action::EPERM)
+                .with_syscall("read")
+                .with_syscall_if("clone", [none]),
+        )
+        .unwrap();
+        let clone = nr("clone");
+        assert_eq!(program.rules(), 2);
+        assert_eq!(
+            program.evaluate_with_args(clone, args(0x11)),
+            Some(Action::Allow)
+        );
+        assert_eq!(
+            program.evaluate_with_args(clone, args(0x1000_0011)),
+            Some(Action::EPERM)
+        );
+        assert_eq!(program.evaluate(nr("read")), Some(Action::Allow));
+        assert_eq!(program.evaluate(nr("openat")), Some(Action::EPERM));
+
+        // In a denylist the listed action applies only when they hold.
+        let deny = compile(
+            &Options::denylist(Action::EPERM)
+                .with_syscall_if("clone", [ArgMatch::masked_eq(0, 0x1000_0000, 0x1000_0000)]),
+        )
+        .unwrap();
+        assert_eq!(
+            deny.evaluate_with_args(clone, args(0x11)),
+            Some(Action::Allow)
+        );
+        assert_eq!(
+            deny.evaluate_with_args(clone, args(0x1000_0011)),
+            Some(Action::EPERM)
+        );
+    }
+
+    #[test]
+    fn conditions_compare_all_64_bits() {
+        let Some(_) = native() else { return };
+        let high = 1_u64 << 40;
+        let program = compile(
+            &Options::allowlist(Action::EPERM)
+                .with_syscall_if("personality", [ArgMatch::masked_eq(0, u64::MAX, high | 8)]),
+        )
+        .unwrap();
+        let personality = nr("personality");
+        assert_eq!(
+            program.evaluate_with_args(personality, args(high | 8)),
+            Some(Action::Allow)
+        );
+        // Same low half, different high half, and the reverse.
+        assert_eq!(
+            program.evaluate_with_args(personality, args(8)),
+            Some(Action::EPERM)
+        );
+        assert_eq!(
+            program.evaluate_with_args(personality, args(high)),
+            Some(Action::EPERM)
+        );
+        // The masked compare loads both halves of args[0].
+        let loads: Vec<u32> = program
+            .instructions
+            .iter()
+            .filter(|insn| insn.code == bpf::LD_W_ABS && insn.k >= bpf::ARGS_OFFSET)
+            .map(|insn| insn.k)
+            .collect();
+        assert_eq!(loads, [bpf::ARGS_OFFSET + 4, bpf::ARGS_OFFSET]);
+    }
+
+    #[test]
+    fn conditions_combine_per_call() {
+        let Some(_) = native() else { return };
+        let personality = nr("personality");
+        let is = |value| ArgMatch::masked_eq(0, u64::MAX, value);
+        // Two entries for the same call: either may hold.
+        let either = Options::allowlist(Action::EPERM)
+            .with_syscall_if("personality", [is(1)])
+            .with_syscall_if(personality, [is(2)]);
+        let program = compile(&either).unwrap();
+        assert_eq!(program.rules(), 1);
+        for (value, action) in [(1, Action::Allow), (2, Action::Allow), (3, Action::EPERM)] {
+            assert_eq!(
+                program.evaluate_with_args(personality, args(value)),
+                Some(action)
+            );
+        }
+        // Conditions given together must all hold.
+        let both = Options::allowlist(Action::EPERM).with_syscall_if(
+            "personality",
+            [ArgMatch::none_of(0, 1), ArgMatch::none_of(0, 2)],
+        );
+        let program = compile(&both).unwrap();
+        assert_eq!(
+            program.evaluate_with_args(personality, args(4)),
+            Some(Action::Allow)
+        );
+        assert_eq!(
+            program.evaluate_with_args(personality, args(2)),
+            Some(Action::EPERM)
+        );
+        // An unconditional entry for the same call wins.
+        let program = compile(&either.with_syscall(personality)).unwrap();
+        assert_eq!(
+            program.evaluate_with_args(personality, args(3)),
+            Some(Action::Allow)
+        );
+    }
+
+    #[test]
+    fn invalid_conditions_are_rejected() {
+        let Some(_) = native() else { return };
+        let options = Options::default().with_syscall_if("read", [ArgMatch::none_of(6, 1)]);
+        assert!(matches!(
+            compile(&options),
+            Err(Error::InvalidFilter { .. })
+        ));
+        assert!(!ArgMatch::none_of(6, 1).matches(&[0; 6]));
+    }
+
+    #[test]
+    fn calls_with_their_own_action_come_first() {
+        let Some(_) = native() else { return };
+        let options = Options::allowlist(Action::EPERM)
+            .with_syscalls(["clone", "clone3"])
+            .with_syscall_action("clone3", Action::ENOSYS)
+            .with_syscall_action("openat", Action::EACCES);
+        let program = compile(&options).unwrap();
+        assert_eq!(program.evaluate(nr("clone3")), Some(Action::ENOSYS));
+        assert_eq!(program.evaluate(nr("openat")), Some(Action::EACCES));
+        assert_eq!(program.evaluate(nr("clone")), Some(Action::Allow));
+        assert_eq!(program.evaluate(nr("read")), Some(Action::EPERM));
+
+        let errno = Options::default().with_syscall_action("read", Action::Errno(4096));
+        assert!(matches!(compile(&errno), Err(Error::InvalidFilter { .. })));
+        let unknown = Options::default().with_syscall_action("raed", Action::ENOSYS);
+        assert!(matches!(
+            compile(&unknown),
+            Err(Error::UnknownSyscall { .. })
+        ));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn x32_guard_still_covers_calls_with_their_own_action() {
+        let program = compile(
+            &Options::denylist(Action::EPERM).with_syscall_action("clone3", Action::ENOSYS),
+        )
+        .unwrap();
+        let audit = Arch::X86_64.audit_value();
+        assert_eq!(
+            program.evaluate_raw(audit, bpf::X32_SYSCALL_BIT),
+            Some(Action::EPERM)
+        );
+        assert_eq!(program.evaluate(nr("clone3")), Some(Action::ENOSYS));
+    }
+
+    #[test]
+    fn plan_falls_back_for_calls_with_their_own_action() {
+        let Some(_) = native() else { return };
+        let old = Support::Available {
+            actions: ActionSet::LEGACY,
+        };
+        // Audit allowlist on an old kernel: the list allows everything,
+        // but `ptrace` still has to be killed.
+        let options = Options::allowlist(Action::Log)
+            .with_syscall("read")
+            .with_syscall_action("ptrace", Action::KillProcess)
+            .with_syscall_action("bpf", Action::KillProcess);
+        let plan = plan(&options, old).unwrap();
+        assert!(!plan.skip);
+        assert_eq!(
+            plan.substitutions,
+            vec![
+                (Action::Log, Action::Allow),
+                (Action::KillProcess, Action::KillThread)
+            ]
+        );
+        let program = compile(&plan.options).unwrap();
+        assert_eq!(program.rules(), 0);
+        assert_eq!(program.evaluate(nr("ptrace")), Some(Action::KillThread));
+        assert_eq!(program.evaluate(nr("openat")), Some(Action::Allow));
+
+        let harmless = Options::allowlist(Action::Log)
+            .with_syscall("read")
+            .with_syscall_action("ptrace", Action::Log);
+        assert!(super::plan(&harmless, old).unwrap().skip);
     }
 
     #[test]
