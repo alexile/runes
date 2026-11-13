@@ -141,6 +141,9 @@ fn default_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
         .read_timeout(DEFAULT_TIMEOUT)
+        // Never follow redirects: reqwest keeps `x-api-key` on a cross-origin
+        // redirect, and a redirect could also downgrade to plain HTTP.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap_or_default()
 }
@@ -223,7 +226,10 @@ impl Anthropic {
 
     /// Use a preconfigured HTTP client (timeouts, proxies, TLS settings).
     /// Its own timeouts replace the built-in connect/read timeouts; the
-    /// per-request [`timeout`](Self::timeout) still applies.
+    /// per-request [`timeout`](Self::timeout) still applies. Its redirect
+    /// policy applies too: the default client follows none, and since a
+    /// followed redirect keeps the `x-api-key` header, set
+    /// `.redirect(reqwest::redirect::Policy::none())` on yours as well.
     #[must_use]
     pub fn http_client(mut self, client: reqwest::Client) -> Self {
         self.client = client;

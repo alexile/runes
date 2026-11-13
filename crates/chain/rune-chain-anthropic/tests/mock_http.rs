@@ -403,3 +403,21 @@ fn stream_message_yields_tool_calls_and_final_usage() {
         "get_weather"
     );
 }
+
+#[test]
+fn default_client_does_not_follow_redirects() {
+    // A redirect to another origin would carry `x-api-key` along (reqwest
+    // only strips `authorization` and cookies), and could downgrade to http.
+    let elsewhere =
+        MockServer::start([MockResponse::json(200, fixture!("messages_text.json"))]).unwrap();
+    let target = format!("{}/v1/messages", elsewhere.base_url());
+    let server =
+        MockServer::start([MockResponse::json(307, "{}").with_header("Location", &target)])
+            .unwrap();
+    let llm = Anthropic::new("sk-ant-test")
+        .base_url(server.base_url())
+        .max_retries(0);
+    let err = tokio_test::block_on(llm.generate(&[Message::human("Hi")])).unwrap_err();
+    assert_eq!(err.status(), Some(307), "{err:?}");
+    assert_eq!(server.finish().unwrap().len(), 1);
+}

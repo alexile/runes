@@ -1241,6 +1241,20 @@ fn stream_content_is_capped() {
     ));
 }
 
+#[test]
+fn tool_use_start_counts_against_the_stream_cap() {
+    // The id, name and initial input of a `tool_use` block are kept until
+    // the end of the stream, so they must count like any other content.
+    let mut acc = MessageAccumulator::with_limit(64);
+    let big = "x".repeat(200);
+    let start = format!(
+        r#"{{"type":"content_block_start","index":0,"content_block":{{"type":"tool_use","id":"t","name":"n","input":{{"a":"{big}"}}}}}}"#
+    );
+    assert!(
+        matches!(acc.push(&start), Err(m) if m.kind() == LlmErrorKind::InvalidResponse && m.message().contains("limit"))
+    );
+}
+
 proptest::proptest! {
     #[test]
     fn arbitrary_stream_bytes_never_panic(body in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..512), size in 1usize..32) {

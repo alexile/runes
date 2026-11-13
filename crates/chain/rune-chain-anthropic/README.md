@@ -150,6 +150,8 @@ parsed), and finally the whole `MessageResponse` with usage.
 - The API key is sent only as a sensitive `x-api-key` header; `Debug` prints
   `ApiKey([REDACTED])` and error messages are scrubbed of it.
 - The base URL must be `https://` (plain `http://` only for localhost/loopback).
+  The default HTTP client does not follow redirects, so the key never goes to
+  another origin or over plain HTTP because of a `3xx`.
 - Retries on 408/409/429/5xx/529 and connection errors (default 2), honouring
   `retry-after-ms`/`retry-after` up to 60 s, otherwise jittered backoff.
 - Default timeouts (30 s connect, 10 min per blocking request / read), response

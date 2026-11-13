@@ -264,12 +264,16 @@ impl MessageAccumulator {
                 self.charge(data.len())?;
                 Partial::Redacted(data)
             }
-            ResponseContentBlock::ToolUse { id, name, input } => Partial::ToolUse {
-                id,
-                name,
-                initial: input,
-                json: String::new(),
-            },
+            ResponseContentBlock::ToolUse { id, name, input } => {
+                let input_len = serde_json::to_string(&input).map_or(0, |s| s.len());
+                self.charge(id.len() + name.len() + input_len)?;
+                Partial::ToolUse {
+                    id,
+                    name,
+                    initial: input,
+                    json: String::new(),
+                }
+            }
             ResponseContentBlock::Unknown => Partial::Unknown,
         };
         self.slots.push(Slot {

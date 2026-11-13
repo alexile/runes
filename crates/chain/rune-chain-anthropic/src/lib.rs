@@ -37,8 +37,8 @@
 //!   [`StreamEvent`]s with tool-call JSON assembled by [`MessageAccumulator`]
 //! - [`Anthropic::count_tokens`] — `/v1/messages/count_tokens`
 //! - Hardened transport — redacted API key, HTTPS-only (except localhost),
-//!   bounded bodies, default timeouts, retries on 408/409/429/5xx/529
-//!   honouring `retry-after`
+//!   redirects not followed, bounded bodies, default timeouts, retries on
+//!   408/409/429/5xx/529 honouring `retry-after`
 //!
 //! # Prompt caching and usage
 //!
