@@ -17,7 +17,7 @@ Time series: statistics, smoothing, resampling, change points, forecasting.
 | [`rune-lttb`](rune-lttb) | Largest-Triangle-Three-Buckets downsampling for chart-ready series |
 | [`rune-quantity`](rune-quantity) | Typed physical-quantity/unit system with compile-time-checked conversions (distance, speed, energy, etc.) |
 | [`rune-resample`](rune-resample) | Resample an irregular timestamped series to a fixed interval |
-| [`rune-season-decomp`](rune-season-decomp) | Simple additive/multiplicative seasonal decomposition |
+| [`rune-season-decomp`](rune-season-decomp) | Seasonal-trend decomposition: classical additive/multiplicative, STL and MSTL |
 | [`rune-stats`](rune-stats) | Nonparametric statistics: robust descriptives, rank tests and effect sizes |
 | [`rune-tdigest`](rune-tdigest) | Streaming quantile/percentile estimator (t-digest-style) for large or unbounded series |
 | [`rune-zscore`](rune-zscore) | Z-score and IQR-based outlier/anomaly detector |

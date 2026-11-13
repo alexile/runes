@@ -1,33 +1,54 @@
-//! Classical additive/multiplicative seasonal decomposition.
+//! Seasonal-trend decomposition: classical, STL and MSTL.
 //!
-//! Splits a series into trend, seasonal, and residual components: trend via a
-//! centered moving average of the given `period`, seasonal as the average
-//! detrended value at each phase of the period, and residual as whatever's left.
-//! The same technique behind R's `decompose()` and statsmodels'
-//! `seasonal_decompose`.
+//! Splits a series into trend, seasonal, and residual components.
 //!
 //! # Features
 //!
-//! - [`decompose`] — additive (`series = trend + seasonal + residual`) or
-//!   multiplicative (`series = trend * seasonal * residual`) decomposition.
-//! - Edge points where the centered moving average isn't defined are `NaN` in the
-//!   trend and residual (there aren't enough neighbors to center a window there).
+//! - [`decompose`] — classical additive (`series = trend + seasonal + residual`)
+//!   or multiplicative (`series = trend * seasonal * residual`) decomposition:
+//!   trend via a centered moving average of the given `period`, seasonal as the
+//!   average detrended value at each phase. The technique behind R's
+//!   `decompose()` and statsmodels' `seasonal_decompose`. Edge points where the
+//!   centered moving average isn't defined are `NaN` in the trend and residual.
+//! - [`Stl`] — STL (Cleveland et al. 1990): iterated loess smoothing of the
+//!   cycle-subseries and the trend, with an optional robust outer loop
+//!   (bisquare weights) so outliers land in the remainder. Defaults follow R's
+//!   `stl()` and the output matches it to floating-point noise (robust fits
+//!   on even-length series can differ slightly, because the robustness scale
+//!   here is always the true median of the absolute residuals). The seasonal
+//!   pattern may evolve over time, and every point gets a trend value.
+//! - [`Mstl`] — MSTL (Bandara, Hyndman & Bergmeir 2021) for series with several
+//!   seasonal periods, e.g. daily and weekly cycles in hourly data.
+//! - [`StlDecomposition::trend_strength`] /
+//!   [`StlDecomposition::seasonal_strength`] — strength measures from Wang,
+//!   Smith & Hyndman (2006), in `[0, 1]`.
 //!
 //! # Quick Start
 //!
 //! ```rust
-//! use rune_season_decomp::{decompose, DecompMode};
+//! use rune_season_decomp::{decompose, DecompMode, Stl};
 //!
 //! let series = [10.0, 20.0, 10.0, 20.0, 10.0, 20.0, 10.0, 20.0];
 //! let result = decompose(&series, 2, DecompMode::Additive);
 //! assert_eq!(result.seasonal.len(), series.len());
+//!
+//! let fit = Stl::new(2, 7).robust(true).fit(&series)?;
+//! assert!(fit.seasonal_strength() > 0.9);
+//! # Ok::<(), rune_season_decomp::StlError>(())
 //! ```
 //!
 //! # CLI
 //!
 //! ```bash
 //! rune-season-decomp --series "10,20,10,20,10,20" --period 2 --mode additive
+//! rune-season-decomp --series "10,20,10,20,10,20" --period 2 --method stl --robust
 //! ```
+
+mod mstl;
+mod stl;
+
+pub use mstl::{Mstl, MstlDecomposition};
+pub use stl::{Degree, SeasonalWindow, Stl, StlDecomposition, StlError, strength};
 
 /// Whether the series is modeled as `trend + seasonal + residual` or
 /// `trend * seasonal * residual`.
