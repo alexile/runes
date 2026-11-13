@@ -20,7 +20,7 @@ Axum and Tower middleware: auth, rate limiting, CSRF, security headers, request 
 | [`rune-axum-jwt`](rune-axum-jwt) | JWT bearer auth for Axum 0.8: HMAC, RSA, ECDSA and EdDSA keys, cached JWKS and OIDC discovery, scope/role checks, RFC 6750 errors |
 | [`rune-axum-mtls`](rune-axum-mtls) | Mutual-TLS client-certificate extraction for Axum: rustls listener, rune-x509 clientAuth verification, typed extractor |
 | [`rune-axum-problem`](rune-axum-problem) | RFC 9457 problem details for Axum — application/problem+json error responses with extensions, plus a layer for bare error statuses |
-| [`rune-axum-ratelimit`](rune-axum-ratelimit) | Rate limiter middleware for Axum — fixed-window or GCRA per client, pluggable store, spoof-resistant client IPs, IETF RateLimit headers |
+| [`rune-axum-ratelimit`](rune-axum-ratelimit) | Rate limiter middleware for Axum — fixed-window or GCRA per client, in-memory or Redis store, spoof-resistant client IPs, IETF RateLimit headers |
 | [`rune-axum-redirect-https`](rune-axum-redirect-https) | Redirect HTTP requests to HTTPS — Tower middleware for Axum |
 | [`rune-axum-requestid`](rune-axum-requestid) | Request-id and W3C traceparent propagation layer for Axum — extensions, response header and tracing span |
 | [`rune-axum-sanitize`](rune-axum-sanitize) | Defence-in-depth input sanitization for Axum: tokenizer-based tag stripping, HTML escaping or allowlist cleaning of query, form and JSON string values |

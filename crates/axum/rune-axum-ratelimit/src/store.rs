@@ -101,8 +101,8 @@ impl std::error::Error for StoreError {
 ///
 /// One call to [`check`](Self::check) must atomically read the key's state, apply the
 /// quota's algorithm, persist the new state and return the decision. [`InMemoryStore`] is
-/// the bundled implementation. For a limit shared by several server instances, implement
-/// this trait over Redis or similar, mirroring [`fixed_window`] or [`gcra`] in a server-side
+/// the bundled implementation, and the `redis` feature adds `redis::RedisStore`. For another
+/// shared backend, implement this trait mirroring [`fixed_window`] or [`gcra`] in a server-side
 /// script so concurrent instances cannot race, and let keys expire after
 /// [`Decision::reset`] so storage stays bounded.
 ///

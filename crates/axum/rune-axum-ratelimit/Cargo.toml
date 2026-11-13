@@ -1,10 +1,10 @@
 [package]
 name = "rune-axum-ratelimit"
-version = "0.3.0"
+version = "0.3.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Rate limiter middleware for Axum — fixed-window or GCRA per client, pluggable store, spoof-resistant client IPs, IETF RateLimit headers"
+description = "Rate limiter middleware for Axum — fixed-window or GCRA per client, in-memory or Redis store, spoof-resistant client IPs, IETF RateLimit headers"
 license.workspace = true
 keywords = ["axum", "rate-limit", "middleware", "security", "tower"]
 categories = ["web-programming", "network-programming"]
@@ -17,6 +17,13 @@ tower.workspace = true
 http.workspace = true
 rune-axum-ipfilter.workspace = true
 tokio = { workspace = true, features = ["time"] }
+redis = { workspace = true, optional = true, features = ["tokio-comp", "connection-manager", "script"] }
+sha2 = { workspace = true, optional = true }
+hmac = { workspace = true, optional = true }
+
+[features]
+# Redis-backed store shared across instances.
+redis = ["dep:redis", "dep:sha2", "dep:hmac"]
 
 [dev-dependencies]
 axum.workspace = true

@@ -28,7 +28,9 @@
 //! State lives in a [`RateLimitStore`]. The bundled [`InMemoryStore`] is bounded: expired
 //! keys are swept and, at capacity, the keys nearest to expiry are evicted, so a flood of
 //! distinct clients cannot grow memory without limit. For a limit shared across instances,
-//! implement [`RateLimitStore`] over Redis or a database (see [`store`]).
+//! enable the `redis` feature and use `redis::RedisStore` (atomic Lua scripts, Redis server
+//! time, expiring keys), or implement [`RateLimitStore`] over another backend (see
+//! [`store`]).
 //!
 //! # Quick Start
 //!
@@ -77,4 +79,6 @@ pub use rune_axum_ipfilter::{CidrParseError, ClientIpConfig, ProxyHeader};
 pub use store::{Algorithm, Decision, InMemoryStore, Quota, RateLimitStore, StoreError};
 
 mod layer;
+#[cfg(feature = "redis")]
+pub mod redis;
 pub mod store;
