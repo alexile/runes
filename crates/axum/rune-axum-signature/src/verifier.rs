@@ -103,7 +103,8 @@ impl WebhookVerifier {
     /// Svix's `svix-*` header names are accepted too.
     ///
     /// `secret` is the `whsec_<base64>` string from the provider dashboard.
-    /// Replay protection is on by default (in-memory, keyed on `webhook-id`).
+    /// Replay protection is on by default (in-memory, keyed on `webhook-id`
+    /// and `webhook-timestamp`, so a resend of a failed message gets through).
     ///
     /// # Errors
     ///
@@ -190,8 +191,8 @@ impl WebhookVerifier {
 
     /// Uses `store` for replay protection and turns it on.
     ///
-    /// Standard Webhooks key on `webhook-id`. Stripe and Slack have no signed
-    /// id, so they key on a digest of timestamp and body; a sender that
+    /// Standard Webhooks key on `webhook-id` plus timestamp. Stripe and Slack
+    /// have no signed id, so they key on a digest of timestamp and body; a sender that
     /// retries with the very same timestamp would then be refused. GitHub,
     /// Shopify and generic mode sign no timestamp, so the store is not used.
     #[must_use]
@@ -276,7 +277,10 @@ impl WebhookVerifier {
                 if now.abs_diff(ts) > tol.unsigned_abs() {
                     return Err(VerifyError::TimestampOutOfTolerance);
                 }
-                checked.replay_key.map(|k| (k, ts.saturating_add(tol)))
+                // Still verifiable at `ts + tol`, so keep it one second past.
+                checked
+                    .replay_key
+                    .map(|k| (k, ts.saturating_add(tol).saturating_add(1)))
             }
             None => None,
         };
@@ -348,7 +352,9 @@ impl WebhookVerifier {
         Ok(Checked {
             id: Some(id.to_owned()),
             timestamp: Some(ts),
-            replay_key: Some(format!("swh:{id}")),
+            // Keyed on what is signed, not the id alone: senders resend a
+            // failed message under the same id with a new timestamp.
+            replay_key: Some(format!("swh:{id}.{ts_raw}")),
         })
     }
 
@@ -540,5 +546,51 @@ impl fmt::Debug for VerifiedWebhook {
             .field("timestamp", &self.timestamp)
             .field("body_len", &self.body.len())
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http::HeaderValue;
+    use std::fmt::Write as _;
+
+    fn slack(secret: &[u8], ts: i64, body: &[u8]) -> HeaderMap {
+        let ts = ts.to_string();
+        let tag = mac(
+            Algorithm::Sha256,
+            secret,
+            &[b"v0:", ts.as_bytes(), b":", body],
+        )
+        .unwrap_or_default();
+        let hex = tag.iter().fold(String::new(), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        });
+        let mut h = HeaderMap::new();
+        h.insert(
+            "x-slack-request-timestamp",
+            HeaderValue::from_str(&ts).unwrap(),
+        );
+        h.insert(
+            "x-slack-signature",
+            HeaderValue::from_str(&format!("v0={hex}")).unwrap(),
+        );
+        h
+    }
+
+    /// A message still verifies at exactly `ts + tolerance`, so the replay
+    /// store has to remember it through that second too.
+    #[test]
+    fn replay_entry_outlives_the_last_accepted_second() {
+        let store = MemoryReplayStore::new(16);
+        let v = WebhookVerifier::slack("s").tolerance(Duration::from_secs(300));
+        let h = slack(b"s", 1_000, b"x");
+        for now in [1_000, 1_300] {
+            let hook = v.verify_at(&h, &b"x"[..], now).unwrap();
+            let (key, expires) = hook.replay.clone().unwrap();
+            let fresh = store.insert_at(&key, expires, now);
+            assert_eq!(fresh, now == 1_000, "now = {now}");
+        }
     }
 }

@@ -550,3 +550,75 @@ async fn hmac_layer_compat() {
     let bad = router.oneshot(request(&h, "tampered")).await.unwrap();
     assert_eq!(bad.status(), StatusCode::UNAUTHORIZED);
 }
+
+// ---- Misconfiguration and retries -------------------------------------------
+
+/// An empty secret (say, an unset environment variable read with
+/// `unwrap_or_default`) must not turn into a key anyone can sign with.
+#[test]
+fn empty_secret_never_verifies() {
+    let body = b"{}";
+    let forged = hmac256(b"", body);
+    let h = headers(&[("x-hub-signature-256", &format!("sha256={}", hex(&forged)))]);
+    assert_eq!(
+        WebhookVerifier::github("")
+            .verify(&h, &body[..])
+            .unwrap_err(),
+        VerifyError::SignatureMismatch
+    );
+    assert!(
+        WebhookVerifier::github("real")
+            .with_secret("")
+            .verify(&h, &body[..])
+            .is_err()
+    );
+    let h = headers(&[("x-signature-256", &hex(&forged))]);
+    assert!(
+        WebhookVerifier::generic(HmacConfig::sha256(b""))
+            .verify(&h, &body[..])
+            .is_err()
+    );
+    assert!(!HmacConfig::sha256(b"").verify(body, &hex(&forged)));
+
+    let t = now();
+    let h = headers(&[("stripe-signature", &stripe_header("", t, body))]);
+    assert!(WebhookVerifier::stripe("").verify(&h, &body[..]).is_err());
+    let h = headers(&[("x-shopify-hmac-sha256", &rune_base64::encode(&forged))]);
+    assert!(WebhookVerifier::shopify("").verify(&h, &body[..]).is_err());
+    assert!(
+        WebhookVerifier::slack("")
+            .verify(&slack_headers("", t, body), &body[..])
+            .is_err()
+    );
+}
+
+fn svix_signed(id: &str, ts: i64, body: &[u8]) -> HeaderMap {
+    let ts = ts.to_string();
+    let mut signed = format!("{id}.{ts}.").into_bytes();
+    signed.extend_from_slice(body);
+    let key = rune_base64::decode("MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw").unwrap();
+    let sig = format!("v1,{}", rune_base64::encode(&hmac256(&key, &signed)));
+    headers(&[
+        ("webhook-id", id),
+        ("webhook-timestamp", &ts),
+        ("webhook-signature", &sig),
+    ])
+}
+
+/// Standard Webhooks senders resend a failed message with the same id but a
+/// fresh timestamp and signature. That is a retry, not a replay: refusing it
+/// would drop the event whenever the handler failed the first time.
+#[tokio::test]
+async fn standard_webhooks_resend_is_not_a_replay() {
+    let body = br#"{"type":"invoice.paid"}"#;
+    let v = WebhookVerifier::standard_webhooks(SVIX_SECRET).unwrap();
+    let first = svix_signed("msg_retry", now() - 10, body);
+    assert!(v.verify_and_record(&first, &body[..]).await.is_ok());
+    let resend = svix_signed("msg_retry", now(), body);
+    assert!(v.verify_and_record(&resend, &body[..]).await.is_ok());
+    // The exact same delivery is still a replay.
+    assert_eq!(
+        v.verify_and_record(&resend, &body[..]).await.unwrap_err(),
+        VerifyError::Replayed
+    );
+}

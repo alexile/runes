@@ -184,8 +184,10 @@ breaks, `503` if the replay store fails.
   not reveal which one matched.
 - **Timestamps.** Standard Webhooks, Stripe and Slack sign a timestamp; it
   must be within the tolerance of the server clock. Keep the clock synced.
-- **Replays.** Standard Webhooks messages are remembered by `webhook-id`
-  until they fall out of the tolerance window. The default store is in
+- **Replays.** Standard Webhooks deliveries are remembered by `webhook-id`
+  and timestamp until they fall out of the tolerance window. A resend of a
+  failed message (same id, new timestamp and signature) is accepted, so
+  make handlers idempotent on `hook.id()` if a resend after success matters. The default store is in
   memory and bounded (10 000 ids, oldest evicted first), so it only covers
   one process; with several instances, implement `ReplayStore` over shared
   storage. Store errors refuse the request. Stripe and Slack have no signed
@@ -193,6 +195,8 @@ breaks, `503` if the replay store fails.
 - **No timestamp, no replay protection.** GitHub and Shopify don't sign a
   time, so a captured request stays valid forever. Make handlers idempotent
   on the delivery id (`hook.id()`), and keep the endpoint on HTTPS.
+- **Empty secrets never verify.** An unset secret (an empty string) makes
+  every request fail instead of accepting signatures anyone can compute.
 - **Body size.** The body is read with a hard cap; a `Content-Length` over
   the cap is refused before reading.
 - **Raw body.** The handler gets exactly the bytes that were signed.

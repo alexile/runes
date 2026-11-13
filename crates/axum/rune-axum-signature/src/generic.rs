@@ -15,8 +15,8 @@ pub enum Algorithm {
     Sha512,
 }
 
-/// HMAC over the concatenation of `parts`. `None` only if the key is
-/// rejected, which HMAC never does in practice.
+/// HMAC over the concatenation of `parts`. `None` for an empty key: anyone
+/// can compute an HMAC under it, so it must never verify anything.
 pub fn mac(algorithm: Algorithm, key: &[u8], parts: &[&[u8]]) -> Option<Vec<u8>> {
     fn run<M: Mac + hmac::digest::KeyInit>(key: &[u8], parts: &[&[u8]]) -> Option<Vec<u8>> {
         let mut mac = <M as Mac>::new_from_slice(key).ok()?;
@@ -24,6 +24,9 @@ pub fn mac(algorithm: Algorithm, key: &[u8], parts: &[&[u8]]) -> Option<Vec<u8>>
             mac.update(part);
         }
         Some(mac.finalize().into_bytes().to_vec())
+    }
+    if key.is_empty() {
+        return None;
     }
     match algorithm {
         Algorithm::Sha256 => run::<Hmac<Sha256>>(key, parts),

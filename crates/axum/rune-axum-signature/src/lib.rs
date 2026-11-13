@@ -41,10 +41,11 @@
 //!   secret and every signature in the header.
 //! - Signed timestamps must be within the tolerance (default 5 minutes) of
 //!   now, in both directions.
-//! - Standard Webhooks messages are deduplicated by `webhook-id` in a bounded
-//!   in-memory [`ReplayStore`]; plug in a shared one for multi-instance
+//! - Standard Webhooks deliveries are remembered by `webhook-id` and
+//!   timestamp in a bounded in-memory [`ReplayStore`]; plug in a shared one for multi-instance
 //!   deployments. Stripe and Slack can opt in. GitHub and Shopify sign no
 //!   timestamp, so a captured request stays valid; dedupe by delivery id.
+//! - An empty secret never verifies anything.
 //! - The body is read up to a hard limit (default 2 MiB); larger requests
 //!   get `413` before any HMAC work.
 //! - Handlers receive the exact verified bytes. Don't re-serialize JSON
