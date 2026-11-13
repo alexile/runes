@@ -8,7 +8,8 @@
 //! # Features
 //!
 //! - Checks three key sources in priority order: custom header → bearer token
-//!   → query parameter. Each source is individually toggleable.
+//!   → query parameter. The header and query parameter names are configurable
+//!   and the bearer source can be turned off.
 //! - [`ApiKeyLayer`] validates the key against a configured secret with
 //!   [`subtle::ConstantTimeEq`], returning `401 Unauthorized` on mismatch.
 //! - [`ApiKey`] extractor for handlers that need the raw key value.
@@ -54,6 +55,7 @@ use axum::{
 use http::{StatusCode, header, request::Parts};
 use pin_project_lite::pin_project;
 use std::{
+    fmt,
     future::Future,
     pin::Pin,
     sync::Arc,
@@ -86,8 +88,18 @@ const DEFAULT_QUERY_PARAM: &str = "api_key";
 ///
 /// let app: Router = Router::new().route("/", get(handler));
 /// ```
-#[derive(Debug, Clone)]
+///
+/// `Debug` output redacts the key.
+#[derive(Clone)]
 pub struct ApiKey(pub String);
+
+impl fmt::Debug for ApiKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("ApiKey").field(&REDACTED).finish()
+    }
+}
+
+const REDACTED: &str = "[redacted]";
 
 /// Rejection returned when no API key is found in the request.
 ///
@@ -157,7 +169,8 @@ fn extract_key(
 /// Extracts the key from the configured sources (header, bearer token, query
 /// param) and compares it against the stored secret using constant-time
 /// comparison. Returns `401 Unauthorized` before the handler runs if the key
-/// is missing or incorrect.
+/// is missing, empty or incorrect. An empty configured key matches nothing.
+/// `Debug` output redacts the key.
 ///
 /// # Examples
 ///
@@ -176,7 +189,7 @@ fn extract_key(
 ///     axum::serve(listener, app).await.unwrap();
 /// }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ApiKeyLayer {
     key: Arc<[u8]>,
     header_name: Arc<str>,
@@ -253,6 +266,17 @@ impl ApiKeyLayer {
     }
 }
 
+impl fmt::Debug for ApiKeyLayer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApiKeyLayer")
+            .field("key", &REDACTED)
+            .field("header_name", &self.header_name)
+            .field("query_param", &self.query_param)
+            .field("check_bearer", &self.check_bearer)
+            .finish()
+    }
+}
+
 impl<S> Layer<S> for ApiKeyLayer {
     type Service = ApiKeyService<S>;
 
@@ -268,13 +292,42 @@ impl<S> Layer<S> for ApiKeyLayer {
 }
 
 /// Tower [`Service`] produced by [`ApiKeyLayer`].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ApiKeyService<S> {
     inner: S,
     key: Arc<[u8]>,
     header_name: Arc<str>,
     query_param: Arc<str>,
     check_bearer: bool,
+}
+
+impl<S: fmt::Debug> fmt::Debug for ApiKeyService<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApiKeyService")
+            .field("inner", &self.inner)
+            .field("key", &REDACTED)
+            .field("header_name", &self.header_name)
+            .field("query_param", &self.query_param)
+            .field("check_bearer", &self.check_bearer)
+            .finish()
+    }
+}
+
+/// Compares a presented key with the configured one in constant time.
+///
+/// `subtle`'s slice comparison returns early when the lengths differ, which
+/// tells a client how long the key is. This walks the presented key only, so
+/// the time depends on what the client sent, never on the secret. Empty keys
+/// never match.
+fn key_matches(given: &[u8], expected: &[u8]) -> bool {
+    if given.is_empty() || expected.is_empty() {
+        return false;
+    }
+    let diff = given
+        .iter()
+        .zip(expected.iter().cycle())
+        .fold(0u8, |acc, (a, b)| acc | (a ^ b));
+    bool::from(diff.ct_eq(&0) & given.len().ct_eq(&expected.len()))
 }
 
 impl<S, ReqB> Service<http::Request<ReqB>> for ApiKeyService<S>
@@ -300,7 +353,7 @@ where
 
         let authorized = extracted
             .as_ref()
-            .is_some_and(|k| bool::from(k.as_bytes().ct_eq(&self.key)));
+            .is_some_and(|k| key_matches(k.as_bytes(), &self.key));
 
         if authorized {
             ApiKeyFuture {
@@ -523,5 +576,51 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn debug_never_prints_the_key() {
+        let layer = ApiKeyLayer::new(SECRET);
+        let rendered = format!("{layer:?}");
+        let bytes = format!("{:?}", SECRET.as_bytes());
+        assert!(!rendered.contains(&bytes[1..bytes.len() - 1]), "{rendered}");
+        let service = layer.layer(());
+        let rendered = format!("{service:?}");
+        assert!(!rendered.contains(&bytes[1..bytes.len() - 1]), "{rendered}");
+        assert!(!format!("{:?}", ApiKey(SECRET.to_owned())).contains(SECRET));
+    }
+
+    #[tokio::test]
+    async fn empty_key_never_authorizes() {
+        let app = Router::new()
+            .route("/", get(|| async { "ok" }))
+            .route_layer(ApiKeyLayer::new(""));
+        for req in [
+            http::Request::builder()
+                .uri("/?api_key=")
+                .body(Body::empty())
+                .unwrap(),
+            http::Request::builder()
+                .uri("/")
+                .header("x-api-key", "")
+                .body(Body::empty())
+                .unwrap(),
+        ] {
+            assert_eq!(
+                send(app.clone(), req).await.status(),
+                StatusCode::UNAUTHORIZED
+            );
+        }
+    }
+
+    #[test]
+    fn key_comparison() {
+        assert!(key_matches(b"abc", b"abc"));
+        assert!(!key_matches(b"abd", b"abc"));
+        assert!(!key_matches(b"ab", b"abc"));
+        assert!(!key_matches(b"abcabc", b"abc"));
+        assert!(!key_matches(b"", b"abc"));
+        assert!(!key_matches(b"", b""));
+        assert!(!key_matches(b"a", b""));
     }
 }
