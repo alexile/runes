@@ -326,7 +326,7 @@ rune-cloud-ranges = { path = "crates/net/rune-cloud-ranges", version = "0.1.0" }
 rune-cookie = { path = "crates/net/rune-cookie", version = "0.1.0" }
 rune-cookie-sec = { path = "crates/web/rune-cookie-sec", version = "0.1.0" }
 rune-cors = { path = "crates/web/rune-cors", version = "0.1.0" }
-rune-csp = { path = "crates/web/rune-csp", version = "0.1.0" }
+rune-csp = { path = "crates/web/rune-csp", version = "0.1.1" }
 rune-cve = { path = "crates/secops/rune-cve", version = "0.1.0" }
 rune-cvss = { path = "crates/secops/rune-cvss", version = "0.1.1" }
 rune-diff = { path = "crates/net/rune-diff", version = "0.1.0" }
@@ -380,7 +380,7 @@ rune-packet = { path = "crates/net/rune-packet", version = "0.1.0" }
 rune-pcap = { path = "crates/net/rune-pcap", version = "0.1.0" }
 rune-payload-encode = { path = "crates/web/rune-payload-encode", version = "0.1.0" }
 rune-pe = { path = "crates/common/rune-pe", version = "0.1.1" }
-rune-permissions-policy = { path = "crates/web/rune-permissions-policy", version = "0.1.0" }
+rune-permissions-policy = { path = "crates/web/rune-permissions-policy", version = "0.1.1" }
 rune-polyline = { path = "crates/geo/rune-polyline", version = "0.1.1" }
 rune-postman = { path = "crates/net/rune-postman", version = "0.1.0" }
 rune-probe-ssh = { path = "crates/net/rune-probe-ssh", version = "0.1.0" }

@@ -1,5 +1,6 @@
 //! Directives and policies (CSP3 §2.2 and §2.3).
 
+use std::collections::HashSet;
 use std::fmt;
 use std::str::FromStr;
 
@@ -229,6 +230,9 @@ impl Policy {
     #[must_use]
     pub fn parse(serialized: &str) -> Self {
         let mut policy = Self::new();
+        // Names seen so far, so hostile headers with many directives stay
+        // linear instead of rescanning the list for each one.
+        let mut seen = HashSet::new();
         for token in serialized.split(';') {
             let token = token.trim_matches(|c: char| c.is_ascii_whitespace());
             if token.is_empty() {
@@ -245,7 +249,7 @@ impl Policy {
                 continue;
             }
             let directive = Directive::new(name, value.split_ascii_whitespace());
-            if policy.directive(directive.name()).is_some() {
+            if !seen.insert(directive.name.clone()) {
                 policy.issues.push(ParseIssue::DuplicateDirective {
                     name: directive.name,
                 });
