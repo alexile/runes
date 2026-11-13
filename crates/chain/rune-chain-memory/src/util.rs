@@ -1,8 +1,9 @@
 //! Small internal helpers shared by every memory type.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use rune_chain_core::ChainError;
+use rune_chain_core::{ChainError, Message, Role};
 
 /// Callback that receives errors a memory swallows to keep the conversation
 /// going (summarizer, extractor, embedder or store failures inside `add`).
@@ -12,6 +13,14 @@ pub type ErrorHook = Arc<dyn Fn(&ChainError) + Send + Sync>;
 pub fn report(hook: Option<&ErrorHook>, err: &ChainError) {
     if let Some(hook) = hook {
         hook(err);
+    }
+}
+
+/// Drop leading [`Role::Tool`] messages: once the AI turn that requested
+/// them is gone, providers reject a tool result with no matching call.
+pub fn drop_orphan_tool_results(turns: &mut VecDeque<Message>) {
+    while turns.front().is_some_and(|m| m.role == Role::Tool) {
+        turns.pop_front();
     }
 }
 

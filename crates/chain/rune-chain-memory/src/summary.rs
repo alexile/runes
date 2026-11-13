@@ -180,6 +180,12 @@ impl Drop for CompactGuard<'_> {
 /// handed to a [`Summarizer`] and replaced by a running summary, returned by
 /// [`messages`](Memory::messages) as a single synthetic message (by default a
 /// [`Role::System`] message starting with [`DEFAULT_SUMMARY_PREFIX`]).
+/// The newest message (with the tool call it answers, if any) is never
+/// summarized, so the history can stay over budget when the pinned prompt
+/// and the summary alone fill it.
+///
+/// A summarizer that returns an empty or blank summary is treated as a
+/// failure: nothing is folded and the previous summary is kept.
 ///
 /// Order of [`messages`](Memory::messages): pinned system message (if any),
 /// summary message (if any), then the recent turns.
@@ -417,7 +423,8 @@ impl SummaryBufferMemory {
     ///
     /// # Errors
     ///
-    /// The summarizer's error; the history is left unchanged.
+    /// The summarizer's error, or [`ChainError::MemoryError`] if it returned
+    /// an empty summary; the history is left unchanged.
     pub async fn compact(&self) -> Result<bool, ChainError> {
         let (batch, previous, epoch, evicted_at) = {
             let mut s = lock(&self.state);
@@ -428,6 +435,16 @@ impl SummaryBufferMemory {
                 return Ok(false);
             }
             let k = s.buf.overflow_prefix(self.max_tokens, s.summary_tokens);
+            // Always keep the newest turn (and the tool call its results
+            // belong to) verbatim, even when the summary alone fills the
+            // budget; otherwise every add would fold the whole history.
+            let mut k = k.min(s.buf.turns.len() - 1);
+            while k > 0 && s.buf.turns.get(k).is_some_and(|e| e.msg.role == Role::Tool) {
+                k -= 1;
+            }
+            if k == 0 {
+                return Ok(false);
+            }
             let batch: Vec<Message> = s.buf.turns.iter().take(k).map(|e| e.msg.clone()).collect();
             s.compacting = true;
             (batch, s.summary.clone(), s.epoch, s.buf.evicted)
@@ -438,6 +455,11 @@ impl SummaryBufferMemory {
             .summarizer
             .summarize(previous.as_deref(), &batch)
             .await?;
+        if text.trim().is_empty() {
+            return Err(ChainError::MemoryError(
+                "summarizer returned an empty summary".into(),
+            ));
+        }
         truncate_chars(&mut text, self.max_summary_chars);
         let summary_tokens = self.counter.count(&self.summary_message(&text));
 
@@ -668,5 +690,62 @@ mod tests {
         assert_eq!(out, "sum");
         assert_eq!(llm.0.load(Ordering::SeqCst), 1);
         assert!(format!("{s:?}").contains("LlmSummarizer"));
+    }
+
+    #[tokio::test]
+    async fn empty_summary_is_rejected_and_state_kept() {
+        let n = AtomicUsize::new(0);
+        let s = move |_: Option<&str>, _: &[Message]| -> Result<String, ChainError> {
+            Ok(if n.fetch_add(1, Ordering::SeqCst) == 0 {
+                "S".into()
+            } else {
+                " \n".into()
+            })
+        };
+        let m = SummaryBufferMemory::new(s, 1)
+            .with_counter(|_: &Message| 1)
+            .summary_prefix("");
+        for t in ["a", "b", "c"] {
+            m.add(Message::human(t)).await.unwrap();
+        }
+        // "a" was folded into "S"; the blank summary of "b" is refused.
+        assert_eq!(m.summary().as_deref(), Some("S"));
+        assert_eq!(texts(&m.messages().await.unwrap()), ["S", "b", "c"]);
+        assert!(m.compact().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn newest_turn_stays_verbatim_when_summary_fills_budget() {
+        let s = |p: Option<&str>, m: &[Message]| -> Result<String, ChainError> {
+            Ok(format!("{}{}", p.unwrap_or(""), m.len()))
+        };
+        let m = SummaryBufferMemory::new(s, 3)
+            .with_counter(|m: &Message| if m.role == Role::System { 5 } else { 1 })
+            .summary_prefix("");
+        for t in ["h1", "h2", "h3", "h4", "h5"] {
+            m.add(Message::human(t)).await.unwrap();
+        }
+        let v = m.messages().await.unwrap();
+        assert_eq!(v.last().map(Message::text).as_deref(), Some("h5"));
+    }
+
+    #[tokio::test]
+    async fn newest_tool_group_stays_together_when_summary_fills_budget() {
+        let s = |_: Option<&str>, _: &[Message]| -> Result<String, ChainError> { Ok("S".into()) };
+        let m = SummaryBufferMemory::new(s, 1)
+            .with_counter(|m: &Message| if m.role == Role::System { 5 } else { 1 })
+            .summary_prefix("");
+        m.add(Message::human("q")).await.unwrap();
+        m.add(Message::human("q2")).await.unwrap();
+        m.add(Message::ai_with_tool_calls(
+            "",
+            vec![rune_chain_core::ToolCall::new("1", "t", "{}")],
+        ))
+        .await
+        .unwrap();
+        m.add(Message::tool_result("1", "r")).await.unwrap();
+        let v = m.messages().await.unwrap();
+        let roles: Vec<Role> = v.iter().map(|m| m.role.clone()).collect();
+        assert_eq!(roles, [Role::System, Role::Ai, Role::Tool]);
     }
 }

@@ -395,3 +395,21 @@ proptest! {
         })?;
     }
 }
+
+#[tokio::test]
+async fn leftover_records_do_not_crowd_out_real_hits() {
+    let (store, _, mem) = setup();
+    let mem = mem.recent(0).top_k(1);
+    // A record left behind by an earlier run in the same namespace.
+    store
+        .upsert(vec![
+            Record::new("conversation:999", vec![1.0; VOCAB.len() + 1])
+                .with_content("stale pizza")
+                .with_meta(rune_chain_memory::NAMESPACE_KEY, "conversation"),
+        ])
+        .await
+        .unwrap();
+    chat(&mem, &TURNS[1..2]).await;
+    let ctx = mem.context_for("pizza").await.unwrap();
+    assert!(ctx.is_some_and(|m| m.text().contains("rust")));
+}

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use rune_chain_core::{ChainError, Memory, Message, Role};
 
 use crate::MemorySnapshot;
-use crate::util::lock;
+use crate::util::{drop_orphan_tool_results, lock};
 
 #[derive(Default)]
 struct State {
@@ -20,6 +20,10 @@ struct State {
 /// [`messages`](Memory::messages) returns the most recent `window` messages.
 /// Messages that slide out of the window are dropped, so storage is bounded
 /// by the window size no matter how long the conversation runs.
+///
+/// When the cut lands between a tool call and its results, the results left at
+/// the front are dropped too (providers reject a tool result whose call is
+/// missing), so fewer than `window` messages may be returned.
 ///
 /// With [`pin_system`](Self::pin_system) enabled, the first [`Role::System`]
 /// message added (since the last [`clear`](Memory::clear)) is kept outside
@@ -161,7 +165,10 @@ impl WindowedMemory {
         }
         state.turns.push_back(message);
         let excess = state.turns.len().saturating_sub(self.window);
-        state.turns.drain(..excess);
+        if excess > 0 {
+            state.turns.drain(..excess);
+            drop_orphan_tool_results(&mut state.turns);
+        }
     }
 
     fn collect(state: &State) -> Vec<Message> {
@@ -305,5 +312,33 @@ mod tests {
         other.restore(snap).unwrap();
         let visible = other.messages().await.unwrap();
         assert_eq!(visible, [Message::system("s"), Message::human("4")]);
+    }
+
+    #[tokio::test]
+    async fn window_cut_drops_orphan_tool_results() {
+        use rune_chain_core::ToolCall;
+        let mem = WindowedMemory::new(2);
+        mem.add(Message::ai_with_tool_calls(
+            "",
+            vec![ToolCall::new("1", "t", "{}")],
+        ))
+        .await
+        .unwrap();
+        mem.add(Message::tool_result("1", "r")).await.unwrap();
+        mem.add(Message::human("next")).await.unwrap();
+        assert_eq!(mem.messages().await.unwrap(), [Message::human("next")]);
+
+        let other = WindowedMemory::new(2);
+        other
+            .restore(MemorySnapshot::new(
+                vec![
+                    Message::ai_with_tool_calls("", vec![ToolCall::new("1", "t", "{}")]),
+                    Message::tool_result("1", "r"),
+                    Message::human("next"),
+                ],
+                None,
+            ))
+            .unwrap();
+        assert_eq!(other.messages().await.unwrap(), [Message::human("next")]);
     }
 }

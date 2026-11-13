@@ -113,6 +113,10 @@ impl TokenCounter for CharEstimator {
 /// - A hard cap of [`DEFAULT_MAX_MESSAGES`] messages bounds storage even if
 ///   the counter returns `0`; change it with [`max_messages`](Self::max_messages).
 /// - A single message larger than the whole budget is evicted immediately.
+/// - The pinned system message counts against the budget. If it alone is
+///   larger than `max_tokens`, every other message is evicted as soon as it
+///   is added and [`messages`](Memory::messages) returns only the system
+///   message. Size the budget above the prompt, or disable pinning.
 ///
 /// # Example
 ///
@@ -173,7 +177,8 @@ impl TokenBufferMemory {
         Self::new(max_tokens, CharEstimator::default())
     }
 
-    /// Pin the first system message (default: on).
+    /// Pin the first system message (default: on). A pinned message larger
+    /// than the whole budget leaves no room for any other message.
     #[must_use]
     pub const fn pin_system(mut self, pin: bool) -> Self {
         self.pin_system = pin;
@@ -391,5 +396,17 @@ mod tests {
             [Message::system("s"), Message::human("b")]
         );
         assert!(format!("{mem:?}").contains("TokenBufferMemory"));
+    }
+
+    #[tokio::test]
+    async fn oversized_pinned_prompt_leaves_room_for_nothing() {
+        use rune_chain_core::Memory;
+        let mem = TokenBufferMemory::new(5, |m: &Message| m.text().len());
+        mem.add(Message::system("0123456789")).await.unwrap();
+        mem.add(Message::human("hi")).await.unwrap();
+        assert_eq!(
+            mem.messages().await.unwrap(),
+            [Message::system("0123456789")]
+        );
     }
 }

@@ -19,6 +19,9 @@ pub const DEFAULT_VECTOR_TOP_K: usize = 4;
 /// Default cap on exchanges kept in the store.
 pub const DEFAULT_MAX_TURNS: usize = 1_000;
 
+/// Extra hits fetched per query to make up for records that get filtered out.
+const STALE_HEADROOM: usize = 8;
+
 /// Default cap on the injected context message, in characters.
 pub const DEFAULT_MAX_CONTEXT_CHARS: usize = 4_000;
 
@@ -384,7 +387,14 @@ impl VectorMemory {
             return Ok(None);
         }
         let vector = self.embed_query(&query).await?;
-        let k = self.top_k.saturating_add(excluded.len()).min(stored);
+        // Over-fetch: hits still in the recent window, and records this
+        // memory no longer tracks (a delete that failed, or an earlier run on
+        // a durable store), are filtered out below and must not use up the
+        // slots of real matches.
+        let k = self
+            .top_k
+            .saturating_add(excluded.len())
+            .saturating_add(self.top_k.max(STALE_HEADROOM));
         let mut q = Query::new(vector, k)
             .with_filter(Filter::eq(NAMESPACE_KEY, self.namespace.as_str()))
             .with_vectors(false);

@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use rune_chain_core::{ChainError, Memory, Message};
 
 use crate::MemorySnapshot;
-use crate::util::lock;
+use crate::util::{drop_orphan_tool_results, lock};
 
 /// In-process conversation memory that returns the full stored history.
 ///
@@ -16,7 +16,8 @@ use crate::util::lock;
 /// By default the history is **unbounded**. When the conversation is driven by
 /// untrusted input (a public chat endpoint, say), cap it with
 /// [`with_max_messages`](Self::with_max_messages) so a single session cannot
-/// grow process memory without limit; the oldest messages are evicted first.
+/// grow process memory without limit; the oldest messages are evicted first,
+/// along with any tool results left at the front without their call.
 ///
 /// # Example
 ///
@@ -128,7 +129,10 @@ impl SimpleMemory {
     fn enforce_cap(&self, messages: &mut VecDeque<Message>) {
         if let Some(max) = self.max_messages {
             let excess = messages.len().saturating_sub(max);
-            messages.drain(..excess);
+            if excess > 0 {
+                messages.drain(..excess);
+                drop_orphan_tool_results(messages);
+            }
         }
     }
 }
@@ -250,5 +254,20 @@ mod tests {
         let mem = SimpleMemory::new();
         tokio_test::block_on(mem.add(Message::human("password123"))).unwrap();
         assert!(!format!("{mem:?}").contains("password123"));
+    }
+
+    #[tokio::test]
+    async fn cap_drops_orphan_tool_results() {
+        use rune_chain_core::ToolCall;
+        let mem = SimpleMemory::with_max_messages(2);
+        mem.add(Message::ai_with_tool_calls(
+            "",
+            vec![ToolCall::new("1", "t", "{}")],
+        ))
+        .await
+        .unwrap();
+        mem.add(Message::tool_result("1", "r")).await.unwrap();
+        mem.add(Message::human("next")).await.unwrap();
+        assert_eq!(mem.messages().await.unwrap(), [Message::human("next")]);
     }
 }
