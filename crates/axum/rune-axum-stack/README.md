@@ -52,9 +52,9 @@ use rune_axum_stack::{
     FilterMode, Helmet, IpFilterConfig, RateLimitConfig, SecurityStack, XFrameOptions,
 };
 
-// Custom: deny framing, 200 req/30 s, block a CIDR, no CSRF (JWT API)
+// Custom: same-origin framing, 200 req/30 s, block a CIDR, no CSRF (JWT API)
 let app: Router = SecurityStack::new()
-    .helmet(Helmet::new().frame_options(XFrameOptions::Deny))
+    .helmet(Helmet::new().frame_options(XFrameOptions::SameOrigin))?
     .ratelimit(RateLimitConfig::new().requests(200).window(Duration::from_secs(30)))
     .ipfilter(IpFilterConfig::new().mode(FilterMode::Blocklist).cidr("10.0.0.0/8")?)
     .without_csrf()
@@ -102,7 +102,7 @@ let app: Router = SecurityStack::new()
 
 | Layer | Default |
 |-------|---------|
-| `HelmetLayer` | Standard security headers + HSTS (1 year, no `includeSubDomains`); CSP opt-in |
+| `HelmetLayer` | `rune-axum-helmet` defaults: CSP, HSTS (1 year, `includeSubDomains`, not on plain HTTP), Permissions-Policy, COOP/CORP, `X-Frame-Options: DENY` and more |
 | `RedirectHttpsLayer` | 308 permanent redirect for HTTP requests |
 | `RateLimitLayer` | 100 requests per 60 s per socket peer IP |
 | `TimeoutLayer` | 30 s per request (`504`) |
@@ -120,7 +120,7 @@ browsers on `https://` and `http://localhost`.
 
 | Method | Action |
 |--------|--------|
-| `.helmet(Helmet)` | Replace helmet config |
+| `.helmet(Helmet)?`, `.helmet_layer(HelmetLayer)` | Replace helmet config (validated) |
 | `.without_helmet()` | Disable security headers |
 | `.csrf(CsrfConfig)` | Replace CSRF config |
 | `.csrf_origin(CsrfOriginConfig)` | Token-free origin-only CSRF (`Sec-Fetch-Site` / `Origin`, no cookie) |
@@ -190,11 +190,16 @@ A successful response with the default stack:
 HTTP/1.1 200 OK
 x-content-type-options: nosniff
 x-xss-protection: 0
-x-frame-options: SAMEORIGIN
+x-frame-options: DENY
 referrer-policy: strict-origin-when-cross-origin
 cross-origin-opener-policy: same-origin
 cross-origin-resource-policy: same-origin
-strict-transport-security: max-age=31536000
+origin-agent-cluster: ?1
+x-dns-prefetch-control: off
+x-permitted-cross-domain-policies: none
+permissions-policy: accelerometer=(), autoplay=(), bluetooth=(), ...
+content-security-policy: default-src 'self'; base-uri 'self'; ...; upgrade-insecure-requests
+strict-transport-security: max-age=31536000; includeSubDomains
 set-cookie: __Host-csrf_token=<nonce>.<issued-at>.<hmac>; Path=/; Secure; SameSite=Lax
 ```
 
@@ -204,7 +209,7 @@ A rate-limited request (security headers are still present):
 HTTP/1.1 429 Too Many Requests
 retry-after: 42
 x-content-type-options: nosniff
-x-frame-options: SAMEORIGIN
+x-frame-options: DENY
 ```
 
 ## Migrating from 0.1
@@ -223,7 +228,12 @@ x-frame-options: SAMEORIGIN
   response to rotate the token.
 - New re-exports: `CsrfKey`, `KeyTooShort`, `CsrfToken`, `CsrfRotate`,
   `CsrfRejection`, `SameSite`, `CspBuilder`.
-- **HSTS is on** (`max-age=31536000`). Use `.helmet(Helmet::new())` to drop it.
+- **Helmet 0.3 defaults**: a CSP, `X-Frame-Options: DENY`, Permissions-Policy, HSTS
+  `max-age=31536000; includeSubDomains` (skipped on requests known to be plain HTTP)
+  and more; `Server` / `X-Powered-By` are removed. `.helmet(..)` now validates the
+  config and returns `Result`; use `.helmet(Helmet::new().no_hsts())?` to drop HSTS.
+  New re-exports: `HelmetError`, `HelmetOverride`, `CspNonce`, `HstsMode`,
+  `PermittedCrossDomainPolicies`.
 - **A 30 s timeout is on.** Use `.timeout(Timeout::new().path("/events", ..))` for
   long-lived routes or `.without_timeout()`.
 

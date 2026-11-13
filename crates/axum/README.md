@@ -15,7 +15,7 @@ Axum and Tower middleware: auth, rate limiting, CSRF, security headers, request 
 | [`rune-axum-cors`](rune-axum-cors) | CORS middleware for Axum — exact origin allowlists, preflight handling, configs vetted by rune-cors at build time |
 | [`rune-axum-csrf`](rune-axum-csrf) | CSRF protection middleware for Axum — signed double-submit cookie or token-free Origin/Fetch-Metadata mode |
 | [`rune-axum-health`](rune-axum-health) | Health and readiness probes plus graceful shutdown for Axum — readiness flips on shutdown and in-flight requests drain before exit |
-| [`rune-axum-helmet`](rune-axum-helmet) | Security headers middleware for Axum — CSP, HSTS, X-Frame-Options, Referrer-Policy, and more |
+| [`rune-axum-helmet`](rune-axum-helmet) | Security headers middleware for Axum — validated CSP with per-request nonces, HSTS, Permissions-Policy, COOP/COEP/CORP and more |
 | [`rune-axum-ipfilter`](rune-axum-ipfilter) | IP allowlist / blocklist middleware for Axum — CIDR filtering with spoof-resistant client IP resolution (socket peer, trusted proxies) |
 | [`rune-axum-jwt`](rune-axum-jwt) | JWT bearer auth for Axum 0.8: HMAC, RSA, ECDSA and EdDSA keys, cached JWKS and OIDC discovery, scope/role checks, RFC 6750 errors |
 | [`rune-axum-mtls`](rune-axum-mtls) | Mutual-TLS client-certificate extraction for Axum: rustls listener, rune-x509 clientAuth verification, typed extractor |

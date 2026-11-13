@@ -103,16 +103,16 @@
 //! use std::time::Duration;
 //! use axum::{routing::get, Router};
 //! use rune_axum_stack::{
-//!     FilterMode, Helmet, Hsts, IpFilterConfig, RateLimitConfig, SecurityStack, XFrameOptions,
+//!     FilterMode, Helmet, IpFilterConfig, RateLimitConfig, SecurityStack, XFrameOptions,
 //! };
 //!
 //! let app: Router = SecurityStack::new()
-//!     .helmet(Helmet::new().frame_options(XFrameOptions::Deny).hsts(Hsts::new()))
+//!     .helmet(Helmet::new().frame_options(XFrameOptions::SameOrigin))?
 //!     .ratelimit(RateLimitConfig::new().requests(200).window(Duration::from_secs(30)))
 //!     .ipfilter(IpFilterConfig::new().mode(FilterMode::Blocklist).cidr("10.0.0.0/8")?)
 //!     .without_csrf()
 //!     .apply(Router::new().route("/", get(|| async { "ok" })));
-//! # Ok::<(), rune_axum_stack::CidrParseError>(())
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Server-rendered forms
@@ -182,7 +182,8 @@ pub use rune_axum_health::shutdown_signal;
 pub use rune_axum_health::{Error as HealthError, Health, HealthLayer, HealthState, Probe};
 pub use rune_axum_helmet::{
     CrossOriginEmbedderPolicy, CrossOriginOpenerPolicy, CrossOriginResourcePolicy, CspBuilder,
-    Helmet, HelmetLayer, Hsts, ReferrerPolicy, XFrameOptions,
+    CspNonce, Error as HelmetError, Helmet, HelmetLayer, HelmetOverride, Hsts, HstsMode,
+    PermittedCrossDomainPolicies, ReferrerPolicy, XFrameOptions,
 };
 pub use rune_axum_ipfilter::{
     CidrParseError, ClientIpConfig, FilterMode, IpFilterConfig, IpFilterLayer, IpFilterService,
@@ -265,7 +266,7 @@ pub struct SecurityStack {
     health: Option<HealthLayer>,
     compression: Option<Compression>,
     problem: Option<Problems>,
-    helmet: Option<Helmet>,
+    helmet: Option<HelmetLayer>,
     redirect_https: Option<RedirectHttps>,
     cors: Option<CorsLayer>,
     ipfilter: Option<IpFilterConfig>,
@@ -293,9 +294,9 @@ impl Default for SecurityStack {
             health: None,
             compression: None,
             problem: None,
-            // The stack redirects to HTTPS and sets `Secure` cookies by default, so
-            // pin browsers to HTTPS as well.
-            helmet: Some(Helmet::new().hsts(Hsts::new())),
+            // Helmet's defaults include HSTS: the stack redirects to HTTPS and
+            // sets `Secure` cookies, so browsers are pinned to HTTPS as well.
+            helmet: Some(HelmetLayer::default()),
             redirect_https: Some(RedirectHttps::new()),
             cors: None,
             ipfilter: None,
@@ -403,11 +404,23 @@ impl SecurityStack {
 
     /// Replaces the [`HelmetLayer`] configuration.
     ///
-    /// The default is `Helmet::new().hsts(Hsts::new())`; a plain [`Helmet::new()`]
-    /// drops `Strict-Transport-Security`.
+    /// The default is [`HelmetLayer::default()`], i.e. [`Helmet::new()`]: a CSP,
+    /// HSTS (not on plain-HTTP requests) and the other standard headers. Use
+    /// `Helmet::new().no_hsts()` to drop `Strict-Transport-Security`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HelmetError`] when a configured value is invalid (see
+    /// [`Helmet::validate`]).
+    pub fn helmet(mut self, config: Helmet) -> Result<Self, HelmetError> {
+        self.helmet = Some(HelmetLayer::new(config)?);
+        Ok(self)
+    }
+
+    /// Enables an already-built [`HelmetLayer`].
     #[must_use]
-    pub fn helmet(mut self, config: Helmet) -> Self {
-        self.helmet = Some(config);
+    pub fn helmet_layer(mut self, layer: HelmetLayer) -> Self {
+        self.helmet = Some(layer);
         self
     }
 
@@ -828,8 +841,8 @@ impl SecurityStack {
         if let Some(config) = redirect_https {
             r = r.layer(RedirectHttpsLayer::new(config));
         }
-        if let Some(config) = helmet {
-            r = r.layer(HelmetLayer::new(config));
+        if let Some(layer) = helmet {
+            r = r.layer(layer);
         }
         if let Some(config) = problem {
             r = r.layer(ProblemLayer::new(config));
@@ -1004,11 +1017,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn custom_helmet_deny_frame_options() {
+    async fn custom_helmet_frame_options() {
         let app = SecurityStack::new()
             .without_csrf()
             .without_redirect_https()
-            .helmet(Helmet::new().frame_options(XFrameOptions::Deny))
+            .helmet(Helmet::new().frame_options(XFrameOptions::SameOrigin))
+            .unwrap()
             .apply_peer(base_router());
         let resp = send(app, get_req()).await;
         assert_eq!(
@@ -1017,7 +1031,7 @@ mod tests {
                 .unwrap()
                 .to_str()
                 .unwrap(),
-            "DENY"
+            "SAMEORIGIN"
         );
     }
 

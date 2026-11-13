@@ -1,10 +1,10 @@
 [package]
 name = "rune-axum-helmet"
-version = "0.2.1"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Security headers middleware for Axum — CSP, HSTS, X-Frame-Options, Referrer-Policy, and more"
+description = "Security headers middleware for Axum — validated CSP with per-request nonces, HSTS, Permissions-Policy, COOP/COEP/CORP and more"
 license.workspace = true
 keywords = ["axum", "security", "headers", "middleware", "csp"]
 categories = ["web-programming", "network-programming"]
@@ -15,12 +15,19 @@ publish = true
 [dependencies]
 tower.workspace = true
 http.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+rune-csp.workspace = true
+rune-hsts.workspace = true
+rune-permissions-policy.workspace = true
+rune-referrer-policy.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tower = { workspace = true, features = ["util"] }
 http-body-util.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

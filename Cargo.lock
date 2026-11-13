@@ -2914,11 +2914,18 @@ dependencies = [
 
 [[package]]
 name = "rune-axum-helmet"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "http",
  "http-body-util",
+ "proptest",
+ "rand 0.9.5",
+ "rune-csp",
+ "rune-hsts",
+ "rune-permissions-policy",
+ "rune-referrer-policy",
+ "thiserror",
  "tokio",
  "tower",
 ]
