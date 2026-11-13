@@ -159,17 +159,14 @@ pub fn check_generate_result(
             "result.tool_call.name",
             || format!("tool call names `{}`, which was not offered", call.name),
         )?;
-        let args = serde_json::from_str::<Value>(&call.arguments);
-        ensure(
-            matches!(args, Ok(Value::Object(_))),
-            "result.tool_call.arguments",
-            || {
-                format!(
-                    "arguments of call `{}` are not a JSON object: {}",
-                    call.id, call.arguments
-                )
-            },
-        )?;
+        // Same rules as `ToolCall::arguments_object`: size-bounded, `""`
+        // counts as `{}`, and the error never echoes the arguments.
+        if let Err(e) = call.arguments_object() {
+            return Err(ContractViolation::new(
+                "result.tool_call.arguments",
+                format!("call `{}`: {e}", call.id),
+            ));
+        }
     }
     Ok(())
 }

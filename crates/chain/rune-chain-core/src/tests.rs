@@ -495,8 +495,40 @@ mod additions {
         let big = format!("{{\"input\":\"{}\"}}", "a".repeat(MAX_TOOL_ARGUMENTS_BYTES));
         let call = ToolCall::new("1", "echo", big);
         assert!(call.parse_arguments::<serde_json::Value>().is_err());
-        // The legacy accessor is unchanged.
-        assert!(call.input().is_some());
+        // The convenience accessors share the same bound.
+        assert_eq!(call.input(), None);
+        assert_eq!(call.arg("input"), None);
+        let small = ToolCall::new("2", "echo", r#"{"input":"hi"}"#);
+        assert_eq!(small.input().as_deref(), Some("hi"));
+    }
+
+    #[test]
+    fn validate_accepts_whole_floats_as_integers() {
+        let def = FunctionDefinition::new(
+            "f",
+            "d",
+            json!({"type": "object", "properties": {"n": {"type": "integer"}}}),
+        );
+        assert!(
+            ToolCall::new("1", "f", r#"{"n": 1.0}"#)
+                .validate(&def)
+                .is_ok()
+        );
+        assert!(
+            ToolCall::new("2", "f", r#"{"n": -3}"#)
+                .validate(&def)
+                .is_ok()
+        );
+        assert!(
+            ToolCall::new("3", "f", r#"{"n": 1.5}"#)
+                .validate(&def)
+                .is_err()
+        );
+        assert!(
+            ToolCall::new("4", "f", r#"{"n": "1"}"#)
+                .validate(&def)
+                .is_err()
+        );
     }
 
     #[test]
@@ -644,6 +676,70 @@ mod additions {
                 .unwrap(),
             "AA"
         );
+    }
+
+    /// A two-step chain whose `execute` writes an intermediate key besides
+    /// the final answer, like a sequential pipeline does.
+    struct TwoOutputs(Result<(), &'static str>);
+    #[async_trait]
+    impl Chain for TwoOutputs {
+        async fn call(&self, _: PromptArgs) -> Result<GenerateResult, ChainError> {
+            self.0
+                .map(|()| GenerateResult::from_text("final"))
+                .map_err(|e| ChainError::Other(e.into()))
+        }
+        async fn execute(
+            &self,
+            input: PromptArgs,
+        ) -> Result<std::collections::HashMap<String, serde_json::Value>, ChainError> {
+            let r = self.call(input).await?;
+            Ok(std::collections::HashMap::from([
+                ("draft".to_string(), json!("draft text")),
+                ("answer".to_string(), json!(r.generation)),
+                (
+                    "generate_result".to_string(),
+                    serde_json::to_value(&r).unwrap(),
+                ),
+            ]))
+        }
+        fn output_keys(&self) -> Vec<String> {
+            vec!["draft".into(), "answer".into(), "generate_result".into()]
+        }
+    }
+
+    #[tokio::test]
+    async fn map_output_execute_keeps_every_declared_key() {
+        let chain = TwoOutputs(Ok(())).map_output(|s| s.to_uppercase());
+        let map = chain.execute(PromptArgs::new()).await.unwrap();
+        for key in chain.output_keys() {
+            assert!(map.contains_key(&key), "missing {key}");
+        }
+        assert_eq!(map["draft"], "draft text");
+        assert_eq!(map["answer"], "FINAL");
+        assert_eq!(map["generate_result"]["generation"], "FINAL");
+        assert_eq!(
+            chain.invoke(PromptArgs::new()).await.unwrap(),
+            map["answer"]
+        );
+    }
+
+    #[tokio::test]
+    async fn fallbacks_execute_keeps_every_declared_key() {
+        let chain = TwoOutputs(Ok(())).with_fallbacks([]);
+        let map = chain.execute(PromptArgs::new()).await.unwrap();
+        assert_eq!(map["draft"], "draft text");
+        assert_eq!(map["answer"], "final");
+
+        // A failing primary falls back to the next chain's own `execute`.
+        let chain = TwoOutputs(Err("down"))
+            .with_fallbacks([Box::new(TwoOutputs(Ok(()))) as Box<dyn Chain>]);
+        let map = chain.execute(PromptArgs::new()).await.unwrap();
+        assert_eq!(map["draft"], "draft text");
+
+        let chain =
+            TwoOutputs(Err("a")).with_fallbacks([Box::new(TwoOutputs(Err("b"))) as Box<dyn Chain>]);
+        let err = chain.execute(PromptArgs::new()).await.unwrap_err();
+        assert_eq!(err.to_string(), "b");
     }
 
     struct Model(Result<&'static str, &'static str>);

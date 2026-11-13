@@ -49,10 +49,11 @@ impl ToolCall {
 
     /// Parse [`arguments`](Self::arguments) as a JSON object and return the value of `key`.
     ///
-    /// Returns `None` if the JSON is invalid or the key is absent.
+    /// Returns `None` if the JSON is invalid, larger than
+    /// [`MAX_TOOL_ARGUMENTS_BYTES`], or the key is absent.
     #[must_use]
     pub fn arg(&self, key: &str) -> Option<serde_json::Value> {
-        serde_json::from_str::<serde_json::Value>(&self.arguments)
+        self.parse_arguments::<serde_json::Value>()
             .ok()
             .and_then(|v| v.get(key).cloned())
     }
@@ -272,7 +273,15 @@ const fn json_type_name(value: &Value) -> &'static str {
 fn matches_declared_type(declared: Option<&Value>, value: &Value) -> bool {
     let one = |t: &str| match t {
         "string" => value.is_string(),
-        "integer" => value.is_i64() || value.is_u64(),
+        // JSON Schema counts any number with a zero fractional part (`2.0`)
+        // as an integer.
+        "integer" => {
+            value.is_i64()
+                || value.is_u64()
+                || value
+                    .as_f64()
+                    .is_some_and(|f| f.is_finite() && f.fract() == 0.0)
+        }
         "number" => value.is_number(),
         "boolean" => value.is_boolean(),
         "object" => value.is_object(),

@@ -11,6 +11,9 @@ use crate::{
     PromptArgs, ResponseFormat, StreamData, Tool, ToolChoice, ToolError,
 };
 
+/// Key under which [`Chain::execute`] stores the serialised [`GenerateResult`].
+const RESULT_KEY: &str = "generate_result";
+
 type LlmStream = Pin<Box<dyn Stream<Item = Result<StreamData, LlmError>> + Send>>;
 type ChainStream = Pin<Box<dyn Stream<Item = Result<StreamData, ChainError>> + Send>>;
 
@@ -235,6 +238,25 @@ impl<C: Chain> Chain for ChainWithFallbacks<C> {
         Err(last)
     }
 
+    /// Runs each chain's own [`Chain::execute`], so keys that a multi-output
+    /// chain writes besides its final answer are kept.
+    async fn execute(
+        &self,
+        input_variables: PromptArgs,
+    ) -> Result<HashMap<String, Value>, ChainError> {
+        let mut last = match self.primary.execute(input_variables.clone()).await {
+            Ok(map) => return Ok(map),
+            Err(e) => e,
+        };
+        for fallback in &self.fallbacks {
+            match fallback.execute(input_variables.clone()).await {
+                Ok(map) => return Ok(map),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+
     async fn stream(&self, input_variables: PromptArgs) -> Result<ChainStream, ChainError> {
         let mut last = match self.primary.stream(input_variables.clone()).await {
             Ok(stream) => return Ok(stream),
@@ -285,6 +307,32 @@ where
         let mut result = self.inner.call(input_variables).await?;
         result.generation = (self.f)(std::mem::take(&mut result.generation));
         Ok(result)
+    }
+
+    /// Runs the inner chain's own [`Chain::execute`] and maps the final
+    /// answer (the primary output key and the `generation` stored under
+    /// `"generate_result"`); other keys pass through unchanged.
+    async fn execute(
+        &self,
+        input_variables: PromptArgs,
+    ) -> Result<HashMap<String, Value>, ChainError> {
+        let mut map = self.inner.execute(input_variables).await?;
+        let key = self.primary_output_key();
+        let text = match map.remove(&key) {
+            Some(Value::String(s)) => s,
+            _ => map
+                .get(RESULT_KEY)
+                .and_then(|r| r.get("generation"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        };
+        let mapped = (self.f)(text);
+        if let Some(Value::Object(result)) = map.get_mut(RESULT_KEY) {
+            result.insert("generation".into(), Value::String(mapped.clone()));
+        }
+        map.insert(key, Value::String(mapped));
+        Ok(map)
     }
 
     fn input_keys(&self) -> Vec<String> {

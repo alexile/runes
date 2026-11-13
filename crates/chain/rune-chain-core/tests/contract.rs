@@ -196,6 +196,23 @@ async fn full_llm_honours_tool_choice_none() {
     check_generate_result(&r, &tools).unwrap();
 }
 
+#[test]
+fn generate_result_check_accepts_empty_arguments_without_echoing_bad_ones() {
+    let tools = [FunctionDefinition::single_input("echo", "e")];
+    let r = GenerateResult::from_text("").with_tool_calls(vec![ToolCall::new("c1", "echo", "")]);
+    check_generate_result(&r, &tools).unwrap();
+
+    let secret = "sk-SECRET";
+    let r = GenerateResult::from_text("").with_tool_calls(vec![ToolCall::new(
+        "c1",
+        "echo",
+        format!("[\"{secret}\"]"),
+    )]);
+    let err = check_generate_result(&r, &tools).unwrap_err();
+    assert_eq!(err.contract, "result.tool_call.arguments");
+    assert!(!err.to_string().contains(secret), "{err}");
+}
+
 // ── Streams ───────────────────────────────────────────────────────────────────
 
 #[tokio::test]
