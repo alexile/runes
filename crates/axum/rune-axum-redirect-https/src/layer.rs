@@ -79,14 +79,21 @@ impl RedirectHttps {
         req.uri().scheme() == Some(&http::uri::Scheme::HTTP)
     }
 
-    fn location<B>(&self, req: &Request<B>) -> Option<HeaderValue> {
-        let host = req.headers().get(HOST)?.to_str().ok()?;
+    /// The redirect target: `None` without a `Host` header, `Some(Err(()))`
+    /// when the `Host` header is not a plain host name or IP literal with an
+    /// optional port.
+    fn location<B>(&self, req: &Request<B>) -> Option<Result<HeaderValue, ()>> {
+        let host = req.headers().get(HOST)?;
+        Some(
+            host.to_str()
+                .ok()
+                .and_then(hostname)
+                .and_then(|hostname| self.location_for(hostname, req))
+                .ok_or(()),
+        )
+    }
 
-        let hostname = host
-            .rsplit_once(':')
-            .filter(|(_, port)| port.parse::<u16>().is_ok())
-            .map_or(host, |(h, _)| h);
-
+    fn location_for<B>(&self, hostname: &str, req: &Request<B>) -> Option<HeaderValue> {
         let authority = self
             .https_port
             .map_or_else(|| hostname.to_owned(), |port| format!("{hostname}:{port}"));
@@ -98,6 +105,48 @@ impl RedirectHttps {
 
         HeaderValue::from_str(&format!("https://{authority}{path_and_query}")).ok()
     }
+}
+
+/// The host part of a `Host` header, or `None` unless it is a DNS name, an
+/// IPv4 address or a bracketed IPv6 literal, optionally followed by a port.
+///
+/// The value ends up in `Location`, so anything that could change where the
+/// URL points (`/`, `@`, `?`, `#`, `\`, ...) is refused rather than passed on.
+fn hostname(host: &str) -> Option<&str> {
+    let (name, port) = if host.starts_with('[') {
+        let end = host.find(']')?;
+        let (name, rest) = host.split_at(end + 1);
+        let inner = name.get(1..name.len() - 1)?;
+        if inner.is_empty()
+            || !inner
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() || b == b':' || b == b'.')
+        {
+            return None;
+        }
+        (
+            name,
+            if rest.is_empty() {
+                None
+            } else {
+                Some(rest.strip_prefix(':')?)
+            },
+        )
+    } else {
+        match host.rsplit_once(':') {
+            Some((name, port)) => (name, Some(port)),
+            None => (host, None),
+        }
+    };
+    if let Some(port) = port
+        && (port.is_empty()
+            || !port.bytes().all(|b| b.is_ascii_digit())
+            || port.parse::<u16>().is_err())
+    {
+        return None;
+    }
+    let plain = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_');
+    (name.starts_with('[') || (!name.is_empty() && name.bytes().all(plain))).then_some(name)
 }
 
 /// Tower [`Layer`] that redirects HTTP requests to HTTPS.
@@ -169,8 +218,14 @@ where
             let status = self.config.status;
             return Box::pin(async move {
                 let mut response = Response::new(ResBody::default());
-                *response.status_mut() = status;
-                response.headers_mut().insert(LOCATION, location);
+                match location {
+                    Ok(location) => {
+                        *response.status_mut() = status;
+                        response.headers_mut().insert(LOCATION, location);
+                    }
+                    // Never redirect to whatever a forged `Host` says.
+                    Err(()) => *response.status_mut() = StatusCode::BAD_REQUEST,
+                }
                 Ok(response)
             });
         }
@@ -306,5 +361,50 @@ mod tests {
             .layer(RedirectHttpsLayer::default());
         let response = send(app, forwarded_request("http", "/")).await;
         assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+    }
+
+    #[tokio::test]
+    async fn hostile_host_header_never_becomes_a_redirect() {
+        for host in [
+            "//evil.example",
+            "evil.example/",
+            "good.example@evil.example",
+            "evil.example#",
+            "evil.example?",
+            "good.example\\@evil.example",
+            "",
+            ":443",
+            "[::1",
+            "example.com:99999",
+        ] {
+            let req = http::Request::builder()
+                .uri("/path")
+                .header(HOST, host)
+                .header("x-forwarded-proto", "http")
+                .body(Body::empty())
+                .unwrap();
+            let response = send(build_app(RedirectHttps::new()), req).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{host}");
+            assert!(response.headers().get("location").is_none(), "{host}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ip_literal_hosts_redirect() {
+        for (host, location) in [
+            ("[::1]:8080", "https://[::1]/"),
+            ("[2001:db8::1]", "https://[2001:db8::1]/"),
+            ("127.0.0.1:80", "https://127.0.0.1/"),
+            ("Example.COM", "https://Example.COM/"),
+        ] {
+            let req = http::Request::builder()
+                .uri("/")
+                .header(HOST, host)
+                .header("x-forwarded-proto", "http")
+                .body(Body::empty())
+                .unwrap();
+            let response = send(build_app(RedirectHttps::new()), req).await;
+            assert_eq!(response.headers()["location"], location, "{host}");
+        }
     }
 }

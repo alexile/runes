@@ -8,7 +8,10 @@
 //!
 //! 1. `X-Forwarded-Proto: http` — set by most reverse proxies when the
 //!    upstream connection is plain HTTP.
-//! 2. URI scheme of `http` — present in direct (non-proxy) connections.
+//! 2. URI scheme of `http` — present when the request line carries an
+//!    absolute URI. Plain HTTP/1.1 requests served by `axum::serve` use the
+//!    origin form (`GET /path`) and have no scheme, so without a proxy that
+//!    sets `X-Forwarded-Proto` most requests are not detected.
 //!
 //! If neither indicator is present the request passes through unchanged,
 //! which is the safe default when the protocol cannot be determined.
@@ -20,6 +23,9 @@
 //! - Optional HTTPS port override for non-standard port setups.
 //! - Graceful fallback: if no `Host` header is present the request is
 //!   forwarded rather than returning a malformed redirect without `Location`.
+//! - A `Host` header that is not a plain host name or IP literal with an
+//!   optional port gets `400 Bad Request`, so a forged host never turns into
+//!   an open redirect.
 //!
 //! # Quick Start
 //!

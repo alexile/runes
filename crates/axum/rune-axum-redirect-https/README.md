@@ -14,9 +14,12 @@ A [`tower::Layer`](https://docs.rs/tower/latest/tower/trait.Layer.html) that det
 The layer checks for HTTP in this priority order:
 
 1. `X-Forwarded-Proto: http` — set by most reverse proxies for plain HTTP upstream connections.
-2. URI scheme of `http` — present in direct (non-proxy) connections.
+2. URI scheme of `http` — present when the request line carries an absolute URI. Plain HTTP/1.1
+   requests served by `axum::serve` or hyper use the origin form (`GET /path`) and have no scheme,
+   so behind no proxy the layer only sees HTTP/2 or absolute-form requests.
 
-If neither indicator is present the request passes through unchanged.
+If neither indicator is present the request passes through unchanged. Run the layer behind a
+proxy that sets `X-Forwarded-Proto`, or only on a listener that serves plain HTTP.
 
 ## Installation
 
@@ -71,7 +74,9 @@ let app: Router = Router::new()
 
 > [!NOTE]
 > When no `Host` header is present the request is forwarded unchanged rather than
-> returning a redirect without a `Location` header.
+> returning a redirect without a `Location` header. A `Host` header that is not a plain
+> host name or IP literal with an optional port (`//evil.example`, `a@b`, `host/`) gets
+> `400 Bad Request`, never a redirect.
 
 ## Output
 
