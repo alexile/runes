@@ -17,7 +17,7 @@
 //! | [`match_sha1`] | 40-char hex (SHA-1-like digests) |
 //! | [`match_jwt`] | JSON Web Tokens |
 //! | [`match_aws_key`] | AWS access key IDs |
-//! | [`match_private_key`] | PEM private key blocks |
+//! | [`match_private_key`] | PEM private key header lines (the BEGIN line only) |
 //! | [`match_email`] | Email addresses |
 //! | [`match_url`] | HTTP/HTTPS URLs |
 //! | [`match_uuid`] | UUID v4 |
@@ -79,12 +79,12 @@ pattern!(re_sha1, r"\b[0-9a-fA-F]{40}\b");
 pattern!(re_sha256, r"\b[0-9a-fA-F]{64}\b");
 pattern!(
     re_jwt,
-    r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*\b"
+    r"\beyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*"
 );
 pattern!(re_aws_key, r"\b(?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}\b");
 pattern!(
     re_private_key,
-    r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+    r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----"
 );
 pattern!(
     re_email,
@@ -490,6 +490,34 @@ mod tests {
     fn private_key_detection() {
         let hits = match_private_key("-----BEGIN RSA PRIVATE KEY-----\nstuff");
         assert_ne!(hits, [] as [&str; 0]);
+    }
+
+    // Regression: PKCS#8 encrypted and OpenPGP key headers were missed.
+    #[test]
+    fn private_key_header_variants() {
+        for header in [
+            "-----BEGIN PRIVATE KEY-----",
+            "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+            "-----BEGIN PGP PRIVATE KEY BLOCK-----",
+            "-----BEGIN ED25519 PRIVATE KEY-----",
+        ] {
+            assert_eq!(match_private_key(header), vec![header], "{header}");
+        }
+        assert_eq!(
+            match_private_key("-----BEGIN PUBLIC KEY-----"),
+            [] as [&str; 0]
+        );
+    }
+
+    // Regression: the trailing `\b` made the match back off from a
+    // signature ending in `-`, and an unsigned (`alg: none`) token with an
+    // empty signature section was not matched at all.
+    #[test]
+    fn jwt_signature_edges() {
+        let unsigned = "eyJhbGciOiJub25lIn0.eyJzdWIiOiIxIn0.";
+        assert_eq!(match_jwt(&format!("t={unsigned} ok")), vec![unsigned]);
+        let dash = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2ln-";
+        assert_eq!(match_jwt(&format!("{dash} ok")), vec![dash]);
     }
 
     #[test]
