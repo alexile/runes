@@ -11,6 +11,10 @@
 //! 4. the text from the first `{` / `[` to the end, with unterminated strings,
 //!    arrays and objects closed (truncated output).
 //!
+//! Reasoning blocks (`<think>…</think>`, `<thinking>`, `<reasoning>`) that
+//! open at the start of a line are skipped before steps 2-4, so a draft
+//! inside them never wins over the answer after them.
+//!
 //! Each candidate is also retried with trailing commas removed. The first
 //! candidate that parses as JSON wins. Nothing here interprets the value:
 //! validation is the schema's job.
@@ -18,6 +22,8 @@
 //! Inputs above [`MAX_INPUT_BYTES`] and containers nested deeper than
 //! [`MAX_NESTING`] are rejected, and the scan is iterative (no recursion),
 //! so adversarial output cannot exhaust the stack or burn unbounded CPU.
+
+use std::borrow::Cow;
 
 use serde_json::Value;
 
@@ -41,7 +47,8 @@ const MAX_SPAN_STARTS: usize = 32;
 /// the text from the first `{` / `[` with unterminated strings, arrays and
 /// objects closed (output cut off by a token limit). Each candidate is also
 /// retried with trailing commas removed, and the first that parses wins.
-/// Returns `None` when none does, or when `text` is longer than
+/// Reasoning blocks such as `<think>…</think>` at the start of a line are
+/// skipped first. Returns `None` when none does, or when `text` is longer than
 /// [`MAX_INPUT_BYTES`].
 ///
 /// # Example
@@ -58,6 +65,16 @@ const MAX_SPAN_STARTS: usize = 32;
 /// ```
 #[must_use]
 pub fn extract_json(text: &str) -> Option<Value> {
+    extract(text, true)
+}
+
+/// Like [`extract_json`], but without the last step: output that was cut
+/// off mid-value yields `None` instead of a closed-up guess.
+pub fn extract_complete_json(text: &str) -> Option<Value> {
+    extract(text, false)
+}
+
+fn extract(text: &str, close_truncated_output: bool) -> Option<Value> {
     if text.len() > MAX_INPUT_BYTES {
         return None;
     }
@@ -65,6 +82,8 @@ pub fn extract_json(text: &str) -> Option<Value> {
     if let Some(v) = try_parse(trimmed) {
         return Some(v);
     }
+    let answer = strip_reasoning(trimmed);
+    let trimmed = answer.trim();
     for block in fenced_blocks(trimmed) {
         if let Some(v) = try_parse(block) {
             return Some(v);
@@ -82,9 +101,58 @@ pub fn extract_json(text: &str) -> Option<Value> {
             return Some(v);
         }
     }
+    if !close_truncated_output {
+        return None;
+    }
     let start = trimmed.find(['{', '['])?;
     let closed = close_truncated(&trimmed[start..])?;
     try_parse(&closed)
+}
+
+/// Opening and closing tags of the reasoning blocks some models emit before
+/// their answer.
+const REASONING_TAGS: [(&str, &str); 3] = [
+    ("<think>", "</think>"),
+    ("<thinking>", "</thinking>"),
+    ("<reasoning>", "</reasoning>"),
+];
+
+/// Remove reasoning blocks (`<think>…</think>` and friends) whose opening
+/// tag starts a line, so draft JSON inside them can't be taken for the
+/// answer. An unclosed block runs to the end of the text.
+fn strip_reasoning(text: &str) -> Cow<'_, str> {
+    let mut out = String::new();
+    let mut rest = text;
+    let mut changed = false;
+    while let Some((at, open, close)) = find_reasoning_open(rest) {
+        changed = true;
+        out.push_str(&rest[..at]);
+        let inside = &rest[at + open.len()..];
+        let Some(end) = inside.find(close) else {
+            rest = "";
+            break;
+        };
+        rest = &inside[end + close.len()..];
+    }
+    if !changed {
+        return Cow::Borrowed(text);
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
+/// The first reasoning opening tag in `s` that only whitespace precedes on
+/// its line: (byte offset, opening tag, closing tag).
+fn find_reasoning_open(s: &str) -> Option<(usize, &'static str, &'static str)> {
+    let line_starts = std::iter::once(0).chain(s.match_indices('\n').map(|(i, _)| i + 1));
+    for start in line_starts {
+        let line = &s[start..];
+        let content = line.trim_start_matches([' ', '\t', '\r']);
+        if let Some(&(open, close)) = REASONING_TAGS.iter().find(|(o, _)| content.starts_with(o)) {
+            return Some((start + line.len() - content.len(), open, close));
+        }
+    }
+    None
 }
 
 /// Parse `s` as-is, then with trailing commas removed.
@@ -315,6 +383,29 @@ mod tests {
         assert_eq!(
             extract_json(r#"x {"q": "say \"}\" now"} y"#),
             Some(json!({"q": "say \"}\" now"}))
+        );
+    }
+
+    #[test]
+    fn reasoning_blocks_are_skipped() {
+        assert_eq!(
+            extract_json("<think>draft {\"a\":1}</think>\n{\"a\":2}"),
+            Some(json!({"a": 2}))
+        );
+        assert_eq!(
+            extract_json("<think>```json\n{\"a\":1}\n```</think>{\"a\":2}"),
+            Some(json!({"a": 2}))
+        );
+        assert_eq!(
+            extract_json("<reasoning>\n[1]\n</reasoning>\n\n```json\n[2]\n```"),
+            Some(json!([2]))
+        );
+        // Still thinking: nothing after the open tag is an answer yet.
+        assert_eq!(extract_json("<think>maybe {\"a\":1}"), None);
+        // A tag inside a JSON string is data, not a reasoning block.
+        assert_eq!(
+            extract_json("Result: {\"html\": \"<think>\"} ok"),
+            Some(json!({"html": "<think>"}))
         );
     }
 }

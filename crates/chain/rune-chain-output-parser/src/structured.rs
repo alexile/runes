@@ -9,6 +9,7 @@ use rune_chain_core::{ChainError, GenerateResult, Llm, LlmError, Message, TokenU
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use crate::extract::extract_complete_json;
 use crate::{JsonSchema, MAX_INPUT_BYTES, OutputParser, Violation, extract_json};
 
 /// Default number of repair attempts after the first generation.
@@ -90,10 +91,16 @@ impl From<StructuredError> for ChainError {
 }
 
 fn join_violations(v: &[Violation]) -> String {
-    v.iter()
-        .map(ToString::to_string)
+    let mut out = v
+        .iter()
+        .take(MAX_LISTED_VIOLATIONS)
+        .map(|v| quote(&v.to_string()))
         .collect::<Vec<_>>()
-        .join("; ")
+        .join("; ");
+    if v.len() > MAX_LISTED_VIOLATIONS {
+        let _ = write!(out, "; … and {} more", v.len() - MAX_LISTED_VIOLATIONS);
+    }
+    out
 }
 
 fn quote(text: &str) -> String {
@@ -307,13 +314,27 @@ impl<T> StructuredOutputParser<T> {
 
     /// Extract and validate the JSON value in `text`, without deserializing.
     pub fn validate_text(&self, text: &str) -> Result<Value, StructuredError> {
+        self.validate_inner(text, false)
+    }
+
+    /// `truncated` means the model hit its token limit: lenient extraction
+    /// then won't close a value that was cut off midway.
+    fn validate_inner(&self, text: &str, truncated: bool) -> Result<Value, StructuredError> {
         if text.len() > self.max_input_bytes {
             return Err(StructuredError::TooLarge {
                 len: text.len(),
                 limit: self.max_input_bytes,
             });
         }
-        let value = if self.lenient {
+        let value = if self.lenient && truncated {
+            extract_complete_json(text).ok_or_else(|| {
+                StructuredError::NoJson(format!(
+                    "the output was cut off by the token limit before the JSON value was \
+                     complete; got {:?}",
+                    quote(text.trim())
+                ))
+            })?
+        } else if self.lenient {
             extract_json(text)
                 .ok_or_else(|| StructuredError::NoJson(format!("got {:?}", quote(text.trim()))))?
         } else {
@@ -335,14 +356,14 @@ impl<T> StructuredOutputParser<T> {
             StructuredError::SchemaViolation(vs) => {
                 p.push_str("it does not match the JSON schema.\nProblems:\n");
                 for v in vs.iter().take(MAX_LISTED_VIOLATIONS) {
-                    let _ = writeln!(p, "- {v}");
+                    let _ = writeln!(p, "- {}", quote(&v.to_string()));
                 }
                 if vs.len() > MAX_LISTED_VIOLATIONS {
                     let _ = writeln!(p, "- … and {} more", vs.len() - MAX_LISTED_VIOLATIONS);
                 }
             }
             other => {
-                let _ = writeln!(p, "{other}.");
+                let _ = writeln!(p, "{}.", quote(&other.to_string()));
             }
         }
         p.push_str(
@@ -357,7 +378,11 @@ impl<T> StructuredOutputParser<T> {
 impl<T: DeserializeOwned> StructuredOutputParser<T> {
     /// Extract, validate and deserialize `text`, keeping the JSON value.
     pub fn parse_value(&self, text: &str) -> Result<(T, Value), StructuredError> {
-        let value = self.validate_text(text)?;
+        self.parse_inner(text, false)
+    }
+
+    fn parse_inner(&self, text: &str, truncated: bool) -> Result<(T, Value), StructuredError> {
+        let value = self.validate_inner(text, truncated)?;
         let typed =
             T::deserialize(&value).map_err(|e| StructuredError::Deserialize(e.to_string()))?;
         self.check(&typed)?;
@@ -377,7 +402,10 @@ impl<T: DeserializeOwned> StructuredOutputParser<T> {
     /// `generate` is called with `None` for the first attempt and with a
     /// [`RepairRequest`] for each retry; it returns the model's
     /// [`GenerateResult`]. Errors from `generate` end the loop immediately
-    /// (they are transport failures, not bad output). This is how to use the
+    /// (they are transport failures, not bad output). When a result was cut
+    /// off by the token limit ([`GenerateResult::is_truncated`]), an
+    /// unfinished JSON value is re-asked instead of being closed up and
+    /// accepted. This is how to use the
     /// repair loop with a [`Chain`](rune_chain_core::Chain): put
     /// `request.feedback` into the prompt arguments.
     ///
@@ -424,8 +452,9 @@ impl<T: DeserializeOwned> StructuredOutputParser<T> {
             if let Some(t) = &result.tokens {
                 usage = Some(usage.map_or_else(|| t.clone(), |u| u.combine(t)));
             }
+            let truncated = result.is_truncated();
             let raw = result.generation;
-            match self.parse_value(&raw) {
+            match self.parse_inner(&raw, truncated) {
                 Ok((value, json)) => {
                     return Ok(StructuredOutput {
                         value,
@@ -782,5 +811,64 @@ mod tests {
             })
             .await;
         assert_eq!(attempts_seen, [None, Some(2)]);
+    }
+
+    #[tokio::test]
+    async fn truncated_output_is_reasked_not_closed() {
+        let p = StructuredOutputParser::<Vec<u32>>::new(json!({
+            "type": "array", "items": {"type": "integer"}
+        }))
+        .unwrap();
+        let out = p
+            .repair_loop(|req| async move {
+                Ok::<_, ChainError>(match req {
+                    None => GenerateResult::from_text("[1, 2, 3, 4")
+                        .with_finish_reason(rune_chain_core::FinishReason::Length),
+                    Some(r) => {
+                        assert!(r.feedback.contains("cut off"), "{}", r.feedback);
+                        GenerateResult::from_text("[1, 2, 3, 4, 5]")
+                    }
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.value, [1, 2, 3, 4, 5]);
+        assert_eq!(out.attempts, 2);
+    }
+
+    #[tokio::test]
+    async fn complete_json_before_a_cut_off_tail_is_kept() {
+        let p = StructuredOutputParser::<Vec<u32>>::new(json!({"type": "array"})).unwrap();
+        let out = p
+            .repair_loop(|_| async move {
+                Ok::<_, ChainError>(
+                    GenerateResult::from_text("[1, 2] and some notes that got cut")
+                        .with_finish_reason(rune_chain_core::FinishReason::Length),
+                )
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.value, [1, 2]);
+        assert_eq!(out.attempts, 1);
+    }
+
+    #[test]
+    fn repair_prompt_is_bounded() {
+        let p = StructuredOutputParser::<Value>::new(json!({
+            "type": "object",
+            "additionalProperties": {"type": "object", "additionalProperties": false}
+        }))
+        .unwrap();
+        let long = "k".repeat(100_000);
+        let inner: serde_json::Map<String, Value> =
+            (0..30).map(|i| (format!("{long}{i}"), json!(1))).collect();
+        let text = json!({ long.clone(): inner }).to_string();
+        let err = p.validate_text(&text).unwrap_err();
+        let prompt = p.repair_prompt(&err);
+        assert!(prompt.len() < 16_384, "{}", prompt.len());
+        assert!(err.to_string().len() < 16_384);
+
+        let other = StructuredError::Deserialize(format!("invalid value: {long}"));
+        assert!(p.repair_prompt(&other).len() < 16_384);
     }
 }

@@ -33,6 +33,9 @@ use crate::StructuredError;
 /// never descend into the instance (such as `{"$ref": "#"}`).
 const MAX_DEPTH: usize = 128;
 
+/// How many `enum` options a violation message lists before summarising.
+const MAX_LISTED_OPTIONS: usize = 20;
+
 const TYPE_NAMES: [&str; 7] = [
     "null", "boolean", "object", "array", "string", "number", "integer",
 ];
@@ -294,12 +297,18 @@ impl JsonSchema {
             }
         }
         if s.get("uniqueItems") == Some(&Value::Bool(true)) {
+            // Bucket items by a hash that agrees with `json_eq`, so only
+            // items that may be equal get compared (linear, not quadratic).
+            let mut seen: HashMap<u64, Vec<usize>> = HashMap::with_capacity(a.len());
             for (i, x) in a.iter().enumerate() {
-                if a[..i].iter().any(|y| json_eq(x, y)) {
+                let bucket = seen.entry(json_hash(x)).or_default();
+                if bucket.iter().any(|&j| json_eq(x, &a[j])) {
                     out.push(Violation::new(
                         &child_path(path, &i.to_string()),
                         "array items must be unique",
                     ));
+                } else {
+                    bucket.push(i);
                 }
             }
         }
@@ -359,7 +368,14 @@ fn check_enum_const(s: &Map<String, Value>, v: &Value, path: &str, out: &mut Vec
     if let Some(Value::Array(options)) = s.get("enum")
         && !options.iter().any(|o| json_eq(o, v))
     {
-        let list: Vec<String> = options.iter().map(Value::to_string).collect();
+        let mut list: Vec<String> = options
+            .iter()
+            .take(MAX_LISTED_OPTIONS)
+            .map(Value::to_string)
+            .collect();
+        if options.len() > MAX_LISTED_OPTIONS {
+            list.push(format!("… {} more", options.len() - MAX_LISTED_OPTIONS));
+        }
         out.push(Violation::new(
             path,
             format!("value must be one of [{}]", list.join(", ")),
@@ -428,7 +444,7 @@ fn check_count(
     out: &mut Vec<Violation>,
 ) {
     let len = u64::try_from(len).unwrap_or(u64::MAX);
-    if let Some(min) = s.get(min_key).and_then(Value::as_u64)
+    if let Some(min) = s.get(min_key).and_then(count_bound)
         && len < min
     {
         out.push(Violation::new(
@@ -436,7 +452,7 @@ fn check_count(
             format!("has {len} {unit}, fewer than the minimum {min}"),
         ));
     }
-    if let Some(max) = s.get(max_key).and_then(Value::as_u64)
+    if let Some(max) = s.get(max_key).and_then(count_bound)
         && len > max
     {
         out.push(Violation::new(
@@ -444,6 +460,21 @@ fn check_count(
             format!("has {len} {unit}, more than the maximum {max}"),
         ));
     }
+}
+
+/// A count keyword's value: a non-negative integer, also when written as a
+/// whole-number float such as `1.0`.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the float is checked to be a non-negative whole number; huge values saturate"
+)]
+fn count_bound(v: &Value) -> Option<u64> {
+    v.as_u64().or_else(|| {
+        v.as_f64()
+            .filter(|f| f.is_finite() && *f >= 0.0 && f.fract() == 0.0)
+            .map(|f| f as u64)
+    })
 }
 
 fn type_matches(name: &str, v: &Value) -> bool {
@@ -494,14 +525,62 @@ fn json_eq(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// Numbers compare by exact mathematical value: `1` equals `1.0`, but a
+/// large integer does not equal the nearest float.
 fn num_eq(x: &Number, y: &Number) -> bool {
-    if let (Some(i), Some(j)) = (x.as_i64(), y.as_i64()) {
-        return i == j;
+    match (num_int(x), num_int(y)) {
+        (Some(i), Some(j)) => i == j,
+        (None, None) => x.as_f64() == y.as_f64(),
+        _ => false,
     }
-    if let (Some(i), Some(j)) = (x.as_u64(), y.as_u64()) {
-        return i == j;
+}
+
+/// The exact integer value of `n`, if it has one (`2.0` counts).
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "whole floats below 2^127 convert to i128 exactly"
+)]
+fn num_int(n: &Number) -> Option<i128> {
+    if let Some(i) = n.as_i64() {
+        return Some(i128::from(i));
     }
-    x.as_f64() == y.as_f64()
+    if let Some(u) = n.as_u64() {
+        return Some(i128::from(u));
+    }
+    n.as_f64()
+        .filter(|f| f.is_finite() && f.fract() == 0.0 && f.abs() < 2f64.powi(127))
+        .map(|f| f as i128)
+}
+
+/// A hash consistent with [`json_eq`]: equal values hash equally (numbers
+/// by value, object members independent of order).
+fn json_hash(v: &Value) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    match v {
+        Value::Null => 0u8.hash(&mut h),
+        Value::Bool(b) => (1u8, b).hash(&mut h),
+        Value::Number(n) => match num_int(n) {
+            Some(i) => (2u8, i).hash(&mut h),
+            None => (3u8, n.as_f64().map(f64::to_bits)).hash(&mut h),
+        },
+        Value::String(s) => (4u8, s).hash(&mut h),
+        Value::Array(a) => {
+            (5u8, a.len()).hash(&mut h);
+            for item in a {
+                json_hash(item).hash(&mut h);
+            }
+        }
+        Value::Object(o) => {
+            let members = o.iter().fold(0u64, |acc, (k, val)| {
+                let mut kh = std::collections::hash_map::DefaultHasher::new();
+                (k, json_hash(val)).hash(&mut kh);
+                acc.wrapping_add(kh.finish())
+            });
+            (6u8, o.len(), members).hash(&mut h);
+        }
+    }
+    h.finish()
 }
 
 /// Append `segment` to a JSON Pointer, escaping `~` and `/` (RFC 6901 §3).
@@ -844,5 +923,49 @@ mod tests {
         assert_eq!(v.to_string(), "at /: boom");
         let v = Violation::new("/a", "boom");
         assert_eq!(v.to_string(), "at /a: boom");
+    }
+
+    #[test]
+    fn whole_number_float_count_limits_apply() {
+        let s = schema(json!({"type": "array", "minItems": 1.0, "maxItems": 2.0}));
+        assert!(!s.is_valid(&json!([])));
+        assert!(s.is_valid(&json!([1])));
+        assert!(!s.is_valid(&json!([1, 2, 3])));
+        let s = schema(json!({"maxLength": 3.0}));
+        assert!(!s.is_valid(&json!("abcd")));
+        let s = schema(json!({"minProperties": 1.0}));
+        assert!(!s.is_valid(&json!({})));
+    }
+
+    #[test]
+    fn unique_items_is_not_quadratic() {
+        let s = schema(json!({"type": "array", "uniqueItems": true}));
+        let big = Value::Array((0..200_000).map(|i| json!(i)).collect());
+        let started = std::time::Instant::now();
+        assert!(s.is_valid(&big));
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
+    #[test]
+    fn unique_items_uses_json_equality() {
+        let s = schema(json!({"type": "array", "uniqueItems": true}));
+        assert_eq!(paths(&s, &json!([1, 2, 1.0])), ["/2"]);
+        assert_eq!(paths(&s, &json!([0, -0.0])), ["/1"]);
+        assert_eq!(
+            paths(&s, &json!([{"a": 1, "b": [2]}, {"b": [2.0], "a": 1.0}])),
+            ["/1"]
+        );
+        assert!(s.is_valid(&json!([1, "1", [1], {"a": 1}, true, null, 1.5])));
+        assert!(s.is_valid(&json!([9_007_199_254_740_993_i64, 9_007_199_254_740_992.0])));
+        assert_eq!(paths(&s, &json!([u64::MAX, u64::MAX])), ["/1"]);
+    }
+
+    #[test]
+    fn enum_violation_lists_a_bounded_number_of_options() {
+        let options: Vec<Value> = (0..1000).map(|i| json!(format!("opt{i}"))).collect();
+        let s = schema(json!({"enum": options}));
+        let msg = s.validate(&json!("nope")).unwrap_err()[0].message.clone();
+        assert!(msg.len() < 1000, "{msg}");
+        assert!(msg.contains("opt0") && msg.contains("more"));
     }
 }
