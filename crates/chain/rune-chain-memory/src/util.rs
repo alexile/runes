@@ -16,8 +16,45 @@ pub fn report(hook: Option<&ErrorHook>, err: &ChainError) {
 }
 
 /// Stop untrusted text from closing our delimiters early.
+///
+/// Every `<` that a lenient reader (a model) could take as the start of a
+/// closing tag becomes `<\\/`: plain `</`, and also `< /`, `<\n/` or `<` and
+/// `/` with zero-width or other invisible characters between them.
 pub fn neutralize(s: &str) -> String {
-    s.replace("</", "<\\/")
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(i) = rest.find('<') {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 1..];
+        let gap = after
+            .find(|c: char| !c.is_whitespace() && !is_invisible(c))
+            .unwrap_or(after.len());
+        if after[gap..].starts_with('/') {
+            out.push_str("<\\/");
+            rest = &after[gap + 1..];
+        } else {
+            out.push('<');
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Zero-width, bidi and other format characters a reader skips over.
+const fn is_invisible(c: char) -> bool {
+    matches!(c,
+        '\u{ad}'
+        | '\u{34f}'
+        | '\u{61c}'
+        | '\u{180e}'
+        | '\u{200b}'..='\u{200f}'
+        | '\u{202a}'..='\u{202e}'
+        | '\u{2060}'..='\u{206f}'
+        | '\u{fe00}'..='\u{fe0f}'
+        | '\u{feff}'
+        | '\u{e0000}'..='\u{e007f}'
+    )
 }
 
 /// Lock `m`, recovering the data if a previous holder panicked.
@@ -124,6 +161,34 @@ mod tests {
     #[test]
     fn neutralize_breaks_closing_tags() {
         assert_eq!(neutralize("x</t>y"), "x<\\/t>y");
+    }
+
+    /// Whether `s` still has a `<` that a lenient reader would take as the
+    /// start of a closing tag: whitespace or invisible characters may sit
+    /// between `<` and `/`.
+    fn has_closing_tag(s: &str) -> bool {
+        s.match_indices('<').any(|(i, _)| {
+            s[i + 1..]
+                .chars()
+                .find(|&c| !c.is_whitespace() && !is_invisible(c))
+                == Some('/')
+        })
+    }
+
+    #[test]
+    fn neutralize_breaks_spaced_and_invisible_closing_tags() {
+        for sneaky in [
+            "</exchange>",
+            "< /past_conversation>",
+            "<\t/exchange>",
+            "<\n/summary>",
+            "<\u{200b}/entity_notes>",
+            "<\u{feff} \u{2060}/transcript>",
+        ] {
+            let out = neutralize(sneaky);
+            assert!(!has_closing_tag(&out), "{sneaky:?} -> {out:?}");
+        }
+        assert_eq!(neutralize("a < b, c <= d"), "a < b, c <= d");
     }
 
     #[test]
