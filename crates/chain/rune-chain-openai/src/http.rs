@@ -151,9 +151,12 @@ pub fn retry_after(headers: &HeaderMap) -> Option<Duration> {
             .and_then(|v| v.trim().parse::<f64>().ok())
             .filter(|v| v.is_finite() && *v >= 0.0)
     };
+    // Clamp before converting: `Duration::from_secs_f64` panics on values
+    // too large for a `Duration`, and the header is server-controlled.
+    let secs = |s: f64| Duration::from_secs_f64(s.min(86_400.0));
     get("retry-after-ms")
-        .map(|ms| Duration::from_secs_f64(ms / 1000.0))
-        .or_else(|| get("retry-after").map(Duration::from_secs_f64))
+        .map(|ms| secs(ms / 1000.0))
+        .or_else(|| get("retry-after").map(secs))
 }
 
 /// Delay before retry number `attempt` (0-based): the server's

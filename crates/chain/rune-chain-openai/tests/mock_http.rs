@@ -383,3 +383,15 @@ fn refusals_are_results_but_fail_structured_output() {
     });
     server.finish().unwrap();
 }
+
+#[test]
+fn absurd_retry_after_does_not_panic() {
+    for (name, value) in [("retry-after", "1e30"), ("retry-after-ms", "1e300")] {
+        let server =
+            MockServer::start([MockResponse::json(429, "{}").with_header(name, value)]).unwrap();
+        let err =
+            tokio_test::block_on(client(&server).generate(&[Message::human("Hi")])).unwrap_err();
+        assert_eq!(err.kind(), LlmErrorKind::RateLimit, "{err:?}");
+        assert_eq!(server.finish().unwrap().len(), 1);
+    }
+}

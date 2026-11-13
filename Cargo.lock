@@ -3257,7 +3257,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-agent"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -3269,7 +3269,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-anthropic"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3286,7 +3286,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-autonomous"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "proptest",
@@ -3416,7 +3416,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-openai"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-stream",
  "async-trait",
