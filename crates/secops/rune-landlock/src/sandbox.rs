@@ -184,8 +184,21 @@ pub enum Status {
 }
 
 /// The result of [`restrict_self`].
+///
+/// Check [`Report::status`]: on a kernel without Landlock, [`restrict_self`]
+/// succeeds with [`Status::NotEnforced`] and nothing is restricted.
+/// Ignoring the report is a warning:
+///
+/// ```compile_fail
+/// #![deny(unused_must_use)]
+/// fn restrict() -> Result<(), rune_landlock::Error> {
+///     rune_landlock::restrict_self(&rune_landlock::Options::default())?;
+///     Ok(())
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
+#[must_use = "check `status`: the ruleset may not be enforced at all"]
 pub struct Report {
     /// How much of the ruleset is enforced.
     pub status: Status,
