@@ -105,3 +105,50 @@ proptest! {
         }
     }
 }
+
+/// A server, with permessage-deflate when the feature is on.
+fn server(max_message: usize) -> Connection {
+    let server = Connection::server(Options::default().with_max_message_size(max_message));
+    #[cfg(feature = "deflate")]
+    let server = server.with_deflate(rune_ws::DeflateParams::default());
+    server
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn mutated_streams_never_panic(
+        texts in prop::collection::vec(".{0,80}", 1..4),
+        fragment in 1usize..40,
+        edits in prop::collection::vec((any::<prop::sample::Index>(), any::<u8>()), 0..6),
+        chunk in 1usize..64,
+    ) {
+        let client = Connection::client(
+            Options::default().with_send_fragment_size(Some(fragment)),
+            || [9, 8, 7, 6],
+        );
+        #[cfg(feature = "deflate")]
+        let client = client.with_deflate(rune_ws::DeflateParams::default());
+        let mut client = client;
+        for text in &texts {
+            client.send(Message::Text(text.clone())).unwrap();
+            client.send(Message::Ping(b"p".to_vec())).unwrap();
+        }
+        let mut bytes = client.take_outgoing();
+        for (at, byte) in edits {
+            let i = at.index(bytes.len());
+            bytes[i] ^= byte;
+        }
+        let mut server = server(256);
+        for piece in bytes.chunks(chunk) {
+            server.receive(piece);
+            while let Some(item) = server.next_message() {
+                if item.is_err() {
+                    prop_assert!(server.is_closed());
+                }
+            }
+        }
+        let _ = server.take_outgoing();
+    }
+}
