@@ -384,15 +384,22 @@ impl ApiReranker {
             buf.extend_from_slice(&chunk);
         }
         if !status.is_success() {
-            return Err(RerankError::Status {
-                status: status.as_u16(),
-                body: String::from_utf8_lossy(&buf)
-                    .chars()
-                    .take(ERROR_BODY_CHARS)
-                    .collect(),
-            });
+            return Err(status_error(status.as_u16(), &buf, &self.api_key));
         }
         Ok(buf)
+    }
+}
+
+/// [`RerankError::Status`] with the body truncated and any echo of the API
+/// key (some gateways repeat a rejected key) replaced by `[REDACTED]`.
+fn status_error(status: u16, body: &[u8], api_key: &str) -> RerankError {
+    let mut body = String::from_utf8_lossy(body).into_owned();
+    if api_key.len() >= 8 {
+        body = body.replace(api_key, "[REDACTED]");
+    }
+    RerankError::Status {
+        status,
+        body: body.chars().take(ERROR_BODY_CHARS).collect(),
     }
 }
 
@@ -523,6 +530,23 @@ mod tests {
         let dbg = format!("{r:?}");
         assert!(!dbg.contains("sk-super-secret-123"), "{dbg}");
         assert!(dbg.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn error_body_does_not_echo_the_api_key() {
+        let key = "sk-super-secret-123";
+        let body = format!(r#"{{"message":"invalid api token {key}"}}"#);
+        let err = status_error(401, body.as_bytes(), key);
+        let shown = err.to_string();
+        assert!(!shown.contains(key), "{shown}");
+        assert!(shown.contains("[REDACTED]"), "{shown}");
+        // A key split by the truncation point must not leak a prefix either.
+        let long = format!("{}{key}", "x".repeat(ERROR_BODY_CHARS - 6));
+        assert!(
+            !status_error(401, long.as_bytes(), key)
+                .to_string()
+                .contains("sk-sup")
+        );
     }
 
     #[test]
