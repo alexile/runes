@@ -58,7 +58,7 @@ impl Default for ScanOptions {
             rules: default_rules(),
             use_entropy: true,
             entropy_threshold: DEFAULT_ENTROPY_THRESHOLD,
-            max_file_bytes: 2_000_000,
+            max_file_bytes: crate::DEFAULT_MAX_FILE_BYTES,
             max_findings: 1000,
             excluded_dirs: DEFAULT_EXCLUDED_DIRS
                 .iter()

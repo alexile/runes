@@ -89,7 +89,9 @@ pub use history::{HistoryScanner, scan_git_history};
 pub use rule::{CWE_HARDCODED_CREDENTIALS, HIGH_ENTROPY_RULE_ID, SecretRule, default_rules};
 pub use ruleset::{DEFAULT_ENTROPY_THRESHOLD, Ruleset, SecretMatch};
 pub use scan::{DEFAULT_EXCLUDED_DIRS, ScanOptions, ScanReport, run};
-pub use simple::{Leak, LeakScanner, Severity, scan_dir, scan_file, scan_text};
+pub use simple::{
+    DEFAULT_MAX_FILE_BYTES, Leak, LeakScanner, Severity, scan_dir, scan_file, scan_text,
+};
 
 /// Parses user rules from TOML.
 ///

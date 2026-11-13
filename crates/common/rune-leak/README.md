@@ -22,6 +22,8 @@ layers:
   CWE-798 taxonomy reference. Scan a working tree and its **git history**.
 - **Simple API.** `scan_text`, `scan_file`, `scan_dir` and `LeakScanner`
   classify `rune-regex-sec` categories by entropy into a `Leak`.
+  `scan_dir` skips files over 2 MB (`DEFAULT_MAX_FILE_BYTES`; another cap
+  with `LeakScanner::scan_dir_with_max_file_bytes`).
 
 Secrets never reach findings: evidence carries a 4-character prefix and the
 length. Inline base64 images (`data:` URIs), UUIDs, URL paths and

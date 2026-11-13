@@ -1,9 +1,9 @@
-use crate::detect::{data_uri_payloads, redact};
+use crate::detect::redact;
 use rune_entropy::entropy;
 use rune_finding::{Confidence, Evidence, Finding, Location};
 use rune_regex_sec::scan as regex_scan;
-use std::fs;
-use std::io;
+use std::fs::{self, File};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -142,13 +142,9 @@ impl From<Severity> for rune_finding::Severity {
     }
 }
 
-/// Whether `value` (found somewhere in `line`) lies inside a data-URI payload.
-fn in_data_uri(line: &str, value: &str, payloads: &[(usize, usize)]) -> bool {
-    line.match_indices(value).any(|(start, _)| {
-        let end = start + value.len();
-        payloads.iter().any(|&(s, e)| start >= s && end <= e)
-    })
-}
+/// Files larger than this are skipped by [`LeakScanner::scan_dir`] and
+/// [`scan_dir`]: 2 MB, as [`ScanOptions`](crate::ScanOptions) does.
+pub const DEFAULT_MAX_FILE_BYTES: u64 = 2_000_000;
 
 /// Configurable secret scanner.
 ///
@@ -249,7 +245,10 @@ impl LeakScanner {
 
     /// Recursively scans a directory for leaks in all text files.
     ///
-    /// Files with a binary extension (images, archives, PDFs, …) are skipped.
+    /// Files with a binary extension (images, archives, PDFs, …), files
+    /// that are not valid UTF-8 and files over [`DEFAULT_MAX_FILE_BYTES`]
+    /// are skipped; [`LeakScanner::scan_dir_with_max_file_bytes`] sets
+    /// another cap. Symlinks are not followed.
     ///
     /// # Errors
     ///
@@ -267,6 +266,33 @@ impl LeakScanner {
     /// }
     /// ```
     pub fn scan_dir(&self, root: &Path) -> io::Result<Vec<Leak>> {
+        self.scan_dir_with_max_file_bytes(root, DEFAULT_MAX_FILE_BYTES)
+    }
+
+    /// [`LeakScanner::scan_dir`], skipping files over `max_file_bytes`
+    /// instead of [`DEFAULT_MAX_FILE_BYTES`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the root path cannot be accessed.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use rune_leak::LeakScanner;
+    ///
+    /// let dir = tempfile::tempdir()?;
+    /// std::fs::write(dir.path().join(".env"), "k = \"AKIAIOSFODNN7EXAMPLE\"\n")?;
+    /// let scanner = LeakScanner::new();
+    /// assert_eq!(scanner.scan_dir_with_max_file_bytes(dir.path(), 1024)?.len(), 1);
+    /// assert!(scanner.scan_dir_with_max_file_bytes(dir.path(), 16)?.is_empty());
+    /// # Ok::<(), std::io::Error>(())
+    /// ```
+    pub fn scan_dir_with_max_file_bytes(
+        &self,
+        root: &Path,
+        max_file_bytes: u64,
+    ) -> io::Result<Vec<Leak>> {
         let mut all_leaks = Vec::new();
         for entry in WalkDir::new(root)
             .follow_links(false)
@@ -278,7 +304,13 @@ impl LeakScanner {
             if is_binary_path(path) {
                 continue;
             }
-            if let Ok(text) = fs::read_to_string(path) {
+            if entry
+                .metadata()
+                .map_or(true, |meta| meta.len() > max_file_bytes)
+            {
+                continue;
+            }
+            if let Some(text) = read_capped(path, max_file_bytes) {
                 all_leaks.extend(self.scan_lines(&text, Some(path)));
             }
         }
@@ -287,14 +319,8 @@ impl LeakScanner {
 
     fn scan_lines(&self, text: &str, file: Option<&Path>) -> Vec<Leak> {
         let mut leaks = Vec::new();
-        let mut payloads = Vec::new();
         for (idx, line) in text.lines().enumerate() {
-            data_uri_payloads(line, &mut payloads);
             for f in regex_scan(line) {
-                // Inline images and fonts are base64, not credentials.
-                if f.category == "base64_secret" && in_data_uri(line, &f.value, &payloads) {
-                    continue;
-                }
                 let value_entropy = entropy(f.value.as_bytes());
                 let Some(severity) = self.classify(f.category, value_entropy) else {
                     continue;
@@ -385,6 +411,21 @@ pub fn scan_file(path: &Path) -> io::Result<Vec<Leak>> {
 /// ```
 pub fn scan_dir(root: &Path) -> io::Result<Vec<Leak>> {
     LeakScanner::new().scan_dir(root)
+}
+
+/// The file's text, or `None` if it cannot be read, is not UTF-8 or has
+/// grown past `max_bytes` since it was listed.
+fn read_capped(path: &Path, max_bytes: u64) -> Option<String> {
+    let mut bytes = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if u64::try_from(bytes.len()).map_or(true, |len| len > max_bytes) {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn is_binary_path(path: &Path) -> bool {
@@ -492,6 +533,30 @@ mod tests {
         let finding = leaks[0].to_finding::<()>();
         assert_eq!(finding.severity, rune_finding::Severity::Critical);
         assert_eq!(finding.taxonomy[0].cwe_number(), Some(798));
+    }
+
+    #[test]
+    fn scan_dir_skips_files_over_the_size_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "k = \"AKIAIOSFODNN7EXAMPLE\"\n";
+        std::fs::write(dir.path().join("small.env"), key).unwrap();
+        let mut big = key.repeat(2);
+        big.push_str(&"#".repeat(2_000_000));
+        std::fs::write(dir.path().join("big.env"), &big).unwrap();
+
+        let leaks = scan_dir(dir.path()).unwrap();
+        assert_eq!(leaks.len(), 1, "{leaks:?}");
+        assert!(leaks[0].file.as_ref().unwrap().ends_with("small.env"));
+
+        let scanner = LeakScanner::new();
+        let all = scanner
+            .scan_dir_with_max_file_bytes(dir.path(), 3_000_000)
+            .unwrap();
+        assert_eq!(all.len(), 3);
+        let none = scanner
+            .scan_dir_with_max_file_bytes(dir.path(), key.len() as u64 - 1)
+            .unwrap();
+        assert!(none.is_empty());
     }
 
     #[test]
