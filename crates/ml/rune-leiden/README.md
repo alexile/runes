@@ -11,8 +11,11 @@
 `rune-leiden` partitions the nodes of a weighted undirected graph into communities. Two
 algorithms are included:
 
-- **Leiden** (Traag, Waltman & van Eck, 2019) adds a refinement step to Louvain, so every
-  community it returns is connected.
+- **Leiden** (Traag, Waltman & van Eck, 2019) follows the paper's algorithm: fast local
+  moving with a node queue, a randomised refinement step that only merges well-connected
+  nodes and sub-communities, and aggregation of the refined partition starting from the
+  unrefined one. Every community it returns is connected (in fact γ-connected), and it
+  usually reaches higher quality than Louvain.
 - **Louvain** (Blondel, Guillaume, Lambiotte & Lefebvre, 2008) is the classic multi-level
   method. It is slightly cheaper, but it can occasionally return a community that is
   internally disconnected.
@@ -29,7 +32,7 @@ graphs and similarity graphs.
 
 ```toml
 [dependencies]
-rune-leiden = "0.2"
+rune-leiden = "0.3"
 ```
 
 The `rune-leiden` command-line tool is behind the opt-in `cli` feature:
@@ -94,11 +97,28 @@ let coarse = Leiden::new().resolution(0.5).try_fit(4, &edges)?;
 let dense = Leiden::new().quality(Quality::Cpm).resolution(0.3).try_fit(4, &edges)?;
 ```
 
+### Leiden's randomness
+
+During refinement a node joins one of the eligible neighbouring sub-communities (or stays
+alone) with probability proportional to `exp(ΔH / θ)`, where `ΔH` is the quality gain in
+edge-weight units. `θ` defaults to `0.01`, the value used in the paper; `0` makes the
+choice greedy, larger values explore more. Draws come from the seeded PRNG, so a given
+seed and `θ` always give the same result.
+
+```rust
+use rune_leiden::Leiden;
+
+let edges = [(0, 1, 1.0), (1, 2, 1.0), (0, 2, 1.0), (2, 3, 1.0)];
+let result = Leiden::new().randomness(0.05).random_seed(3).try_fit(4, &edges)?;
+```
+
 ### Hierarchy
 
 `fit_hierarchy` returns the partition after every aggregation level, finest first. For
 Louvain each level merges whole communities of the previous one (a dendrogram). Leiden
-aggregates refined sub-communities, so its levels are not always strictly nested.
+aggregates refined sub-communities and repeats whole iterations, so its levels are not
+always strictly nested; its last level is the best one and the only one guaranteed to have
+connected communities.
 
 ```rust
 use rune_leiden::Louvain;
@@ -115,7 +135,7 @@ let best = hierarchy.best();
 
 `try_fit`, `fit_hierarchy`, `modularity` and `cpm` return an `Error` for an empty graph
 (no nodes), out-of-range node indices, negative or non-finite weights, and a negative or
-non-finite resolution. Parallel edges are summed, zero-weight edges are allowed, and
+non-finite resolution or Leiden randomness. Parallel edges are summed, zero-weight edges are allowed, and
 self-loops are ignored everywhere. `Leiden::fit` keeps its original contract: it panics
 on out-of-range indices and does not check weights.
 
@@ -127,6 +147,7 @@ rune-leiden edges.txt --resolution 0.5         # coarser communities
 rune-leiden edges.txt --algorithm louvain      # Louvain instead of Leiden
 rune-leiden edges.txt --quality cpm --resolution 0.1
 rune-leiden edges.txt --seed 123               # deterministic
+rune-leiden edges.txt --randomness 0           # greedy Leiden refinement
 cat edges.txt | rune-leiden -                  # stdin
 ```
 
@@ -155,6 +176,29 @@ $ echo -e "0 1\n1 2\n0 2\n3 4\n4 5\n3 5\n2 3 0.01" | rune-leiden -
 1
 # 6 nodes → 2 communities  modularity 0.498336
 ```
+
+## Migrating from 0.2
+
+The API is unchanged apart from the new `Leiden::randomness` option and
+`Error::InvalidRandomness`, but **Leiden returns different partitions for the same seed**.
+0.2 started every aggregation level from singletons and refined greedily. 0.3 implements
+the algorithm as published: fast local moving with a queue, refinement restricted to
+well-connected nodes and sub-communities with randomised merges (`θ = 0.01`), the next
+level initialised from the unrefined partition, and iterations repeated until the
+partition stops changing. Quality is higher as a result (on random test graphs Leiden now
+beats Louvain on average, where 0.2 fell slightly behind), and communities are still
+always connected. `max_iter` now caps local-moving passes over all levels and iterations.
+Louvain's output is unchanged. If you stored partitions or tuned seeds against 0.2, rerun
+them.
+
+## References
+
+- V. A. Traag, L. Waltman & N. J. van Eck, "From Louvain to Leiden: guaranteeing
+  well-connected communities", *Scientific Reports* 9, 5233 (2019).
+  doi:10.1038/s41598-019-41695-z
+- V. D. Blondel, J.-L. Guillaume, R. Lambiotte & E. Lefebvre, "Fast unfolding of
+  communities in large networks", *J. Stat. Mech.* P10008 (2008).
+- U. Brandes et al., "On Modularity Clustering", *IEEE TKDE* 20(2), 172–188 (2008).
 
 ## License
 

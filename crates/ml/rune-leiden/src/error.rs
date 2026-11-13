@@ -40,6 +40,8 @@ pub enum Error {
     },
     /// The resolution parameter is negative, NaN or infinite.
     InvalidResolution(f64),
+    /// The Leiden refinement randomness `θ` is negative, NaN or infinite.
+    InvalidRandomness(f64),
     /// A partition does not have exactly one entry per node.
     PartitionLength {
         /// The node count of the graph.
@@ -67,6 +69,9 @@ impl fmt::Display for Error {
             ),
             Self::InvalidResolution(r) => {
                 write!(f, "resolution {r} is not a finite non-negative number")
+            }
+            Self::InvalidRandomness(theta) => {
+                write!(f, "randomness {theta} is not a finite non-negative number")
             }
             Self::PartitionLength { expected, found } => write!(
                 f,
@@ -106,5 +111,14 @@ pub fn validate_resolution(resolution: f64) -> Result<(), Error> {
         Ok(())
     } else {
         Err(Error::InvalidResolution(resolution))
+    }
+}
+
+/// Checks the Leiden refinement randomness.
+pub fn validate_randomness(theta: f64) -> Result<(), Error> {
+    if theta.is_finite() && theta >= 0.0 {
+        Ok(())
+    } else {
+        Err(Error::InvalidRandomness(theta))
     }
 }

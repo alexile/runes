@@ -133,8 +133,8 @@ fn ring_of_cliques(k: usize, s: usize) -> Vec<(usize, usize, f64)> {
 fn karate_club_reaches_known_modularity() {
     let edges = karate();
     // The proven optimum modularity of the karate club is 0.419_79 with 4
-    // communities (Brandes et al., 2008); seed 2 reaches it exactly.
-    let result = Leiden::new().random_seed(2).fit(34, &edges);
+    // communities (Brandes et al., 2008); the default seed (42) reaches it.
+    let result = Leiden::new().random_seed(42).fit(34, &edges);
     assert!(
         (result.modularity - 0.419_790).abs() < 1e-5,
         "modularity {} is not the known optimum",

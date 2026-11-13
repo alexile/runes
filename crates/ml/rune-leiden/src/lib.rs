@@ -13,8 +13,11 @@
 //! `δ` the Kronecker delta. The Constant Potts Model ([`Quality::Cpm`]) is
 //! available as an alternative that does not suffer from the resolution limit.
 //!
-//! - [`Leiden`] (Traag, Waltman & van Eck, 2019) adds a refinement step to
-//!   Louvain so that every community it returns is connected.
+//! - [`Leiden`] (Traag, Waltman & van Eck, 2019, "From Louvain to Leiden:
+//!   guaranteeing well-connected communities", *Sci. Rep.* 9:5233) uses fast
+//!   local moving, a randomised refinement step and aggregation of the refined
+//!   partition. Every community it returns is connected (in fact
+//!   γ-connected), and it usually reaches higher quality than Louvain.
 //! - [`Louvain`] (Blondel et al., 2008) is the classic multi-level method.
 //!
 //! # Features
@@ -23,7 +26,8 @@
 //! - Modularity or CPM objective, configurable resolution `γ`
 //! - Hierarchical output: one partition per aggregation level
 //! - Standalone [`modularity`] and [`cpm`] functions to score any partition
-//! - Deterministic via `random_seed`
+//! - Deterministic via `random_seed`; Leiden's refinement randomness `θ` is
+//!   configurable
 //! - Validated entry points returning [`Error`]
 //! - Pure Rust, no unsafe, no dependencies
 //!
@@ -79,7 +83,31 @@ use engine::{Algorithm, Settings};
 
 /// Builder for configuring and running the Leiden community-detection algorithm.
 ///
-/// Construct with [`Leiden::new`], chain optional parameters, then call [`Leiden::fit`].
+/// Construct with [`Leiden::new`], chain optional parameters, then call
+/// [`Leiden::try_fit`] or [`Leiden::fit`].
+///
+/// The algorithm follows Traag, Waltman & van Eck (2019). Each iteration
+/// starts from the current partition `P` and repeats, level by level:
+///
+/// 1. **Fast local moving.** Nodes wait in a queue (random initial order).
+///    A node moves to the neighbouring or empty community with the largest
+///    positive gain; when it moves, its neighbours outside its new community
+///    are queued again.
+/// 2. If every community is a single node, the iteration ends.
+/// 3. **Refinement.** Inside each community `S`, nodes start alone. A node
+///    still alone and well connected to `S` may join a neighbouring
+///    sub-community that is itself well connected to the rest of `S`, chosen
+///    at random with probability `∝ exp(ΔH / θ)` among the non-negative
+///    gains (see [`Leiden::randomness`]).
+/// 4. **Aggregation.** Each refined sub-community becomes a node; the next
+///    level starts from `P`, not from singletons.
+///
+/// Iterations repeat until one leaves the partition unchanged. Every
+/// returned community is connected. It is also γ-connected: it can be built
+/// by repeatedly merging two parts `A`, `B` joined by at least the weight the
+/// objective expects between them (`γ·K_A·K_B / 2m` for modularity,
+/// `γ·n_A·n_B` for CPM). No two returned communities are worth merging.
+/// Identical settings and seed give identical results.
 ///
 /// # Example
 ///
@@ -97,6 +125,7 @@ pub struct Leiden {
     max_iter: usize,
     random_seed: u64,
     quality: Quality,
+    randomness: f64,
 }
 
 impl Default for Leiden {
@@ -114,6 +143,7 @@ impl Leiden {
     /// | `max_iter` | `100` |
     /// | `random_seed` | `42` |
     /// | `quality` | [`Quality::Modularity`] |
+    /// | `randomness` | `0.01` |
     ///
     /// # Example
     ///
@@ -129,6 +159,7 @@ impl Leiden {
             max_iter: 100,
             random_seed: 42,
             quality: Quality::Modularity,
+            randomness: 0.01,
         }
     }
 
@@ -150,10 +181,13 @@ impl Leiden {
         self
     }
 
-    /// Sets the maximum number of outer iterations (aggregation rounds).
+    /// Sets the maximum number of local-moving passes, counted over every
+    /// aggregation level of every Leiden iteration.
     ///
-    /// The algorithm terminates earlier if modularity stops improving. Defaults to `100`,
-    /// which is more than sufficient for most real-world graphs.
+    /// Leiden repeats its move–refine–aggregate iteration until one leaves the
+    /// partition unchanged, which normally happens long before the cap.
+    /// Defaults to `100`. If the cap cuts a run short, any disconnected
+    /// community is split into its connected components before returning.
     ///
     /// # Example
     ///
@@ -195,6 +229,36 @@ impl Leiden {
     #[must_use]
     pub const fn quality(mut self, quality: Quality) -> Self {
         self.quality = quality;
+        self
+    }
+
+    /// Sets the randomness `θ` of the refinement step. Defaults to `0.01`,
+    /// the value used by Traag, Waltman & van Eck (2019).
+    ///
+    /// During refinement a node joins one of the eligible neighbouring
+    /// sub-communities (or stays alone) with probability proportional to
+    /// `exp(ΔH / θ)`, where `ΔH` is the quality gain in edge-weight units
+    /// (`ΔH = w(v, C) − γ·k_v·K_C / 2m` for modularity,
+    /// `w(v, C) − γ·n_v·n_C` for CPM). Small values are close to greedy,
+    /// larger values explore more; `0` makes refinement fully greedy. The
+    /// draw uses the seeded PRNG, so results stay reproducible.
+    ///
+    /// The value is relative to the edge weights: if you scale every weight
+    /// by `k`, scale `θ` by `k` for the same behaviour.
+    ///
+    /// [`Leiden::try_fit`] and [`Leiden::fit_hierarchy`] reject a negative or
+    /// non-finite value; [`Leiden::fit`] treats one as `0`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rune_leiden::Leiden;
+    ///
+    /// let leiden = Leiden::new().randomness(0.05);
+    /// ```
+    #[must_use]
+    pub const fn randomness(mut self, theta: f64) -> Self {
+        self.randomness = theta;
         self
     }
 
@@ -252,14 +316,15 @@ impl Leiden {
     /// instead of panicking or producing a meaningless partition.
     ///
     /// Edges must have finite, non-negative weights and in-range endpoints,
-    /// the graph must have at least one node, and the resolution must be
-    /// finite and non-negative. Self-loops are accepted and ignored; parallel
+    /// the graph must have at least one node, and the resolution and
+    /// [randomness](Leiden::randomness) must be finite and non-negative. Self-loops are accepted and ignored; parallel
     /// edges are summed. Zero-weight edges are allowed.
     ///
     /// # Errors
     ///
     /// [`Error::EmptyGraph`], [`Error::NodeOutOfRange`],
-    /// [`Error::InvalidWeight`] or [`Error::InvalidResolution`].
+    /// [`Error::InvalidWeight`], [`Error::InvalidResolution`] or
+    /// [`Error::InvalidRandomness`].
     ///
     /// # Example
     ///
@@ -279,19 +344,23 @@ impl Leiden {
         edges: &[(usize, usize, f64)],
     ) -> Result<CommunityResult, Error> {
         validate(n_nodes, edges, self.resolution)?;
+        error::validate_randomness(self.randomness)?;
         if n_nodes == 1 {
             return Ok(trivial_result(1));
         }
         Ok(fit_unchecked(&self.settings(), n_nodes, edges))
     }
 
-    /// Runs Leiden and returns the partition reached after every aggregation
-    /// round, finest first.
+    /// Runs Leiden and returns the partition reached after every local-moving
+    /// pass, in order.
     ///
     /// Leiden collapses the refined sub-communities rather than the
-    /// communities themselves, so a later level is not always a coarsening of
-    /// the previous one. [`Hierarchy::best`] is the partition [`Leiden::fit`]
-    /// returns. Input rules are those of [`Leiden::try_fit`].
+    /// communities themselves, and repeats whole iterations, so a later level
+    /// is not always a coarsening of the previous one. Quality does not
+    /// decrease from one level to the next. Only the last level is
+    /// guaranteed to have connected communities; it is also
+    /// [`Hierarchy::best`], the partition [`Leiden::fit`] returns. Input rules
+    /// are those of [`Leiden::try_fit`].
     ///
     /// # Errors
     ///
@@ -318,6 +387,7 @@ impl Leiden {
         edges: &[(usize, usize, f64)],
     ) -> Result<Hierarchy, Error> {
         validate(n_nodes, edges, self.resolution)?;
+        error::validate_randomness(self.randomness)?;
         Ok(hierarchy_unchecked(&self.settings(), n_nodes, edges))
     }
 
@@ -328,6 +398,7 @@ impl Leiden {
             resolution: self.resolution,
             max_iter: self.max_iter,
             seed: self.random_seed,
+            randomness: self.randomness,
         }
     }
 }
@@ -457,7 +528,8 @@ pub struct Hierarchy {
 }
 
 impl Hierarchy {
-    /// The level with the highest quality (the first one on ties).
+    /// The level with the highest quality (the first one on ties). For
+    /// Leiden this is always the last level.
     ///
     /// # Example
     ///

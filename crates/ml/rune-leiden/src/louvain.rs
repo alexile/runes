@@ -205,6 +205,7 @@ impl Louvain {
             resolution: self.resolution,
             max_iter: self.max_levels,
             seed: self.random_seed,
+            randomness: 0.0,
         }
     }
 }

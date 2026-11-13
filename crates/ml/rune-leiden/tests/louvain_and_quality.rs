@@ -242,8 +242,8 @@ fn disconnected_communities(
 
 /// Leiden guarantees that every community is connected; Louvain does not
 /// (Traag, Waltman & van Eck, 2019). On random planted-partition graphs Leiden
-/// must never return a disconnected community, and its modularity must stay
-/// on par with Louvain's.
+/// must never return a disconnected community, and since it refines and keeps
+/// improving where Louvain stops, its mean modularity must be higher.
 #[test]
 fn leiden_vs_louvain_on_random_graphs() {
     let runs = 60;
@@ -280,7 +280,7 @@ fn leiden_vs_louvain_on_random_graphs() {
         "mean Q: Leiden {leiden_q:.5}, Louvain {louvain_q:.5}; Louvain disconnected communities: {louvain_broken}"
     );
     assert!(
-        leiden_q >= louvain_q - 0.005,
+        leiden_q > louvain_q,
         "Leiden mean {leiden_q} falls behind Louvain mean {louvain_q}"
     );
 }

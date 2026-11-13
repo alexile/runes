@@ -37,6 +37,10 @@ struct Cli {
     #[arg(long, value_enum, default_value_t = AlgorithmArg::Leiden)]
     algorithm: AlgorithmArg,
 
+    /// Leiden refinement randomness θ (ignored by Louvain); 0 is greedy.
+    #[arg(long, default_value_t = 0.01)]
+    randomness: f64,
+
     /// Objective to maximise. With `cpm`, the resolution is a density threshold.
     #[arg(long, value_enum, default_value_t = QualityArg::Modularity)]
     quality: QualityArg,
@@ -79,6 +83,7 @@ fn main() -> ExitCode {
             .resolution(cli.resolution)
             .max_iter(cli.max_iter)
             .random_seed(cli.seed)
+            .randomness(cli.randomness)
             .quality(quality)
             .try_fit(n_nodes, &edges),
         AlgorithmArg::Louvain => Louvain::new()

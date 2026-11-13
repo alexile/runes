@@ -26,6 +26,15 @@ impl Rng {
         (self.next_u64() % n as u64) as usize
     }
 
+    /// Uniform `f64` in `[0, 1)`.
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a 53-bit integer converts to f64 exactly"
+    )]
+    pub(crate) fn next_f64(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+    }
+
     /// Shuffles a slice in-place using Fisher–Yates.
     pub(crate) fn shuffle<T>(&mut self, slice: &mut [T]) {
         for i in (1..slice.len()).rev() {
