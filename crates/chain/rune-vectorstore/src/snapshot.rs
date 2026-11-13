@@ -44,6 +44,12 @@ const MAX_EF: u32 = 1 << 20;
 /// Every limit is checked *before* the corresponding allocation. The defaults
 /// suit large single-process stores; tighten them for untrusted input.
 ///
+/// These limits bound memory, not time. An HNSW snapshot is rebuilt with the
+/// `m` and `ef_construction` stored in the file, and large values make the
+/// rebuild far slower: a 40 KB file with the maximum parameters can take
+/// seconds to load. Check [`IndexKind`] after loading, or load untrusted
+/// files somewhere a slow load does no harm.
+///
 /// # Example
 ///
 /// ```
