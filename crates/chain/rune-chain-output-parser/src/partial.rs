@@ -28,7 +28,9 @@ use crate::{MAX_INPUT_BYTES, MAX_NESTING};
 ///
 /// Leading prose and an opening Markdown fence are skipped (the value starts
 /// at the first `{` or `[`; a bare scalar document is accepted only once it
-/// parses as is). Text after the end of the top-level value is ignored.
+/// parses as is, and unless it is a string only up to 64 bytes). An
+/// unfinished number longer than 64 bytes is held back until it ends. Text
+/// after the end of the top-level value is ignored.
 /// Returns `None` when nothing usable has arrived yet, the text is malformed
 /// (not merely incomplete), nests deeper than [`MAX_NESTING`], or is longer
 /// than [`MAX_INPUT_BYTES`].
@@ -226,6 +228,10 @@ struct Prelude {
     /// where it ended once closed.
     string_scan: usize,
     string_end: Option<usize>,
+    /// The first non-whitespace byte, once seen, and how far the search
+    /// for it got.
+    start: Option<usize>,
+    ws_scanned: usize,
 }
 
 /// Resumable partial-JSON scanner. Every byte is looked at a bounded number
@@ -249,7 +255,15 @@ struct Scanner {
     /// The text ends inside a surrogate pair: there is no valid value until
     /// the low half arrives (a lone surrogate is not valid JSON).
     split_surrogate: bool,
+    /// How far the number or literal starting at `pos` has been searched
+    /// for its end, so a long one is not re-read on every chunk.
+    atom_scanned: usize,
 }
+
+/// Longest unfinished number or literal shown before it ends, and longest
+/// bare scalar document. Every literal and any number of useful precision
+/// fits; parsing a longer token again on every chunk would be quadratic.
+const MAX_SHOWN_ATOM: usize = 64;
 
 /// JSON whitespace (form feed is not JSON whitespace).
 const fn is_ws(b: u8) -> bool {
@@ -268,6 +282,8 @@ impl Scanner {
                 searched: 0,
                 string_scan: 0,
                 string_end: None,
+                start: None,
+                ws_scanned: 0,
             },
             pos: 0,
             stack: Vec::new(),
@@ -277,12 +293,21 @@ impl Scanner {
             root: None,
             tail: None,
             split_surrogate: false,
+            atom_scanned: 0,
         }
     }
 
     /// Consume `text` (the whole buffer so far: it only ever grows).
     fn advance(&mut self, text: &str) {
         if self.phase == Phase::Prelude {
+            if self.prelude.start.is_none() {
+                let from = self.prelude.ws_scanned;
+                self.prelude.start = text
+                    .get(from..)
+                    .and_then(|rest| rest.find(|c: char| !c.is_whitespace()))
+                    .map(|n| from + n);
+                self.prelude.ws_scanned = text.len();
+            }
             let from = self.prelude.searched;
             let Some(offset) = text.get(from..).and_then(|rest| rest.find(['{', '['])) else {
                 self.prelude.searched = text.len();
@@ -373,10 +398,17 @@ impl Scanner {
                 }
                 _ if expect == Expect::Value => {
                     // A number or literal: runs until a delimiter.
-                    let rest = &bytes[self.pos..];
-                    let Some(len) = rest.iter().position(|&c| is_delimiter(c)) else {
+                    let from = self.atom_scanned.max(self.pos);
+                    let found = bytes[from..].iter().position(|&c| is_delimiter(c));
+                    let Some(len) = found.map(|n| from - self.pos + n) else {
+                        self.atom_scanned = bytes.len();
                         // It may still grow; show it only if it is valid now.
-                        self.tail = serde_json::from_str::<Value>(text.get(self.pos..)?).ok();
+                        let token = text.get(self.pos..)?;
+                        self.tail = if token.len() <= MAX_SHOWN_ATOM {
+                            serde_json::from_str::<Value>(token).ok()
+                        } else {
+                            None
+                        };
                         if bad_key && self.tail.is_some() {
                             return None;
                         }
@@ -498,12 +530,14 @@ impl Scanner {
     /// parses. Strings are tracked incrementally so a long one is not
     /// re-read on every chunk.
     fn prelude_scalar(&self, text: &str) -> Option<Value> {
-        let trimmed = text.trim();
+        let trimmed = text.get(self.prelude.start?..)?.trim_end();
         if trimmed.starts_with('"') {
             let end = self.prelude.string_end?;
             if !text[end..].trim().is_empty() {
                 return None;
             }
+        } else if trimmed.len() > MAX_SHOWN_ATOM {
+            return None;
         }
         serde_json::from_str(trimmed).ok()
     }
@@ -514,7 +548,7 @@ impl Scanner {
         if self.phase != Phase::Prelude || self.prelude.string_end.is_some() {
             return;
         }
-        let Some(quote) = text.find(|c: char| !c.is_whitespace()) else {
+        let Some(quote) = self.prelude.start else {
             return;
         };
         if text.as_bytes()[quote] != b'"' {
@@ -1279,6 +1313,22 @@ mod tests {
         assert!(changes > 100_000, "{changes}");
         if !cfg!(debug_assertions) {
             assert!(elapsed.as_millis() < 500, "took {elapsed:?}");
+        }
+    }
+
+    /// A long number or literal streamed in tiny chunks must not be
+    /// re-scanned from its start on every chunk.
+    #[test]
+    fn long_atoms_in_tiny_chunks_are_linear() {
+        for (start, filler) in [("[", "1"), ("[", "t"), ("", "1"), ("", " ")] {
+            let mut p = PartialJsonParser::<Value>::new();
+            let started = std::time::Instant::now();
+            p.feed(start);
+            for _ in 0..200_000 {
+                p.feed(filler);
+            }
+            let elapsed = started.elapsed();
+            assert!(elapsed.as_secs() < 2, "{start}{filler}: took {elapsed:?}");
         }
     }
 
