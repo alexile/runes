@@ -10,7 +10,7 @@ keywords = ["waf", "evasion", "payload", "fuzzing", "security"]
 categories = ["encoding", "web-programming", "command-line-utilities"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-payload-encode"

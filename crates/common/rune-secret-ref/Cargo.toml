@@ -10,7 +10,7 @@ keywords = ["secret", "credentials", "config", "redact", "api-key"]
 categories = ["config", "authentication"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 default = []

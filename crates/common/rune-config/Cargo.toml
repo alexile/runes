@@ -10,7 +10,7 @@ keywords = ["config", "dotenv", "env", "toml", "layered"]
 categories = ["config"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [dependencies]
 rune-dirs.workspace = true

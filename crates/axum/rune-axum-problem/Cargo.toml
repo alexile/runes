@@ -10,7 +10,7 @@ keywords = ["axum", "problem-details", "rfc9457", "error", "tower"]
 categories = ["web-programming", "web-programming::http-server"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 default = ["axum"]

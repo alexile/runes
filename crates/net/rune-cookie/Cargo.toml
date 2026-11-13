@@ -10,8 +10,7 @@ keywords = ["cookie", "set-cookie", "rfc6265", "http", "samesite"]
 categories = ["web-programming", "network-programming", "parser-implementations"]
 repository.workspace = true
 readme = "README.md"
-# Unpublished while rune-http-model (a dependency) is unpublished.
-publish = false
+publish = true
 # The RFC 6265 test corpus and the proptests are test-only.
 exclude = ["tests/"]
 

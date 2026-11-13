@@ -10,11 +10,7 @@ keywords = ["axum", "security", "middleware", "tower", "stack"]
 categories = ["web-programming", "network-programming"]
 repository.workspace = true
 readme = "README.md"
-# Not publishable until the optional layer crates (rune-axum-timeout,
-# -requestid, -concurrency, -compression, -problem, -health, -cors, -cache,
-# rune-tower-circuitbreaker, rune-tower-retry) are released: a published crate
-# cannot depend on `publish = false` ones.
-publish = false
+publish = true
 
 [features]
 ## Offer `Content-Encoding: br` in the compression layer.

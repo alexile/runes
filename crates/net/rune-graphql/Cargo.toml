@@ -10,8 +10,7 @@ keywords = ["graphql", "api", "introspection", "fuzzing", "security"]
 categories = ["web-programming", "parser-implementations", "development-tools::testing"]
 repository.workspace = true
 readme = "README.md"
-# Kept unpublished until the crates.io name is confirmed free.
-publish = false
+publish = true
 
 [features]
 ## Serialize and deserialize the model with serde.

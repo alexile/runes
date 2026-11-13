@@ -10,7 +10,7 @@ keywords = ["pledge", "sandbox", "landlock", "seccomp", "security"]
 categories = ["os", "os::linux-apis", "command-line-utilities"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-pledge"

@@ -10,7 +10,7 @@ keywords = ["axum", "middleware", "concurrency", "load-shedding", "tower"]
 categories = ["web-programming", "network-programming"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [dependencies]
 http.workspace = true

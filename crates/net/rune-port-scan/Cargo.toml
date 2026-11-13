@@ -10,7 +10,7 @@ keywords = ["port-scan", "scanner", "network", "banner", "security"]
 categories = ["network-programming", "asynchronous"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 ## Async connect scanner over tokio TCP sockets, with a concurrency bound, pacing and timeouts.

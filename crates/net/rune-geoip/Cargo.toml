@@ -10,7 +10,7 @@ keywords = ["geoip", "maxmind", "mmdb", "geolocation", "asn"]
 categories = ["network-programming", "parser-implementations"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-geoip"

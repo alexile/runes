@@ -10,9 +10,7 @@ keywords = ["url", "canonicalization", "normalization", "crawler", "scope"]
 categories = ["web-programming", "network-programming", "parser-implementations"]
 repository.workspace = true
 readme = "README.md"
-# Unpublished while `rune-ip` (scope rules) is unpublished; flip both
-# together.
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-url"

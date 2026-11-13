@@ -10,7 +10,7 @@ keywords = ["axum", "health-check", "readiness", "graceful-shutdown", "middlewar
 categories = ["web-programming", "network-programming"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 ## `shutdown_signal()`: resolve on Ctrl-C or, on Unix, SIGTERM.

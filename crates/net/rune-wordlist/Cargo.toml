@@ -10,7 +10,7 @@ keywords = ["wordlist", "payload", "fuzzing", "ed25519", "security"]
 categories = ["command-line-utilities", "cryptography", "filesystem"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-wordlist"

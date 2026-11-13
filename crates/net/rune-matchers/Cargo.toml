@@ -10,8 +10,7 @@ keywords = ["nuclei", "matcher", "extractor", "http", "security"]
 categories = ["web-programming", "network-programming", "text-processing"]
 repository.workspace = true
 readme = "README.md"
-# Kept unpublished while rune-http-model (a dependency) is unpublished.
-publish = false
+publish = true
 
 [features]
 ## Serialize and deserialize rules with serde (nuclei-like JSON shape).

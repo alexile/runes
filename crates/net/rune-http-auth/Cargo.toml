@@ -10,8 +10,7 @@ keywords = ["http", "authentication", "digest", "ntlm", "basic-auth"]
 categories = ["authentication", "web-programming", "network-programming"]
 repository.workspace = true
 readme = "README.md"
-# Unpublished while rune-http-model (a dependency) is unpublished.
-publish = false
+publish = true
 # The known-answer and property tests are test-only.
 exclude = ["tests/"]
 

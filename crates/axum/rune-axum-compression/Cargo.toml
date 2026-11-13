@@ -10,7 +10,7 @@ keywords = ["axum", "middleware", "compression", "gzip", "tower"]
 categories = ["web-programming", "compression"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 default = ["gzip", "deflate"]

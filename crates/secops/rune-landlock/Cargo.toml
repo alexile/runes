@@ -10,9 +10,7 @@ keywords = ["landlock", "sandbox", "security", "linux", "lsm"]
 categories = ["os::linux-apis", "filesystem", "command-line-utilities"]
 repository.workspace = true
 readme = "README.md"
-# New crates start unpublished. Flip to `true` once the crate is ready for
-# crates.io and its name is free there.
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-landlock"

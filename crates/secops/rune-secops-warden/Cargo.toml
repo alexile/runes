@@ -10,10 +10,7 @@ keywords = ["security", "sandbox", "ai-agent", "bubblewrap", "namespaces"]
 categories = ["os", "config"]
 repository.workspace = true
 readme = "README.md"
-# Was `true` up to 0.2.0. The sandbox mechanisms now live in rune-landlock,
-# rune-seccomp, rune-namespaces and rune-egress-proxy, none of which is
-# on crates.io yet; flip back once they are.
-publish = false
+publish = true
 
 # Test-only helper for tests/e2e.rs, not a CLI. It is a real binary because
 # the Landlock and network stub protocols re-exec the calling executable,

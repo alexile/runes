@@ -10,9 +10,7 @@ keywords = ["cookie", "set-cookie", "samesite", "security", "headers"]
 categories = ["web-programming", "development-tools"]
 repository.workspace = true
 readme = "README.md"
-# Unpublished while rune-cookie (a dependency) is unpublished
-#.
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-cookie-sec"

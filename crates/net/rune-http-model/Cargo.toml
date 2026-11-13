@@ -10,8 +10,7 @@ keywords = ["http", "request", "response", "traffic", "har"]
 categories = ["web-programming", "network-programming", "data-structures"]
 repository.workspace = true
 readme = "README.md"
-# Kept unpublished until the crates.io name is confirmed free.
-publish = false
+publish = true
 
 [features]
 ## Serialize and deserialize every type with serde (stable JSON shape).

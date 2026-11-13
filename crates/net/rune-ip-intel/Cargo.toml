@@ -10,7 +10,7 @@ keywords = ["ip", "reputation", "threat-intel", "abuseipdb", "greynoise"]
 categories = ["network-programming", "api-bindings"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 default = ["abuseipdb", "greynoise", "shodan", "censys"]

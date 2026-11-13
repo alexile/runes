@@ -10,7 +10,7 @@ keywords = ["tracing", "opentelemetry", "otlp", "telemetry", "logging"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 ## OTLP/gRPC trace export through `tracing-opentelemetry`. Off by default so

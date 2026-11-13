@@ -10,7 +10,7 @@ keywords = ["pcap", "pcapng", "capture", "wireshark", "tcpdump"]
 categories = ["network-programming", "parser-implementations", "encoding"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-pcap"

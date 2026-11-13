@@ -10,7 +10,7 @@ keywords = ["security-txt", "rfc9116", "vulnerability", "disclosure", "parser"]
 categories = ["web-programming", "parser-implementations"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-securitytxt"

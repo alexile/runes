@@ -10,7 +10,7 @@ keywords = ["socks", "socks5", "proxy", "socks4", "tunnel"]
 categories = ["network-programming", "parser-implementations", "asynchronous"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 ## Async client and server over tokio streams, with a pluggable connector

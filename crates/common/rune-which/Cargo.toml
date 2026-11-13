@@ -10,7 +10,7 @@ keywords = ["which", "path", "pathext", "executable", "lookup"]
 categories = ["filesystem", "os"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-which"

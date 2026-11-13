@@ -10,7 +10,7 @@ keywords = ["proxy-protocol", "haproxy", "load-balancer", "client-ip", "tlv"]
 categories = ["network-programming", "parser-implementations", "encoding"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 ## Read and write headers on tokio `AsyncRead`/`AsyncWrite` streams.

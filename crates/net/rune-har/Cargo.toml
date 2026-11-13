@@ -10,9 +10,7 @@ keywords = ["har", "http", "archive", "traffic", "devtools"]
 categories = ["parser-implementations", "web-programming", "encoding"]
 repository.workspace = true
 readme = "README.md"
-# Kept unpublished while rune-http-model is (a published crate may not
-# depend on an unpublished one).
-publish = false
+publish = true
 
 [dependencies]
 rune-http-model.workspace = true

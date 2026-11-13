@@ -10,7 +10,7 @@ keywords = ["websocket", "rfc6455", "framing", "sans-io", "proxy"]
 categories = ["network-programming", "parser-implementations", "web-programming::websocket"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 ## permessage-deflate (RFC 7692) negotiation and compression, via flate2's pure-Rust backend.

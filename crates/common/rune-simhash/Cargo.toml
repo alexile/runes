@@ -10,7 +10,7 @@ keywords = ["simhash", "minhash", "lsh", "near-duplicate", "clustering"]
 categories = ["algorithms", "text-processing"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-simhash"

@@ -10,8 +10,7 @@ keywords = ["mime", "content-type", "multipart", "charset", "http"]
 categories = ["web-programming", "parser-implementations", "encoding"]
 repository.workspace = true
 readme = "README.md"
-# Unpublished while rune-http-model (a dependency) is unpublished.
-publish = false
+publish = true
 # The conformance and property tests are test-only.
 exclude = ["tests/"]
 

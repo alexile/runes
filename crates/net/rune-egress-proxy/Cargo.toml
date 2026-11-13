@@ -10,8 +10,7 @@ keywords = ["proxy", "egress", "ssrf", "allowlist", "sandbox"]
 categories = ["network-programming", "web-programming::http-server"]
 repository.workspace = true
 readme = "README.md"
-# Depends on `rune-ip`, which is not on crates.io yet.
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-egress-proxy"

@@ -10,7 +10,7 @@ keywords = ["tower", "circuit-breaker", "resilience", "middleware", "client"]
 categories = ["web-programming::http-client", "network-programming", "asynchronous"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [dependencies]
 http.workspace = true

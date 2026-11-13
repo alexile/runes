@@ -10,7 +10,7 @@ keywords = ["tlsh", "ssdeep", "fuzzy-hash", "similarity", "malware"]
 categories = ["algorithms", "encoding"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-fuzzyhash"

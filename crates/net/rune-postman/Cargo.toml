@@ -10,9 +10,7 @@ keywords = ["postman", "http", "collection", "import", "api"]
 categories = ["parser-implementations", "web-programming", "development-tools"]
 repository.workspace = true
 readme = "README.md"
-# Kept unpublished while rune-http-model is (a published crate may not
-# depend on an unpublished one).
-publish = false
+publish = true
 
 [dependencies]
 rune-base64.workspace = true

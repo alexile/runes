@@ -10,9 +10,7 @@ keywords = ["burp", "http", "xml", "traffic", "import"]
 categories = ["parser-implementations", "web-programming", "encoding"]
 repository.workspace = true
 readme = "README.md"
-# Kept unpublished while rune-http-model is (a published crate may not
-# depend on an unpublished one).
-publish = false
+publish = true
 
 [dependencies]
 quick-xml.workspace = true

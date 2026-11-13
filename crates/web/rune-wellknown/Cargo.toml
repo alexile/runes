@@ -10,7 +10,7 @@ keywords = ["well-known", "mta-sts", "openid", "assetlinks", "security-txt"]
 categories = ["web-programming", "parser-implementations"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-wellknown"

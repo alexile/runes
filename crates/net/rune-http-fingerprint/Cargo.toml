@@ -10,9 +10,7 @@ keywords = ["http", "fingerprint", "server", "recon", "security"]
 categories = ["web-programming", "network-programming"]
 repository.workspace = true
 readme = "README.md"
-# Kept unpublished while rune-http-model and rune-matchers (dependencies)
-# are unpublished.
-publish = false
+publish = true
 
 [features]
 ## Serialize and deserialize signatures, features and reports with serde.

@@ -10,7 +10,7 @@ keywords = ["dns", "spf", "dmarc", "dkim", "dnssec"]
 categories = ["network-programming", "parser-implementations", "email"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [dependencies]
 rune-base64.workspace = true

@@ -10,7 +10,7 @@ keywords = ["favicon", "shodan", "mmh3", "fingerprint", "recon"]
 categories = ["web-programming", "algorithms"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-favicon-hash"

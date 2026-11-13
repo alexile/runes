@@ -10,7 +10,7 @@ keywords = ["cloud", "cdn", "ip-ranges", "aws", "recon"]
 categories = ["network-programming", "parsing"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-cloud-ranges"

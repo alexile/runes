@@ -10,9 +10,7 @@ keywords = ["packet", "pcap", "tcp", "ipv6", "parser"]
 categories = ["network-programming", "parser-implementations"]
 repository.workspace = true
 readme = "README.md"
-# New crates start unpublished. Flip to `true` once the crate is ready for
-# crates.io (the name was free on 2026-11-11).
-publish = false
+publish = true
 
 [dependencies]
 thiserror.workspace = true

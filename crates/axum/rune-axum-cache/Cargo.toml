@@ -10,7 +10,7 @@ keywords = ["axum", "middleware", "cache-control", "etag", "http"]
 categories = ["web-programming::http-server", "web-programming", "caching"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [dependencies]
 http.workspace = true

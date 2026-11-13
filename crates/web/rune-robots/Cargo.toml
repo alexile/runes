@@ -10,7 +10,7 @@ keywords = ["robots-txt", "sitemap", "crawler", "rfc9309", "parser"]
 categories = ["web-programming", "parser-implementations"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-robots"

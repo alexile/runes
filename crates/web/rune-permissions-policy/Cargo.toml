@@ -10,7 +10,7 @@ keywords = ["permissions-policy", "feature-policy", "security", "headers", "web"
 categories = ["web-programming", "parser-implementations"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-permissions-policy"

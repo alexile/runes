@@ -10,7 +10,7 @@ keywords = ["audit", "log", "hash-chain", "tamper-evident", "security"]
 categories = ["cryptography", "development-tools::debugging"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [dependencies]
 hmac.workspace = true

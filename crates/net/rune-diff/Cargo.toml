@@ -10,8 +10,7 @@ keywords = ["diff", "myers", "http", "comparer", "security"]
 categories = ["text-processing", "algorithms", "web-programming", "command-line-utilities"]
 repository.workspace = true
 readme = "README.md"
-# rune-http-model is unpublished too, so this one must stay unpublished.
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-diff"

@@ -10,7 +10,7 @@ keywords = ["dns", "resolver", "doh", "dot", "async"]
 categories = ["network-programming", "asynchronous"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [features]
 # The async resolver over UDP and TCP. Without it the crate is the sans-I/O

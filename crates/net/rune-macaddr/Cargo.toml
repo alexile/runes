@@ -10,7 +10,7 @@ keywords = ["mac-address", "eui-48", "eui-64", "oui", "network"]
 categories = ["network-programming", "parsing"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [[bin]]
 name = "rune-macaddr"

@@ -10,7 +10,7 @@ keywords = ["xdg", "directories", "config", "cache", "appdata"]
 categories = ["filesystem", "config", "os"]
 repository.workspace = true
 readme = "README.md"
-publish = false
+publish = true
 
 [dependencies]
 thiserror.workspace = true
