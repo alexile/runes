@@ -21,7 +21,10 @@ ask any `rune-chain` model for a typed `T` and get back a validated value.
   truncated output are handled (`extract_json`).
 - **Partial streaming** — `Extractor::stream`, `PartialJsonParser` and
   `parse_partial` turn incomplete JSON into progressively growing values
-  for live UIs.
+  for live UIs. Parsing is incremental, so a stream costs time linear in its
+  length however small the chunks (1 MiB in 4-byte chunks parses in well
+  under a second). `Extractor::stream_with_reask` re-asks on a bad final
+  answer.
 - **Hardened** — input capped at 4 MiB (`MAX_INPUT_BYTES`), nesting at 128
   (`MAX_NESTING`), iterative scanners, property-tested never to panic.
 
@@ -37,7 +40,7 @@ Classic `OutputParser`s are still here, composable with any `Chain` via
 | `RegexOutputParser` | Extract the first regex match group |
 | `NumberOutputParser` | Parse the first number in the text |
 | `StructuredOutputParser<T>` | JSON-schema-validated typed output, with repair-by-retry |
-| `Extractor<T>` | `instructor`-style extraction: native/prompt modes, validators, re-ask, streaming |
+| `Extractor<T>` | `instructor`-style extraction: native/prompt modes, validators, re-ask, streaming (with optional re-ask) |
 
 ## Installation
 
@@ -89,6 +92,46 @@ while let Some(event) = events.next().await {
 
 Give the type `#[serde(default)]` (or `Option`) fields to get typed
 `Partial::value`s before every field has arrived.
+
+`stream` does not re-ask, because `Llm::stream` takes no response format.
+`stream_with_reask` does: if the streamed answer fails final validation, it
+yields `StreamEvent::Retrying` (drop the stale preview) and asks again without
+streaming — through `Llm::generate_structured` in `Mode::Native` — with the
+rejected answer and the error appended, up to `max_retries` times, like
+`extract`:
+
+```rust
+let mut events = Extractor::<Story>::for_type()?
+    .with_max_retries(2)
+    .stream_with_reask(&llm, &messages)
+    .await?;
+while let Some(event) = events.next().await {
+    match event? {
+        StreamEvent::Partial(p) => render(&p.json),
+        StreamEvent::Retrying(_) => clear(),            // the streamed answer was rejected
+        StreamEvent::Done(out) => save(out.value),      // out.attempts counts the stream as 1
+        _ => {}
+    }
+}
+```
+
+`PartialJsonParser::push` returns a `Partial` (a copy of the value) on every
+change. For very large documents, or to redraw at your own pace, use `feed`,
+which only says whether the value changed, and build it with `current` when
+needed:
+
+```rust
+use rune_chain_output_parser::PartialJsonParser;
+use serde_json::Value;
+
+let mut p = PartialJsonParser::<Value>::new();
+for chunk in ["{\"items\": [1, ", "2, 3]", "}"] {
+    if p.feed(chunk) {
+        // redraw with p.current() when convenient
+    }
+}
+assert!(p.current().unwrap().complete);
+```
 
 ## Classic parsers
 

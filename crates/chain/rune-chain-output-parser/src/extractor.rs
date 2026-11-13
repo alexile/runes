@@ -3,12 +3,15 @@
 use std::pin::Pin;
 
 use futures::{Stream, StreamExt};
-use rune_chain_core::{Llm, LlmError, Message, ResponseFormat, StreamData};
+use rune_chain_core::{
+    GenerateResult, Llm, LlmError, Message, ResponseFormat, StreamData, TokenUsage,
+};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::{
-    Partial, PartialJsonParser, StructuredError, StructuredOutput, StructuredOutputParser,
+    Partial, PartialJsonParser, RepairRequest, StructuredError, StructuredOutput,
+    StructuredOutputParser,
 };
 
 /// Schema name used when none is given.
@@ -40,11 +43,21 @@ pub enum StreamEvent<T> {
     Partial(Partial<T>),
     /// The final, fully validated value. Always the last item on success.
     Done(StructuredOutput<T>),
+    /// The answer so far was rejected and the model is being asked again
+    /// (only from [`Extractor::stream_with_reask`]). Earlier previews are
+    /// stale; the next item is another `Retrying`, the [`Done`](Self::Done)
+    /// value or an error.
+    Retrying(RepairRequest),
 }
 
 /// The stream returned by [`Extractor::stream`].
 pub type ExtractStream<T> =
     Pin<Box<dyn Stream<Item = Result<StreamEvent<T>, StructuredError>> + Send>>;
+
+/// The stream returned by [`Extractor::stream_with_reask`]. It borrows the
+/// model, which it may call again.
+pub type ReaskStream<'a, T> =
+    Pin<Box<dyn Stream<Item = Result<StreamEvent<T>, StructuredError>> + Send + 'a>>;
 
 /// Extract a typed, validated `T` from a model, re-asking on bad output.
 ///
@@ -269,20 +282,34 @@ impl<T: DeserializeOwned> Extractor<T> {
         let format = &format;
         self.parser
             .repair_loop(|req| {
-                let mut msgs = messages.to_vec();
-                if let Some(req) = req {
-                    msgs.push(Message::ai(req.previous));
-                    msgs.push(Message::human(req.feedback));
-                }
+                let msgs = with_repair(messages, req.as_ref());
                 let mode = self.mode;
-                async move {
-                    match mode {
-                        Mode::Prompt => llm.generate(&format.apply_to(&msgs)).await,
-                        Mode::Native => llm.generate_structured(&msgs, format).await,
-                    }
-                }
+                async move { request(llm, mode, format, &msgs).await }
             })
             .await
+    }
+}
+
+/// `messages`, plus the rejected answer and the feedback on it.
+fn with_repair(messages: &[Message], req: Option<&RepairRequest>) -> Vec<Message> {
+    let mut msgs = messages.to_vec();
+    if let Some(req) = req {
+        msgs.push(Message::ai(req.previous.clone()));
+        msgs.push(Message::human(req.feedback.clone()));
+    }
+    msgs
+}
+
+/// One non-streaming request in the given mode.
+async fn request<L: Llm + ?Sized>(
+    llm: &L,
+    mode: Mode,
+    format: &ResponseFormat,
+    messages: &[Message],
+) -> Result<GenerateResult, LlmError> {
+    match mode {
+        Mode::Prompt => llm.generate(&format.apply_to(messages)).await,
+        Mode::Native => llm.generate_structured(messages, format).await,
     }
 }
 
@@ -293,7 +320,8 @@ impl<T: DeserializeOwned + Send + 'static> Extractor<T> {
     ///
     /// Streaming always uses prompt instructions (`Llm::stream` takes no
     /// response format) and does not re-ask: on bad output the final item
-    /// is the parse error. Output above the size cap ends the stream with
+    /// is the parse error (use [`stream_with_reask`](Self::stream_with_reask)
+    /// to re-ask instead). Output above the size cap ends the stream with
     /// [`StructuredError::TooLarge`].
     ///
     /// # Example
@@ -362,6 +390,99 @@ impl<T: DeserializeOwned + Send + 'static> Extractor<T> {
         };
         Ok(Box::pin(futures::stream::unfold(state, next_event)))
     }
+
+    /// Like [`stream`](Self::stream), but when the streamed answer fails
+    /// final validation (no JSON, a schema violation, a value that does not
+    /// fit `T`, or a validator's `Err`), the model is asked again without
+    /// streaming, with the rejected answer and the error appended — exactly
+    /// as [`extract`](Self::extract) does, in the configured [`Mode`]
+    /// (`Native` re-asks through [`Llm::generate_structured`]).
+    ///
+    /// Before each re-ask the stream yields [`StreamEvent::Retrying`], so a
+    /// UI can drop its stale preview. The streamed answer counts as the
+    /// first attempt, so there are at most
+    /// [`with_max_retries`](Self::with_max_retries) re-asks; after the last
+    /// one the error is [`StructuredError::RetriesExhausted`]. Transport
+    /// errors and over-size output are not retried. The stream borrows
+    /// `llm` for the re-asks.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::pin::Pin;
+    ///
+    /// use async_trait::async_trait;
+    /// use futures::{Stream, StreamExt, stream};
+    /// use rune_chain_core::{GenerateResult, Llm, LlmError, Message, ResponseFormat, StreamData};
+    /// use rune_chain_output_parser::{Extractor, StreamEvent};
+    /// use serde_json::json;
+    ///
+    /// /// Streams a bad answer, then fixes it when asked again.
+    /// struct Mock;
+    ///
+    /// #[async_trait]
+    /// impl Llm for Mock {
+    ///     async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
+    ///         Ok(GenerateResult::from_text("[1, 2, 3]"))
+    ///     }
+    ///     async fn generate_structured(
+    ///         &self,
+    ///         m: &[Message],
+    ///         _: &ResponseFormat,
+    ///     ) -> Result<GenerateResult, LlmError> {
+    ///         self.generate(m).await
+    ///     }
+    ///     async fn stream(
+    ///         &self,
+    ///         _: &[Message],
+    ///     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamData, LlmError>> + Send>>, LlmError> {
+    ///         Ok(Box::pin(stream::iter(["[1, ", "\"two\"]"].map(|c| Ok(StreamData::chunk(c))))))
+    ///     }
+    /// }
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(async {
+    /// let ex = Extractor::<Vec<u32>>::new(json!({"type": "array", "items": {"type": "integer"}})).unwrap();
+    /// let events: Vec<_> = ex
+    ///     .stream_with_reask(&Mock, &[Message::human("count to three")])
+    ///     .await
+    ///     .unwrap()
+    ///     .collect()
+    ///     .await;
+    /// assert!(matches!(&events[events.len() - 2], Ok(StreamEvent::Retrying(r)) if r.attempt == 2));
+    /// let Some(Ok(StreamEvent::Done(out))) = events.last() else { panic!() };
+    /// assert_eq!((out.value.clone(), out.attempts), (vec![1, 2, 3], 2));
+    /// # });
+    /// ```
+    pub async fn stream_with_reask<'a, L>(
+        &self,
+        llm: &'a L,
+        messages: &[Message],
+    ) -> Result<ReaskStream<'a, T>, StructuredError>
+    where
+        L: Llm + ?Sized,
+    {
+        let inner = llm
+            .stream(&self.response_format().apply_to(messages))
+            .await?;
+        let state = ReaskState {
+            streaming: Some(StreamState {
+                inner,
+                acc: PartialJsonParser::new().with_max_bytes(self.parser.max_input_bytes()),
+                parser: self.parser.clone(),
+                ended: false,
+                finished: false,
+            }),
+            llm,
+            messages: messages.to_vec(),
+            format: self.response_format(),
+            mode: self.mode,
+            parser: self.parser.clone(),
+            pending: None,
+            usage: None,
+            finished: false,
+        };
+        Ok(Box::pin(futures::stream::unfold(state, next_reask_event)))
+    }
 }
 
 type ChunkStream = Pin<Box<dyn Stream<Item = Result<StreamData, LlmError>> + Send>>;
@@ -376,9 +497,38 @@ struct StreamState<T> {
     finished: bool,
 }
 
+type EventItem<T> = Result<StreamEvent<T>, StructuredError>;
+
+/// What the model stream produced next.
+enum Step<T> {
+    /// A preview or an error to pass on.
+    Event(EventItem<T>),
+    /// The stream ended: the full text and its parse result.
+    Final(String, Result<(T, Value), StructuredError>),
+}
+
 async fn next_event<T: DeserializeOwned>(
+    st: StreamState<T>,
+) -> Option<(EventItem<T>, StreamState<T>)> {
+    let (step, st) = next_step(st).await?;
+    let item = match step {
+        Step::Event(item) => item,
+        Step::Final(raw, result) => result.map(|(value, json)| {
+            StreamEvent::Done(StructuredOutput {
+                value,
+                json,
+                raw,
+                attempts: 1,
+                usage: None,
+            })
+        }),
+    };
+    Some((item, st))
+}
+
+async fn next_step<T: DeserializeOwned>(
     mut st: StreamState<T>,
-) -> Option<(Result<StreamEvent<T>, StructuredError>, StreamState<T>)> {
+) -> Option<(Step<T>, StreamState<T>)> {
     if st.finished {
         return None;
     }
@@ -391,31 +541,125 @@ async fn next_event<T: DeserializeOwned>(
                 if st.acc.is_overflowed() {
                     st.finished = true;
                     let limit = st.parser.max_input_bytes();
-                    return Some((Err(StructuredError::TooLarge { len, limit }), st));
+                    let err = StructuredError::TooLarge { len, limit };
+                    return Some((Step::Event(Err(err)), st));
                 }
                 if let Some(p) = partial {
-                    return Some((Ok(StreamEvent::Partial(p)), st));
+                    return Some((Step::Event(Ok(StreamEvent::Partial(p))), st));
                 }
             }
             Some(Err(e)) => {
                 st.finished = true;
-                return Some((Err(e.into()), st));
+                return Some((Step::Event(Err(e.into())), st));
             }
             None => st.ended = true,
         }
     }
     st.finished = true;
     let raw = st.acc.text().to_owned();
-    let result = st.parser.parse_value(&raw).map(|(value, json)| {
+    let result = st.parser.parse_value(&raw);
+    Some((Step::Final(raw, result), st))
+}
+
+struct ReaskState<'a, T, L: ?Sized> {
+    /// The streamed first attempt, until it ends.
+    streaming: Option<StreamState<T>>,
+    llm: &'a L,
+    messages: Vec<Message>,
+    format: ResponseFormat,
+    mode: Mode,
+    parser: StructuredOutputParser<T>,
+    /// The re-ask to make next.
+    pending: Option<RepairRequest>,
+    /// Usage summed over the re-asks (streams report none).
+    usage: Option<TokenUsage>,
+    finished: bool,
+}
+
+impl<T, L: ?Sized> ReaskState<'_, T, L> {
+    /// Attempt `attempt` produced `raw`, rejected with `error`: re-ask, or
+    /// give up once the retries are spent.
+    fn rejected(&mut self, attempt: usize, raw: String, error: StructuredError) -> EventItem<T> {
+        if !error.is_repairable() {
+            self.finished = true;
+            return Err(error);
+        }
+        if attempt > self.parser.max_retries() {
+            self.finished = true;
+            return Err(StructuredError::RetriesExhausted {
+                attempts: attempt,
+                last: Box::new(error),
+                raw,
+            });
+        }
+        let req = RepairRequest {
+            attempt: attempt + 1,
+            feedback: self.parser.repair_prompt(&error),
+            previous: raw,
+        };
+        self.pending = Some(req.clone());
+        Ok(StreamEvent::Retrying(req))
+    }
+
+    fn accepted(
+        &mut self,
+        attempt: usize,
+        raw: String,
+        (value, json): (T, Value),
+    ) -> StreamEvent<T> {
+        self.finished = true;
         StreamEvent::Done(StructuredOutput {
             value,
             json,
             raw,
-            attempts: 1,
-            usage: None,
+            attempts: attempt,
+            usage: self.usage.take(),
         })
-    });
-    Some((result, st))
+    }
+}
+
+async fn next_reask_event<T, L>(
+    mut st: ReaskState<'_, T, L>,
+) -> Option<(EventItem<T>, ReaskState<'_, T, L>)>
+where
+    T: DeserializeOwned,
+    L: Llm + ?Sized,
+{
+    if st.finished {
+        return None;
+    }
+    if let Some(stream) = st.streaming.take() {
+        let (step, stream) = next_step(stream).await?;
+        let item = match step {
+            Step::Event(item) => {
+                st.finished = item.is_err();
+                st.streaming = Some(stream);
+                item
+            }
+            Step::Final(raw, Ok(parsed)) => Ok(st.accepted(1, raw, parsed)),
+            Step::Final(raw, Err(e)) => st.rejected(1, raw, e),
+        };
+        return Some((item, st));
+    }
+    let req = st.pending.take()?;
+    let msgs = with_repair(&st.messages, Some(&req));
+    let item = match request(st.llm, st.mode, &st.format, &msgs).await {
+        Err(e) => {
+            st.finished = true;
+            Err(e.into())
+        }
+        Ok(result) => {
+            if let Some(t) = &result.tokens {
+                st.usage = Some(st.usage.take().map_or_else(|| t.clone(), |u| u.combine(t)));
+            }
+            let raw = result.generation;
+            match st.parser.parse_value(&raw) {
+                Ok(parsed) => Ok(st.accepted(req.attempt, raw, parsed)),
+                Err(e) => st.rejected(req.attempt, raw, e),
+            }
+        }
+    };
+    Some((item, st))
 }
 
 fn sanitize_name(name: &str) -> String {
@@ -671,6 +915,115 @@ mod tests {
             Some(Err(StructuredError::TooLarge { .. }))
         ));
         assert_eq!(events.len(), 2);
+    }
+
+    fn streaming(chunks: &[&'static str], replies: &[&'static str]) -> Mock {
+        Mock {
+            chunks: chunks.to_vec(),
+            ..Mock::new(replies)
+        }
+    }
+
+    async fn reask_events(ex: &Extractor<Item>, llm: &Mock) -> Vec<EventItem<Item>> {
+        ex.stream_with_reask(llm, &[Message::human("pens")])
+            .await
+            .unwrap()
+            .collect()
+            .await
+    }
+
+    #[tokio::test]
+    async fn reask_stream_passes_a_valid_answer_through() {
+        let llm = streaming(&["{\"name\": \"pen\",", " \"qty\": 2}"], &[]);
+        let events = reask_events(&extractor(), &llm).await;
+        assert_eq!(events.len(), 3, "{events:?}");
+        let Some(Ok(StreamEvent::Done(out))) = events.last() else {
+            panic!("{events:?}")
+        };
+        assert_eq!(out.attempts, 1);
+        assert!(llm.structured_calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reask_stream_falls_back_to_structured_generation() {
+        let llm = Mock {
+            native: true,
+            ..streaming(
+                &["{\"name\": \"pen\", \"qty\": 0}"],
+                &[r#"{"name": "pen"}"#, r#"{"name": "pen", "qty": 5}"#],
+            )
+        };
+        let events = reask_events(&extractor(), &llm).await;
+        let retries: Vec<usize> = events
+            .iter()
+            .filter_map(|e| match e {
+                Ok(StreamEvent::Retrying(r)) => Some(r.attempt),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(retries, [2, 3]);
+        let Some(Ok(StreamEvent::Done(out))) = events.last() else {
+            panic!("{events:?}")
+        };
+        assert_eq!((out.value.qty, out.attempts), (5, 3));
+
+        // Each re-ask is a structured call carrying the rejected answer and
+        // what was wrong with it.
+        assert_eq!(llm.structured_calls.lock().unwrap().len(), 2);
+        let calls = llm.generate_calls.lock().unwrap().clone();
+        let first = &calls[0];
+        assert_eq!(first[1].role, Role::Ai);
+        assert!(first[1].content.text_content().contains("\"qty\": 0"));
+        assert!(
+            first[2].content.text_content().contains("/qty"),
+            "{first:?}"
+        );
+        assert!(calls[1][2].content.text_content().contains("qty"));
+    }
+
+    #[tokio::test]
+    async fn reask_stream_retries_are_bounded() {
+        let llm = streaming(&["nothing"], &["still nothing", "nope", "never"]);
+        let events = reask_events(&extractor().with_max_retries(1), &llm).await;
+        assert!(matches!(
+            events.last(),
+            Some(Err(StructuredError::RetriesExhausted { attempts: 2, .. }))
+        ));
+        assert_eq!(llm.generate_calls.lock().unwrap().len(), 1);
+
+        let llm = streaming(&["nothing"], &["unused"]);
+        let events = reask_events(&extractor().with_max_retries(0), &llm).await;
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events.last(),
+            Some(Err(StructuredError::RetriesExhausted { attempts: 1, .. }))
+        ));
+        assert!(llm.generate_calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reask_stream_does_not_retry_transport_errors_or_overflow() {
+        let llm = streaming(&["{\"name\": \"pen\", \"qty\": 0}"], &[]);
+        let events = reask_events(&extractor(), &llm).await;
+        assert!(matches!(events.last(), Some(Err(StructuredError::Llm(_)))));
+
+        let llm = streaming(&["[1, 2", ", 3, 4, 5, 6]"], &["{}"]);
+        let events = reask_events(&extractor().with_max_input_bytes(8), &llm).await;
+        assert!(matches!(
+            events.last(),
+            Some(Err(StructuredError::TooLarge { .. }))
+        ));
+        assert!(llm.generate_calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn reask_stream_respects_prompt_mode() {
+        let llm = streaming(&["{}"], &[r#"{"name": "pen", "qty": 1}"#]);
+        let events = reask_events(&extractor().with_mode(Mode::Prompt), &llm).await;
+        assert!(matches!(events.last(), Some(Ok(StreamEvent::Done(_)))));
+        assert!(llm.structured_calls.lock().unwrap().is_empty());
+        let calls = llm.generate_calls.lock().unwrap().clone();
+        assert_eq!(calls[0][0].role, Role::System);
     }
 
     #[test]

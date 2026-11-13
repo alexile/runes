@@ -25,7 +25,9 @@
 //! validates it against the schema and any custom validators, and re-asks
 //! with the error on failure. [`Extractor::stream`] and
 //! [`PartialJsonParser`] turn a streamed answer into progressively more
-//! complete [`Partial`] values for live UIs.
+//! complete [`Partial`] values for live UIs; parsing is incremental, so a
+//! stream costs time linear in its length. [`Extractor::stream_with_reask`]
+//! also re-asks (without streaming) when the streamed answer is rejected.
 //!
 //! All parsing is size-capped ([`MAX_INPUT_BYTES`]), depth-limited
 //! ([`MAX_NESTING`]) and panic-free on adversarial output.
@@ -80,7 +82,7 @@ mod structured;
 
 pub use bool_parser::BoolOutputParser;
 pub use extract::{MAX_INPUT_BYTES, MAX_NESTING, extract_json};
-pub use extractor::{ExtractStream, Extractor, Mode, StreamEvent};
+pub use extractor::{ExtractStream, Extractor, Mode, ReaskStream, StreamEvent};
 pub use json_parser::JsonOutputParser;
 pub use list_parser::ListOutputParser;
 pub use number_parser::NumberOutputParser;
