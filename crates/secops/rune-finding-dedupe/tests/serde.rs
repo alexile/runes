@@ -59,3 +59,13 @@ fn rejects_shared_keys() -> Result<(), serde_json::Error> {
     assert!(err.is_err_and(|e| e.to_string().contains("belongs to two issues")));
     Ok(())
 }
+
+#[test]
+fn options_saved_before_the_list_bounds_still_load() -> Result<(), serde_json::Error> {
+    let options: rune_finding_dedupe::Options = serde_json::from_str(r#"{"max_evidence":8}"#)?;
+    assert_eq!(
+        options,
+        rune_finding_dedupe::Options::default().with_max_evidence(8)
+    );
+    Ok(())
+}

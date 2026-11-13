@@ -1,6 +1,8 @@
 //! Merging duplicate findings into one, and [`Options`].
 
-use rune_finding::Finding;
+use std::collections::{HashMap, HashSet};
+
+use rune_finding::{Finding, Taxonomy};
 
 use crate::Correlate;
 
@@ -13,20 +15,32 @@ use crate::Correlate;
 ///
 /// let options = Options::default().with_max_evidence(8);
 /// assert_eq!(options.max_evidence, 8);
+/// assert_eq!(options.max_taxonomy, 64);
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default))]
 #[non_exhaustive]
 pub struct Options {
     /// The most evidence items a merged finding keeps. Evidence of the
     /// kept finding comes first; duplicates only add items up to this
     /// bound. Default 32.
     pub max_evidence: usize,
+    /// The most taxonomy references a merged finding keeps, in the same
+    /// way as [`max_evidence`](Self::max_evidence). Default 64.
+    pub max_taxonomy: usize,
+    /// The most remediation reference URLs a merged finding keeps, in the
+    /// same way as [`max_evidence`](Self::max_evidence). Default 32.
+    pub max_remediation_refs: usize,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { max_evidence: 32 }
+        Self {
+            max_evidence: 32,
+            max_taxonomy: 64,
+            max_remediation_refs: 32,
+        }
     }
 }
 
@@ -35,6 +49,20 @@ impl Options {
     #[must_use]
     pub const fn with_max_evidence(mut self, max_evidence: usize) -> Self {
         self.max_evidence = max_evidence;
+        self
+    }
+
+    /// Set [`max_taxonomy`](Self::max_taxonomy).
+    #[must_use]
+    pub const fn with_max_taxonomy(mut self, max_taxonomy: usize) -> Self {
+        self.max_taxonomy = max_taxonomy;
+        self
+    }
+
+    /// Set [`max_remediation_refs`](Self::max_remediation_refs).
+    #[must_use]
+    pub const fn with_max_remediation_refs(mut self, max_remediation_refs: usize) -> Self {
+        self.max_remediation_refs = max_remediation_refs;
         self
     }
 }
@@ -47,8 +75,10 @@ impl Options {
 /// other one contributes:
 ///
 /// - evidence, taxonomy references and remediation reference URLs it has
-///   that the kept one lacks (evidence up to
-///   [`Options::max_evidence`]);
+///   that the kept one lacks, up to [`Options::max_evidence`],
+///   [`Options::max_taxonomy`] and [`Options::max_remediation_refs`] (the
+///   kept one's own are never dropped). A taxonomy reference the kept one
+///   already has gives it its name when the kept one has none;
 /// - its remediation, when the kept one has none;
 /// - its CVSS score, when it is higher or the kept one has none;
 /// - its extension, through [`Correlate::merge_ext`].
@@ -92,24 +122,39 @@ pub fn merge<X, C: Correlate<X> + ?Sized>(
         }
     }
 
-    for entry in from.taxonomy {
-        match into
+    if !from.taxonomy.is_empty() {
+        let mut index: HashMap<(Taxonomy, String), usize> = into
             .taxonomy
-            .iter_mut()
-            .find(|kept| kept.framework == entry.framework && kept.id == entry.id)
-        {
-            Some(kept) => {
-                if kept.name.is_none() {
+            .iter()
+            .enumerate()
+            .map(|(at, kept)| ((kept.framework.clone(), kept.id.clone()), at))
+            .collect();
+        for entry in from.taxonomy {
+            let key = (entry.framework.clone(), entry.id.clone());
+            if let Some(&at) = index.get(&key) {
+                if let Some(kept) = into.taxonomy.get_mut(at)
+                    && kept.name.is_none()
+                {
                     kept.name = entry.name;
                 }
+            } else if into.taxonomy.len() < options.max_taxonomy {
+                index.insert(key, into.taxonomy.len());
+                into.taxonomy.push(entry);
             }
-            None => into.taxonomy.push(entry),
         }
     }
 
-    for url in from.remediation_refs {
-        if !into.remediation_refs.contains(&url) {
-            into.remediation_refs.push(url);
+    if into.remediation_refs.len() < options.max_remediation_refs
+        && !from.remediation_refs.is_empty()
+    {
+        let mut seen: HashSet<String> = into.remediation_refs.iter().cloned().collect();
+        for url in from.remediation_refs {
+            if into.remediation_refs.len() >= options.max_remediation_refs {
+                break;
+            }
+            if seen.insert(url.clone()) {
+                into.remediation_refs.push(url);
+            }
         }
     }
 
@@ -225,6 +270,45 @@ mod tests {
             &options,
         );
         assert_eq!(big.evidence.len(), 3);
+    }
+
+    // Merging many duplicates used to grow the lists without bound and
+    // scan them once per entry added.
+    #[test]
+    fn many_duplicates_merge_in_bounded_lists() {
+        let mut kept = finding("a", Severity::High, Confidence::Firm);
+        let start = std::time::Instant::now();
+        for i in 0..20_000_u32 {
+            let duplicate = finding("b", Severity::Low, Confidence::Firm)
+                .push_taxonomy(TaxonomyRef::cwe(i))
+                .push_taxonomy(TaxonomyRef::cwe(i))
+                .with_remediation_refs(vec![format!("https://x.test/{i}")]);
+            merge(
+                &mut kept,
+                duplicate,
+                &Strategy::Fingerprint,
+                &Options::default(),
+            );
+        }
+        let elapsed = start.elapsed();
+        assert_eq!(kept.taxonomy.len(), Options::default().max_taxonomy);
+        assert_eq!(
+            kept.remediation_refs.len(),
+            Options::default().max_remediation_refs
+        );
+        assert!(elapsed < std::time::Duration::from_secs(2), "{elapsed:?}");
+    }
+
+    #[test]
+    fn known_taxonomy_still_gets_its_name_at_the_bound() {
+        let options = Options::default().with_max_taxonomy(1);
+        let mut a =
+            finding("a", Severity::High, Confidence::Firm).push_taxonomy(TaxonomyRef::cwe(79));
+        let b = finding("b", Severity::Low, Confidence::Firm)
+            .push_taxonomy(TaxonomyRef::cwe(89))
+            .push_taxonomy(TaxonomyRef::cwe(79).with_name("XSS"));
+        merge(&mut a, b, &Strategy::Fingerprint, &options);
+        assert_eq!(a.taxonomy, [TaxonomyRef::cwe(79).with_name("XSS")]);
     }
 
     #[test]

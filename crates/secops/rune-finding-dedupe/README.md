@@ -19,8 +19,11 @@ life.
 - **`Strategy`**: `Fingerprint` (the default), or `FingerprintOrCwe`, which
   also matches the same CWE at the same location, so CodeQL's and
   Semgrep's SQL injection rules on one line become one issue.
-- **`merge`**: the higher severity and confidence win; evidence (bounded),
-  taxonomy references and remediation links are unioned; the higher CVSS
+- **`merge`**: the higher severity and confidence win; evidence,
+  taxonomy references and remediation links are unioned, each up to a
+  bound in `Options` (32, 64 and 32 by default; since 0.1.1 the last two
+  are bounded too, which only matters when merging hundreds of
+  duplicates with different classifications); the higher CVSS
   score is kept; extensions merge through `Correlate::merge_ext`.
 - **`Tracker`** follows issues across `Scan`s. Each issue keeps the
   `IssueId` it was first seen under; each scan returns a `ScanReport` of
