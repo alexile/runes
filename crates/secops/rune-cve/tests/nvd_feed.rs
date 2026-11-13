@@ -171,3 +171,28 @@ fn rejects_invalid_records() {
     // Empty object: an empty page.
     assert_eq!(NvdFeed::from_json(b"{}").unwrap().vulnerabilities.len(), 0);
 }
+
+/// Every wildcard target used to add the whole index to the candidate
+/// list, and a repeated target its product's list again: memory grew with
+/// targets × records.
+#[test]
+fn many_platform_targets_are_looked_up_without_blowing_up() {
+    let records: Vec<String> = (1..=20_000)
+        .map(|n| format!(r#"{{"cve":{{"id":"CVE-2020-{n:05}"}}}}"#))
+        .collect();
+    let json = format!(
+        r#"{{"totalResults":20000,"vulnerabilities":[{}]}}"#,
+        records.join(",")
+    );
+    let index: CveIndex = NvdFeed::from_json(json.as_bytes())
+        .expect("valid feed")
+        .into_cves()
+        .into_iter()
+        .collect();
+    let wild: Cpe = "cpe:2.3:a:*:*:*:*:*:*:*:*:*:*".parse().expect("valid cpe");
+    let platform = vec![wild; 5_000];
+    let start = std::time::Instant::now();
+    assert_eq!(index.lookup_platform(&platform).len(), 0);
+    let elapsed = start.elapsed();
+    assert!(elapsed < std::time::Duration::from_secs(1), "{elapsed:?}");
+}

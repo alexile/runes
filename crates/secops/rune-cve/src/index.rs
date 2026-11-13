@@ -1,6 +1,6 @@
 //! [`CveIndex`]: CVE records indexed by id and by product.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::{Cpe, Cve, CveId};
 
@@ -129,19 +129,28 @@ impl CveIndex {
     /// out.
     #[must_use]
     pub fn lookup_platform(&self, platform: &[Cpe]) -> Vec<&Cve> {
-        let mut candidates: Vec<usize> = Vec::new();
+        // Each distinct product once; a target without one means every record.
+        let mut products: HashSet<(&str, &str)> = HashSet::new();
+        let mut everything = false;
         for target in platform {
-            match (target.vendor(), target.product()) {
-                (Some(v), Some(p)) => candidates.extend(
-                    self.by_product
-                        .get(&(v.to_owned(), p.to_owned()))
-                        .into_iter()
-                        .flatten(),
-                ),
-                _ => candidates.extend(0..self.cves.len()),
+            if let (Some(v), Some(p)) = (target.vendor(), target.product()) {
+                products.insert((v, p));
+            } else {
+                everything = true;
+                break;
             }
         }
-        candidates.extend(&self.wildcard);
+        let mut candidates: Vec<usize> = if everything {
+            (0..self.cves.len()).collect()
+        } else {
+            products
+                .into_iter()
+                .filter_map(|(v, p)| self.by_product.get(&(v.to_owned(), p.to_owned())))
+                .flatten()
+                .chain(&self.wildcard)
+                .copied()
+                .collect()
+        };
         candidates.sort_unstable();
         candidates.dedup();
         candidates
