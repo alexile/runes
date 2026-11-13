@@ -420,7 +420,7 @@ rune-strings = { path = "crates/common/rune-strings", version = "0.2.2" }
 rune-taxonomy = { path = "crates/secops/rune-taxonomy", version = "0.1.1" }
 rune-tech-detect = { path = "crates/web/rune-tech-detect", version = "0.1.0" }
 rune-telemetry = { path = "crates/common/rune-telemetry", version = "0.1.0" }
-rune-tls-hello = { path = "crates/net/rune-tls-hello", version = "0.1.0" }
+rune-tls-hello = { path = "crates/net/rune-tls-hello", version = "0.1.1" }
 rune-tls-probe = { path = "crates/net/rune-tls-probe", version = "0.1.0" }
 rune-tokenize = { path = "crates/common/rune-tokenize", version = "0.1.2" }
 rune-tool-schema = { path = "crates/chain/rune-tool-schema", version = "0.1.3" }

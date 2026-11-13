@@ -273,7 +273,37 @@ proptest! {
         }
         if let Ok(parsed) = ClientHello::parse_records(&records) {
             let body = parsed.to_body().unwrap();
-            prop_assert_eq!(ClientHello::parse(&body).unwrap(), parsed);
+            prop_assert_eq!(&ClientHello::parse(&body).unwrap(), &parsed);
+            // Every typed view of the extensions must hold up too.
+            let _ = (parsed.server_name(), parsed.alpn_protocols(), parsed.supported_versions());
+            let _ = (parsed.supported_groups(), parsed.signature_algorithms(), parsed.ec_point_formats());
+            let _ = (parsed.key_shares(), parsed.max_version(), parsed.offers_fallback_scsv());
+            let _ = (parsed.offers_secure_renegotiation(), parsed.extension_types().count());
+        }
+        // The stream reader, fed in uneven pieces.
+        let mut reader = MessageReader::new();
+        for chunk in records.chunks(7) {
+            reader.feed(chunk);
+            while let Ok(Some(_)) = reader.next_message() {}
+        }
+    }
+
+    #[test]
+    fn mutated_server_hellos_never_panic(flips in vec((any::<prop::sample::Index>(), any::<u8>()), 1..6)) {
+        let hello = ServerHello::new()
+            .with_random([7; 32])
+            .with_extension(Extension::selected_version(ProtocolVersion::TLS_1_3))
+            .with_extension(Extension::key_share(&KeyShareEntry::new(NamedGroup::X25519, vec![9; 32])).unwrap())
+            .with_extension(Extension::alpn([b"h2"]).unwrap());
+        let mut records = hello.to_records(ProtocolVersion::TLS_1_2, 1 << 14).unwrap();
+        for (index, value) in flips {
+            let i = index.index(records.len());
+            records[i] ^= value;
+        }
+        if let Ok(parsed) = ServerHello::parse_records(&records) {
+            let _ = (parsed.selected_version(), parsed.alpn_protocol(), parsed.key_share_group());
+            let _ = (parsed.downgrade_sentinel(), parsed.secure_renegotiation(), parsed.kind());
+            let _ = (parsed.is_hello_retry_request(), parsed.extension_types().count());
         }
     }
 }

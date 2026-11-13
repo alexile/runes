@@ -242,6 +242,9 @@ pub enum Message {
 #[derive(Debug, Clone)]
 pub struct MessageReader {
     input: Vec<u8>,
+    /// Bytes at the front of `input` already parsed. They are dropped in
+    /// bulk, so reading many small records stays linear.
+    consumed: usize,
     handshake: Vec<u8>,
     max_handshake_len: usize,
     record_version: Option<ProtocolVersion>,
@@ -252,6 +255,7 @@ impl Default for MessageReader {
     fn default() -> Self {
         Self {
             input: Vec::new(),
+            consumed: 0,
             handshake: Vec::new(),
             max_handshake_len: DEFAULT_MAX_HANDSHAKE_LEN,
             record_version: None,
@@ -282,7 +286,7 @@ impl MessageReader {
     /// Bytes fed but not yet returned as messages.
     #[must_use]
     pub const fn buffered_len(&self) -> usize {
-        self.input.len() + self.handshake.len()
+        self.input.len() - self.consumed + self.handshake.len()
     }
 
     /// The version of the last record read, if any.
@@ -312,15 +316,22 @@ impl MessageReader {
                     return message.map(|m| Some(Message::Handshake(m)));
                 }
             }
-            let (record, used) = match Record::parse(&self.input) {
+            let unread = self.input.get(self.consumed..).unwrap_or_default();
+            let (record, used) = match Record::parse(unread) {
                 Ok(parsed) => parsed,
-                Err(Error::Incomplete { .. }) => return Ok(None),
+                Err(Error::Incomplete { .. }) => {
+                    self.compact();
+                    return Ok(None);
+                }
                 Err(err) => return Err(err),
             };
             self.record_version = Some(record.version);
             let content_type = record.content_type;
             let fragment = record.fragment.to_vec();
-            self.input.drain(..used);
+            self.consumed += used;
+            if self.consumed * 2 >= self.input.len() {
+                self.compact();
+            }
 
             if content_type == ContentType::HANDSHAKE && !self.encrypted {
                 if fragment.is_empty() {
@@ -347,6 +358,12 @@ impl MessageReader {
             };
             return Ok(Some(message));
         }
+    }
+
+    /// Drops the parsed bytes from the front of the input buffer.
+    fn compact(&mut self) {
+        self.input.drain(..self.consumed);
+        self.consumed = 0;
     }
 }
 
@@ -402,6 +419,27 @@ mod tests {
         assert_eq!(reader.next_message().unwrap(), None);
         assert_eq!(reader.buffered_len(), 0);
         assert_eq!(reader.record_version(), Some(ProtocolVersion::TLS_1_2));
+    }
+
+    #[test]
+    fn many_small_records_take_linear_time() {
+        // 1 MiB of empty application data records, fed at once.
+        let records = (4 << 20) / RECORD_HEADER_LEN;
+        let mut reader = MessageReader::new();
+        reader.feed(&[23, 3, 3, 0, 0].repeat(records));
+        let started = std::time::Instant::now();
+        let mut count = 0;
+        while let Some(message) = reader.next_message().unwrap() {
+            assert_eq!(message, Message::ApplicationData(Vec::new()));
+            count += 1;
+        }
+        let elapsed = started.elapsed();
+        assert_eq!(count, records);
+        assert_eq!(reader.buffered_len(), 0);
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "{records} records took {elapsed:?}"
+        );
     }
 
     #[test]
