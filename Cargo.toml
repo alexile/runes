@@ -324,7 +324,7 @@ rune-chain-anthropic = { path = "crates/chain/rune-chain-anthropic", version = "
 rune-chain-core = { path = "crates/chain/rune-chain-core", version = "0.2.7" }
 rune-chain-embed = { path = "crates/chain/rune-chain-embed", version = "0.3.2" }
 rune-chain-eval = { path = "crates/chain/rune-chain-eval", version = "0.1.0" }
-rune-chain-gemini = { path = "crates/chain/rune-chain-gemini", version = "0.1.0" }
+rune-chain-gemini = { path = "crates/chain/rune-chain-gemini", version = "0.1.1" }
 rune-chain-graph = { path = "crates/chain/rune-chain-graph", version = "0.1.0" }
 rune-chain-macros = { path = "crates/chain/rune-chain-macros", version = "0.1.0" }
 rune-chain-llm = { path = "crates/chain/rune-chain-llm", version = "0.3.1" }

@@ -35,6 +35,9 @@ prices for the current Gemini 2.x and 3.x models.
   (`promptFeedback.blockReason`) is an error.
 - **Embeddings** (feature `embed`): `GeminiEmbedder` implements rune-chain-embed's
   `Embedder` over `embedContent` / `batchEmbedContents`.
+- **Images and speech**: `ImageGenerationModel` for Imagen (`predict`) and Gemini
+  image-output models, `SpeechModel` for the Gemini TTS models (PCM, or wrapped in
+  WAV). Transcription is not implemented.
 - **Hardened transport**: the API key goes only in the `x-goog-api-key` header,
   never in the URL, and never appears in `Debug` output or errors; HTTPS is
   required except to loopback; redirects are not followed; model ids are checked

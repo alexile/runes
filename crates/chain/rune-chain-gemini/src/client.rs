@@ -366,7 +366,6 @@ impl Gemini {
         self
     }
 
-    #[cfg(feature = "embed")]
     pub(crate) const fn transport(&self) -> &Transport {
         &self.transport
     }

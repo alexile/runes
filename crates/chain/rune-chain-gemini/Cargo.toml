@@ -1,6 +1,6 @@
 [package]
 name = "rune-chain-gemini"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -18,6 +18,7 @@ embed = ["dep:rune-chain-embed"]
 
 [dependencies]
 rune-chain-core.workspace = true
+rune-base64.workspace = true
 rune-chain-embed = { workspace = true, optional = true }
 rune-tool-schema.workspace = true
 async-trait.workspace = true

@@ -3636,12 +3636,13 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-gemini"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-stream",
  "async-trait",
  "futures",
  "reqwest",
+ "rune-base64",
  "rune-chain-core",
  "rune-chain-embed",
  "rune-sse",

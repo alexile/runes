@@ -39,6 +39,10 @@
 //!   [`ResponseAccumulator`]
 //! - `GeminiEmbedder` (feature `embed`) — `embedContent` /
 //!   `batchEmbedContents` behind rune-chain-embed's `Embedder`
+//! - Images and speech — [`ImageGenerationModel`](rune_chain_core::ImageGenerationModel)
+//!   for Imagen (`predict`) and Gemini image-output models, and
+//!   [`SpeechModel`](rune_chain_core::SpeechModel) for the TTS models (PCM,
+//!   or WAV-wrapped); base64 payloads are decoded under the response cap
 //! - Hardened transport — key only in the `x-goog-api-key` header and
 //!   redacted everywhere, HTTPS-only (except localhost), redirects not
 //!   followed, bounded bodies, SSE line, event and content caps, retries on
@@ -143,6 +147,7 @@ mod convert;
 #[cfg(feature = "embed")]
 mod embed;
 mod http;
+mod media;
 pub mod models;
 mod response;
 mod stream;
