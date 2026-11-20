@@ -26,7 +26,8 @@ hits a budget.
 - **`MeteredLlm`** — wraps any `rune_chain_core::Llm`. It checks the budget
   before each call from a local token estimate (via `rune-tokenize`), and
   records the provider-reported usage afterwards, falling back to an estimate
-  when the provider reports none (streams).
+  when the provider reports none (plain `stream`; `stream_events` uses the
+  provider's `StreamEvent::Usage` when it sends one).
 - Prices are `rune_chain_core::Pricing` values. `rune-chain-anthropic` and
   `rune-chain-openai` attach list prices to every model in their registries;
   costs are exact integer picodollars.

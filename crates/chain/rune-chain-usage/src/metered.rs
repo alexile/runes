@@ -6,7 +6,8 @@ use std::task::{Context, Poll};
 use async_trait::async_trait;
 use futures::Stream;
 use rune_chain_core::{
-    FunctionDefinition, GenerateResult, Llm, LlmError, Message, Pricing, StreamData, ToolChoice,
+    EventStream, FunctionDefinition, GenerateResult, Llm, LlmError, Message, Pricing, StreamData,
+    StreamEvent, TokenUsage, ToolChoice,
 };
 
 use crate::estimate::{estimate_messages, estimate_reply, estimate_tools};
@@ -23,8 +24,10 @@ type BoxStream = Pin<Box<dyn Stream<Item = Result<StreamData, LlmError>> + Send>
 /// meter whether the budget allows it; a refused call fails with
 /// [`LlmError::other`] without reaching the provider. After the call it
 /// records the provider-reported usage, or a local estimate when the
-/// provider reports none (always the case for streams, which are recorded
-/// when they finish or are dropped). A call that makes spending reach a cap
+/// provider reports none (always the case for [`stream`](Llm::stream)).
+/// Streams are recorded once, when they finish or are dropped;
+/// [`stream_events`](Llm::stream_events) uses the last
+/// [`StreamEvent::Usage`] it saw, or an estimate if there was none. A call that makes spending reach a cap
 /// still returns its result; the *next* call is refused.
 ///
 /// # Example
@@ -129,6 +132,20 @@ impl<L: Llm> MeteredLlm<L> {
         self.meter.reserve(cost, tokens).map_err(LlmError::from)
     }
 
+    fn pending(&self, input_tokens: u64, reservation: Reservation) -> Pending {
+        Pending {
+            meter: self.meter.clone(),
+            provider: self.provider.clone(),
+            model: self.model.clone(),
+            tag: self.tag.clone(),
+            pricing: self.pricing,
+            input_tokens,
+            output_chars: 0,
+            reported: None,
+            _reservation: reservation,
+        }
+    }
+
     /// Record the call, then release its reservation (dropped on return).
     fn settle(&self, _reservation: Reservation, input_estimate: u64, result: &GenerateResult) {
         let usage = result.tokens.as_ref().map_or_else(
@@ -184,16 +201,25 @@ impl<L: Llm> Llm for MeteredLlm<L> {
         let inner = self.inner.stream(messages).await?;
         Ok(Box::pin(MeteredStream {
             inner,
-            pending: Some(Pending {
-                meter: self.meter.clone(),
-                provider: self.provider.clone(),
-                model: self.model.clone(),
-                tag: self.tag.clone(),
-                pricing: self.pricing,
-                input_tokens: input,
-                output_chars: 0,
-                _reservation: reservation,
-            }),
+            pending: Some(self.pending(input, reservation)),
+        }))
+    }
+
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        let input = estimate_messages(messages).saturating_add(tools.map_or(0, estimate_tools));
+        let reservation = self.preflight(input)?;
+        let inner = self
+            .inner
+            .stream_events(messages, tools, tool_choice)
+            .await?;
+        Ok(Box::pin(MeteredEvents {
+            inner,
+            pending: Some(self.pending(input, reservation)),
         }))
     }
 }
@@ -210,13 +236,23 @@ struct Pending {
     /// costs no memory; it is turned into tokens the way
     /// [`estimate_text`](crate::estimate_text) does.
     output_chars: u64,
+    /// The last usage the provider reported in the stream, if any.
+    reported: Option<TokenUsage>,
     /// Released when the stream settles, after its usage is recorded.
     _reservation: Reservation,
 }
 
 impl Pending {
+    fn add_chars(&mut self, text: &str) {
+        let chars = text.chars().count() as u64;
+        self.output_chars = self.output_chars.saturating_add(chars);
+    }
+
     fn settle(self) {
-        let usage = Usage::estimated(self.input_tokens, self.output_chars.div_ceil(4));
+        let usage = self.reported.as_ref().map_or_else(
+            || Usage::estimated(self.input_tokens, self.output_chars.div_ceil(4)),
+            Usage::from_token_usage,
+        );
         let _ = self.meter.record_tagged(
             &self.provider,
             &self.model,
@@ -251,8 +287,7 @@ impl Stream for MeteredStream {
         match &next {
             Poll::Ready(Some(Ok(chunk))) => {
                 if let Some(p) = this.pending.as_mut() {
-                    let chars = chunk.content.chars().count() as u64;
-                    p.output_chars = p.output_chars.saturating_add(chars);
+                    p.add_chars(&chunk.content);
                 }
                 if chunk.is_finished {
                     this.settle();
@@ -268,5 +303,53 @@ impl Stream for MeteredStream {
 impl Drop for MeteredStream {
     fn drop(&mut self) {
         self.settle();
+    }
+}
+
+/// Passes events through, keeping the last reported usage (or counting
+/// output characters for an estimate), and records the call when the stream
+/// ends or is dropped.
+struct MeteredEvents {
+    inner: EventStream,
+    pending: Option<Pending>,
+}
+
+impl Stream for MeteredEvents {
+    type Item = Result<StreamEvent, LlmError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        let next = this.inner.as_mut().poll_next(cx);
+        match &next {
+            Poll::Ready(Some(Ok(event))) => {
+                if let Some(p) = this.pending.as_mut() {
+                    match event {
+                        StreamEvent::Usage(usage) => p.reported = Some(usage.clone()),
+                        StreamEvent::TextDelta(text)
+                        | StreamEvent::ToolCallStart { name: text, .. }
+                        | StreamEvent::ToolCallDelta {
+                            arguments_fragment: text,
+                            ..
+                        } => p.add_chars(text),
+                        _ => {}
+                    }
+                }
+            }
+            Poll::Ready(None) => {
+                if let Some(p) = this.pending.take() {
+                    p.settle();
+                }
+            }
+            Poll::Ready(Some(Err(_))) | Poll::Pending => {}
+        }
+        next
+    }
+}
+
+impl Drop for MeteredEvents {
+    fn drop(&mut self) {
+        if let Some(p) = self.pending.take() {
+            p.settle();
+        }
     }
 }
