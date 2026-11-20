@@ -35,6 +35,9 @@
 //! - [`ImageData::validate`] — size, MIME and URL-scheme checks for images
 //!   from untrusted sources
 //! - [`Pricing`] / [`Cost`] — per-model token prices and exact cost arithmetic
+//! - [`TranscriptionModel`] / [`ImageGenerationModel`] / [`SpeechModel`] —
+//!   speech-to-text, image generation and text-to-speech behind small
+//!   provider-agnostic traits with request builders
 //! - [`StreamData`] — incremental token chunks for streaming responses
 //! - [`PromptArgs`] + [`prompt_args!`] — ergonomic key-value input for templates
 //! - [`ChainError`] / [`LlmError`] / [`ToolError`] — structured error types;
@@ -124,6 +127,7 @@ mod ext;
 mod function_call;
 mod generate;
 mod llm;
+mod media;
 mod memory;
 mod message;
 mod pricing;
@@ -153,6 +157,12 @@ pub use function_call::{
 };
 pub use generate::{FinishReason, GenerateResult, TokenUsage};
 pub use llm::Llm;
+pub use media::{
+    AudioFormat, GeneratedImage, ImageFormat, ImageGenerationModel, ImageGenerationRequest,
+    ImageGenerationResponse, ImageResponseFormat, SpeechModel, SpeechRequest, SpeechResponse,
+    TimestampGranularity, TranscriptionFormat, TranscriptionModel, TranscriptionRequest,
+    TranscriptionResponse, TranscriptionSegment,
+};
 pub use memory::Memory;
 pub use message::{
     ContentPart, DEFAULT_MAX_IMAGE_BYTES, ImageData, ImageError, MAX_IMAGE_URL_LEN, Message,
