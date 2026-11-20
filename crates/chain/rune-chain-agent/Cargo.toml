@@ -1,6 +1,6 @@
 [package]
 name = "rune-chain-agent"
-version = "0.3.4"
+version = "0.3.5"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -14,6 +14,7 @@ publish = true
 
 [dependencies]
 rune-chain-core.workspace = true
+async-stream.workspace = true
 async-trait.workspace = true
 futures.workspace = true
 serde_json.workspace = true

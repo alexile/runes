@@ -1,15 +1,35 @@
+use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::{Stream, StreamExt};
 use rune_chain_core::{
-    Chain, ChainError, GenerateResult, Llm, LlmError, Message, PromptArgs, TokenUsage, ToolCall,
-    ToolChoice,
+    Chain, ChainError, FunctionDefinition, GenerateResult, Llm, LlmError, Message, PromptArgs,
+    StreamAccumulator, StreamEvent, TokenUsage, ToolCall, ToolChoice,
 };
 use tokio::time::Instant;
 
 use crate::builder::toolbox_builder;
-use crate::event::{AgentEvent, StopReason};
+use crate::event::{AgentEvent, AgentStreamEvent, StopReason};
 use crate::runner::{CallStyle, ToolInvocation, Toolbox};
+use crate::sanitize::sanitize_name;
+
+/// The stream returned by [`FunctionCallingAgent::run_stream`].
+pub type AgentStream<'a> =
+    Pin<Box<dyn Stream<Item = Result<AgentStreamEvent, ChainError>> + Send + 'a>>;
+
+/// Opening history, tool definitions and the run's deadline.
+type Setup = (Vec<Message>, Vec<FunctionDefinition>, Option<Instant>);
+
+/// What one model reply means for the loop.
+enum Turn {
+    /// The model answered; the run is over.
+    Final,
+    /// The model wants tools but the iteration limit is reached.
+    Limit,
+    /// Run these calls (the AI turn is already in the history).
+    Calls(Vec<ToolCall>),
+}
 
 const DEFAULT_SYSTEM_PROMPT: &str =
     "You are a helpful assistant. Use the provided tools when needed to answer questions.";
@@ -169,29 +189,9 @@ impl FunctionCallingAgent {
         &self,
         conversation: Vec<Message>,
     ) -> Result<FunctionAgentResult, ChainError> {
-        if conversation.is_empty() {
-            return Err(ChainError::Other("the conversation is empty".into()));
-        }
+        let (mut messages, tool_defs, deadline) = self.prepare(conversation)?;
         let tb = &self.toolbox;
-        tb.check()?;
-        let tool_defs = tb.definitions();
-        let system = tb.system_prompt(
-            self.system_prompt
-                .clone()
-                .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_owned()),
-        );
-        let deadline = tb.deadline();
-
-        let mut messages = Vec::with_capacity(conversation.len() + 1);
-        messages.push(Message::system(system));
-        messages.extend(conversation);
-        let mut out = FunctionAgentResult {
-            output: String::new(),
-            iterations: 0,
-            tool_invocations: Vec::new(),
-            tokens: None,
-            stop_reason: StopReason::FinalAnswer,
-        };
+        let mut out = new_result();
 
         loop {
             if deadline.is_some_and(|d| Instant::now() >= d) {
@@ -210,31 +210,11 @@ impl FunctionCallingAgent {
                 },
                 None => call.await?,
             };
-            TokenUsage::accumulate(&mut out.tokens, result.tokens.as_ref());
-            out.output.clone_from(&result.generation);
-
-            if !result.wants_tool_calls() {
-                if result.generation.trim().is_empty() {
-                    return Err(ChainError::LlmError(LlmError::invalid_response(
-                        "the model returned an empty reply and no tool calls",
-                    )));
-                }
-                tb.emit(&AgentEvent::FinalAnswer {
-                    output: out.output.clone(),
-                });
-                return Ok(out);
-            }
-
-            if out.iterations >= tb.limits.max_iterations {
-                return Ok(self.stop(out, StopReason::MaxIterations));
-            }
-            out.iterations += 1;
-
-            let calls: Vec<ToolCall> = result.tool_calls;
-            messages.push(Message::ai_with_tool_calls(
-                &result.generation,
-                calls.clone(),
-            ));
+            let calls = match self.take_reply(&mut out, &mut messages, result)? {
+                Turn::Final => return Ok(out),
+                Turn::Limit => return Ok(self.stop(out, StopReason::MaxIterations)),
+                Turn::Calls(calls) => calls,
+            };
             let invocations = tb
                 .execute(&calls, CallStyle::Json, out.iterations, deadline)
                 .await?;
@@ -245,10 +225,255 @@ impl FunctionCallingAgent {
         }
     }
 
+    /// Run the loop with streaming: like [`run_messages`](Self::run_messages),
+    /// but every model call goes through
+    /// [`Llm::stream_events`], and the run is reported as it happens.
+    ///
+    /// The stream yields text and reasoning deltas from every round,
+    /// [`ToolCallStarted`](AgentStreamEvent::ToolCallStarted) as the model
+    /// begins each call, [`ToolResult`](AgentStreamEvent::ToolResult) once a
+    /// round's tools have run, and finally
+    /// [`Done`](AgentStreamEvent::Done) with the same
+    /// [`FunctionAgentResult`] `run_messages` returns. Tool calls are checked,
+    /// approved and run exactly as there, under the same
+    /// [`AgentLimits`](crate::AgentLimits); the wall-time budget also bounds
+    /// reading each streamed reply. Observers get the usual
+    /// [`AgentEvent`]s.
+    ///
+    /// Providers without native streaming tool calls still work: the
+    /// default `stream_events` replays each reply whole.
+    ///
+    /// # Errors
+    ///
+    /// As for [`run_messages`](Self::run_messages), as the stream's last
+    /// item; a stream error ends the run.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use std::sync::Arc;
+    ///
+    /// use futures::StreamExt;
+    /// use rune_chain_agent::{AgentStreamEvent, FunctionCallingAgent};
+    /// use rune_chain_core::testing::{FakeLlm, FakeReply};
+    /// use rune_chain_core::{Message, Tool, ToolCall, ToolError};
+    ///
+    /// struct Clock;
+    ///
+    /// #[async_trait::async_trait]
+    /// impl Tool for Clock {
+    ///     fn name(&self) -> &str { "clock" }
+    ///     fn description(&self) -> &str { "The time." }
+    ///     async fn run(&self, _: &str) -> Result<String, ToolError> {
+    ///         Ok("noon".into())
+    ///     }
+    /// }
+    ///
+    /// # tokio_test::block_on(async {
+    /// let llm = FakeLlm::with_replies([
+    ///     FakeReply::tool_calls([ToolCall::new("c1", "clock", r#"{"input":"now"}"#)]),
+    ///     FakeReply::text("It is noon."),
+    /// ]);
+    /// let agent = FunctionCallingAgent::new(Arc::new(llm)).tool(Clock);
+    /// let mut stream = agent.run_stream(vec![Message::human("Time?")]);
+    /// let mut text = String::new();
+    /// while let Some(event) = stream.next().await {
+    ///     match event.unwrap() {
+    ///         AgentStreamEvent::TextDelta(t) => text.push_str(&t),
+    ///         AgentStreamEvent::Done(result) => assert_eq!(result.output, "It is noon."),
+    ///         _ => {}
+    ///     }
+    /// }
+    /// assert_eq!(text, "It is noon.");
+    /// # });
+    /// ```
+    pub fn run_stream(&self, conversation: Vec<Message>) -> AgentStream<'_> {
+        Box::pin(async_stream::stream! {
+            let (mut messages, tool_defs, deadline) = match self.prepare(conversation) {
+                Ok(setup) => setup,
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            };
+            let tb = &self.toolbox;
+            let mut out = new_result();
+            loop {
+                if deadline.is_some_and(|d| Instant::now() >= d) {
+                    yield Ok(AgentStreamEvent::Done(self.stop(out, StopReason::WallTime)));
+                    return;
+                }
+                tb.emit(&AgentEvent::StepStarted {
+                    iteration: out.iterations,
+                });
+                let open = self.llm.stream_events(
+                    &messages,
+                    Some(&tool_defs),
+                    self.tool_choice.clone(),
+                );
+                let opened = match deadline {
+                    Some(d) => tokio::time::timeout_at(d, open).await.ok(),
+                    None => Some(open.await),
+                };
+                let mut events = match opened {
+                    Some(Ok(events)) => events,
+                    Some(Err(e)) => {
+                        yield Err(e.into());
+                        return;
+                    }
+                    None => {
+                        yield Ok(AgentStreamEvent::Done(self.stop(out, StopReason::WallTime)));
+                        return;
+                    }
+                };
+                let round = out.iterations + 1;
+                let mut acc = StreamAccumulator::new();
+                loop {
+                    let next = match deadline {
+                        Some(d) => tokio::time::timeout_at(d, events.next()).await.ok(),
+                        None => Some(events.next().await),
+                    };
+                    let Some(next) = next else {
+                        yield Ok(AgentStreamEvent::Done(self.stop(out, StopReason::WallTime)));
+                        return;
+                    };
+                    let event = match next {
+                        None => break,
+                        Some(Ok(event)) => event,
+                        Some(Err(e)) => {
+                            yield Err(e.into());
+                            return;
+                        }
+                    };
+                    if let Err(e) = acc.push(&event) {
+                        yield Err(e.into());
+                        return;
+                    }
+                    if let Some(item) = forward(event, round) {
+                        yield Ok(item);
+                    }
+                }
+                let calls = match self.take_reply(&mut out, &mut messages, acc.finish()) {
+                    Ok(Turn::Final) => {
+                        yield Ok(AgentStreamEvent::Done(out));
+                        return;
+                    }
+                    Ok(Turn::Limit) => {
+                        yield Ok(AgentStreamEvent::Done(
+                            self.stop(out, StopReason::MaxIterations),
+                        ));
+                        return;
+                    }
+                    Ok(Turn::Calls(calls)) => calls,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                };
+                let invocations = match tb
+                    .execute(&calls, CallStyle::Json, out.iterations, deadline)
+                    .await
+                {
+                    Ok(invocations) => invocations,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                };
+                for inv in &invocations {
+                    messages.push(Message::tool_result(&inv.call_id, tb.render(inv)));
+                    yield Ok(AgentStreamEvent::ToolResult {
+                        iteration: out.iterations,
+                        invocation: inv.clone(),
+                    });
+                }
+                out.tool_invocations.extend(invocations);
+            }
+        })
+    }
+
+    /// Check the tool set and build the opening history.
+    fn prepare(&self, conversation: Vec<Message>) -> Result<Setup, ChainError> {
+        if conversation.is_empty() {
+            return Err(ChainError::Other("the conversation is empty".into()));
+        }
+        let tb = &self.toolbox;
+        tb.check()?;
+        let system = tb.system_prompt(
+            self.system_prompt
+                .clone()
+                .unwrap_or_else(|| DEFAULT_SYSTEM_PROMPT.to_owned()),
+        );
+        let mut messages = Vec::with_capacity(conversation.len() + 1);
+        messages.push(Message::system(system));
+        messages.extend(conversation);
+        Ok((messages, tb.definitions(), tb.deadline()))
+    }
+
+    /// Fold one model reply into the run.
+    fn take_reply(
+        &self,
+        out: &mut FunctionAgentResult,
+        messages: &mut Vec<Message>,
+        result: GenerateResult,
+    ) -> Result<Turn, ChainError> {
+        let tb = &self.toolbox;
+        TokenUsage::accumulate(&mut out.tokens, result.tokens.as_ref());
+        out.output.clone_from(&result.generation);
+
+        if !result.wants_tool_calls() {
+            if result.generation.trim().is_empty() {
+                return Err(ChainError::LlmError(LlmError::invalid_response(
+                    "the model returned an empty reply and no tool calls",
+                )));
+            }
+            tb.emit(&AgentEvent::FinalAnswer {
+                output: out.output.clone(),
+            });
+            return Ok(Turn::Final);
+        }
+
+        if out.iterations >= tb.limits.max_iterations {
+            return Ok(Turn::Limit);
+        }
+        out.iterations += 1;
+        messages.push(Message::ai_with_tool_calls(
+            &result.generation,
+            result.tool_calls.clone(),
+        ));
+        Ok(Turn::Calls(result.tool_calls))
+    }
+
     fn stop(&self, mut out: FunctionAgentResult, reason: StopReason) -> FunctionAgentResult {
         self.toolbox.emit(&AgentEvent::Stopped { reason });
         out.stop_reason = reason;
         out
+    }
+}
+
+const fn new_result() -> FunctionAgentResult {
+    FunctionAgentResult {
+        output: String::new(),
+        iterations: 0,
+        tool_invocations: Vec::new(),
+        tokens: None,
+        stop_reason: StopReason::FinalAnswer,
+    }
+}
+
+/// The agent event for a model stream event, if the caller should see it.
+fn forward(event: StreamEvent, round: usize) -> Option<AgentStreamEvent> {
+    match event {
+        StreamEvent::TextDelta(t) if !t.is_empty() => Some(AgentStreamEvent::TextDelta(t)),
+        StreamEvent::ReasoningDelta { text, .. } if !text.is_empty() => {
+            Some(AgentStreamEvent::ReasoningDelta(text))
+        }
+        StreamEvent::ToolCallStart { id, name, .. } => Some(AgentStreamEvent::ToolCallStarted {
+            iteration: round,
+            call_id: id,
+            name: sanitize_name(&name),
+        }),
+        _ => None,
     }
 }
 

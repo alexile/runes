@@ -42,6 +42,10 @@
 //!   rules for loops you drive yourself, such as a state graph.
 //! - **Observability.** [`AgentEvent`]s report each step, tool call, tool
 //!   result and the final answer to an [`AgentObserver`].
+//! - **Streaming.** [`FunctionCallingAgent::run_stream`] runs the same loop
+//!   over [`Llm::stream_events`](rune_chain_core::Llm::stream_events) and
+//!   yields text deltas from every round, tool-call starts and results, and
+//!   the final result, under the same limits and checks.
 //!
 //! Timeouts use Tokio's timer, so run agents inside a Tokio runtime with the
 //! time driver enabled (the default for `#[tokio::main]`).
@@ -183,7 +187,7 @@ pub mod sanitize;
 
 pub use agent::{AgentExecutor, AgentResult};
 pub use approval::{Approval, ApprovalRequest, Approver};
-pub use event::{AgentEvent, AgentObserver, StopReason, ToolStatus};
+pub use event::{AgentEvent, AgentObserver, AgentStreamEvent, StopReason, ToolStatus};
 pub use executor::ToolExecutor;
-pub use function_agent::{FunctionAgentResult, FunctionCallingAgent};
+pub use function_agent::{AgentStream, FunctionAgentResult, FunctionCallingAgent};
 pub use runner::{AgentLimits, ToolErrorMode, ToolInvocation};

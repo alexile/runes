@@ -27,6 +27,7 @@ treats both directions as untrusted:
 | Sensitive tools | `tool_requiring_approval` plus an async `Approver` that can allow a call, deny it, or edit its arguments. Edited arguments are validated again. Without an approver, these tools never run. |
 | Failures | Tool errors, timeouts and panics go back to the model as results (`ToolErrorMode::ReturnToModel`), truncated to 1 KiB with secrets redacted. Set `ToolErrorMode::Abort` to fail the run instead. |
 | Observability | `on_event` receives `StepStarted`, `ToolCalled`, `ToolResult`, `FinalAnswer` and `Stopped` events. |
+| Streaming | `FunctionCallingAgent::run_stream` runs the same loop over `Llm::stream_events`: it yields text deltas from every round, tool-call starts, tool results and the final result, with the same checks and limits. |
 
 The timeouts use Tokio's timer, so run agents inside a Tokio runtime.
 

@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+use crate::{FunctionAgentResult, ToolInvocation};
+
 /// Why an agent run ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -103,6 +105,39 @@ pub enum AgentEvent {
         /// Why.
         reason: StopReason,
     },
+}
+
+/// One item of [`FunctionCallingAgent::run_stream`](crate::FunctionCallingAgent::run_stream).
+///
+/// Text and reasoning arrive as the model streams them, in every round;
+/// text from a round that ends in tool calls is the model's preamble to
+/// those calls, not the answer. The last item of a run is
+/// [`Done`](Self::Done).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum AgentStreamEvent {
+    /// A fragment of the model's text.
+    TextDelta(String),
+    /// A fragment of the model's reasoning.
+    ReasoningDelta(String),
+    /// The model started a tool call (before validation or approval).
+    ToolCallStarted {
+        /// Tool round, from 1.
+        iteration: usize,
+        /// Tool-call id.
+        call_id: String,
+        /// Requested tool name, sanitised.
+        name: String,
+    },
+    /// A tool call finished (in any [`ToolStatus`]).
+    ToolResult {
+        /// Tool round, from 1.
+        iteration: usize,
+        /// The call, its status and the output the model sees.
+        invocation: ToolInvocation,
+    },
+    /// The run ended: the final answer, or the reason it stopped early.
+    Done(FunctionAgentResult),
 }
 
 /// Receives [`AgentEvent`]s. Implemented for any `Fn(&AgentEvent) + Send + Sync`.
