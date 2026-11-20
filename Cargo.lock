@@ -3762,7 +3762,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-openai"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "async-stream",
  "async-trait",

@@ -331,7 +331,7 @@ rune-chain-macros = { path = "crates/chain/rune-chain-macros", version = "0.1.0"
 rune-chain-llm = { path = "crates/chain/rune-chain-llm", version = "0.3.1" }
 rune-chain-ollama = { path = "crates/chain/rune-chain-ollama", version = "0.3.1" }
 rune-chain-memory = { path = "crates/chain/rune-chain-memory", version = "0.2.2" }
-rune-chain-openai = { path = "crates/chain/rune-chain-openai", version = "0.2.4" }
+rune-chain-openai = { path = "crates/chain/rune-chain-openai", version = "0.2.5" }
 rune-chain-output-parser = { path = "crates/chain/rune-chain-output-parser", version = "0.2.2" }
 rune-chain-prompt = { path = "crates/chain/rune-chain-prompt", version = "0.2.2" }
 rune-chain-retrieval = { path = "crates/chain/rune-chain-retrieval", version = "0.3.1" }

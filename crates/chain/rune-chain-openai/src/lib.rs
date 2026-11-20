@@ -11,8 +11,10 @@
 //! - [`OpenAi`] — the client; configure once, call many times, cheap to clone
 //! - **OpenAI-compatible mode** — [`Provider`] presets with per-server
 //!   [`Quirks`] for Azure `OpenAI` (deployment URL, `api-version`, `api-key`
-//!   header), Mistral, Groq, Together, `DeepSeek`, `OpenRouter`, vLLM and
-//!   LM Studio, or any server via [`OpenAi::base_url`]
+//!   header), Mistral, Groq, Together, `DeepSeek`, `OpenRouter`, xAI,
+//!   Fireworks, Cerebras, Moonshot, Hyperbolic, Hugging Face, NVIDIA NIM,
+//!   `SambaNova`, Cohere, vLLM and LM Studio, or any server via
+//!   [`OpenAi::base_url`]
 //! - `generate()` / `generate_with_tools()` — full response with token usage
 //!   and native tool calls
 //! - `generate_structured()` — native `response_format: json_schema`

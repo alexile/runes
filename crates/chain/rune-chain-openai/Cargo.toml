@@ -1,10 +1,10 @@
 [package]
 name = "rune-chain-openai"
-version = "0.2.4"
+version = "0.2.5"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "OpenAI and OpenAI-compatible (Azure, Mistral, Groq, Together, DeepSeek, OpenRouter, vLLM, LM Studio) LLM provider for rune-chain: streaming, tools, structured output"
+description = "OpenAI and OpenAI-compatible (Azure, Mistral, Groq, Together, DeepSeek, OpenRouter, xAI, Fireworks, Cerebras, Moonshot, Hugging Face, NVIDIA NIM, SambaNova, Cohere, vLLM, LM Studio, ...) LLM provider for rune-chain: streaming, tools, structured output"
 license.workspace = true
 keywords = ["openai", "gpt", "llm", "langchain", "ai"]
 categories = ["asynchronous", "web-programming::http-client"]

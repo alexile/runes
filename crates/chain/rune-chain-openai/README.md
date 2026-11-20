@@ -1,6 +1,6 @@
 # rune-chain-openai
 
-> OpenAI and OpenAI-compatible LLM provider for the rune-chain framework — Azure OpenAI, Mistral, Groq, Together, DeepSeek, OpenRouter, vLLM and LM Studio; streaming, tool calls and native structured output.
+> OpenAI and OpenAI-compatible LLM provider for the rune-chain framework — Azure OpenAI, Mistral, Groq, Together, DeepSeek, OpenRouter, xAI, Fireworks, Cerebras, Moonshot, Hyperbolic, Hugging Face, NVIDIA NIM, SambaNova, Cohere, vLLM and LM Studio; streaming, tool calls and native structured output.
 
 [![crates.io](https://img.shields.io/crates/v/rune-chain-openai)](https://crates.io/crates/rune-chain-openai)
 [![docs.rs](https://img.shields.io/docsrs/rune-chain-openai)](https://docs.rs/rune-chain-openai)
@@ -16,7 +16,8 @@ server that speaks its dialect. Pass any slice of `Message`s and get back a
 `futures::Stream`; or ask for JSON that matches a schema.
 
 - **OpenAI-compatible presets** with per-provider quirks (auth header, token-limit
-  field, `stream_options`, `response_format` support) — see the table below.
+  field, `stream_options`, `response_format` and `tool_choice` support) — see the
+  table below.
 - **Native structured output**: `generate_structured` sends
   `response_format: json_schema` (strict) where supported and falls back to JSON
   mode or prompting elsewhere.
@@ -139,6 +140,15 @@ let llm = OpenAi::new("sk-...")
 | `OpenAi::openrouter` | `https://openrouter.ai/api/v1` | `OPENROUTER_API_KEY` | `openrouter/auto` | native |
 | `OpenAi::vllm(url, model)` | e.g. `http://localhost:8000/v1` | optional `VLLM_API_KEY` | — | native |
 | `OpenAi::lm_studio(model)` | `http://localhost:1234/v1` | none | — | native |
+| `Provider::Xai` | `https://api.x.ai/v1` | `XAI_API_KEY` | — | native |
+| `Provider::Fireworks` | `https://api.fireworks.ai/inference/v1` | `FIREWORKS_API_KEY` | — | native |
+| `Provider::Cerebras` | `https://api.cerebras.ai/v1` | `CEREBRAS_API_KEY` | — | native |
+| `Provider::Moonshot` | `https://api.moonshot.ai/v1` | `MOONSHOT_API_KEY` | — | native |
+| `Provider::Hyperbolic` | `https://api.hyperbolic.ai/inference/v1` | `HYPERBOLIC_API_KEY` | — | native |
+| `Provider::HuggingFace` | `https://router.huggingface.co/v1` | `HF_TOKEN` | — | JSON mode + prompt |
+| `Provider::NvidiaNim` | `https://integrate.api.nvidia.com/v1` | `NVIDIA_API_KEY` | — | prompt only |
+| `Provider::SambaNova` | `https://api.sambanova.ai/v1` | `SAMBANOVA_API_KEY` | — | native |
+| `Provider::Cohere` | `https://api.cohere.ai/compatibility/v1` | `COHERE_API_KEY` | — | JSON mode + prompt |
 
 `OpenAi::for_provider(Provider::X, key)` and `OpenAi::from_provider_env(Provider::X)`
 build the same presets; `OpenAi::azure_from_env(deployment)` reads
@@ -146,6 +156,11 @@ build the same presets; `OpenAi::azure_from_env(deployment)` reads
 (default `2024-10-21`). Any other server works with `.base_url(..)`, and
 `.quirks(Provider::X.quirks().with_json_schema(false))` adjusts the wire format
 when a particular model lacks a feature.
+
+Presets without a default model need `.model(..)`. Cohere's compatibility API and
+NVIDIA NIM don't take `tool_choice`, so it is left out (tools are still sent);
+Moonshot only accepts temperatures in `[0, 1]`. Perplexity is not listed: its
+Sonar chat-completions API was retired in September 2026.
 
 Plain `http://` is accepted only for `localhost`/loopback addresses unless you opt
 in with `.allow_http_host("gpu-box")`.

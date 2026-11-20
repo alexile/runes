@@ -46,6 +46,29 @@ pub enum Provider {
     Vllm,
     /// LM Studio's local server (default `http://localhost:1234/v1`).
     LmStudio,
+    /// xAI Grok (`api.x.ai`).
+    Xai,
+    /// Fireworks AI (`api.fireworks.ai/inference`).
+    Fireworks,
+    /// Cerebras Inference (`api.cerebras.ai`).
+    Cerebras,
+    /// Moonshot AI Kimi (`api.moonshot.ai`). Temperatures above 1 are
+    /// rejected by the server.
+    Moonshot,
+    /// Hyperbolic (`api.hyperbolic.ai/inference`).
+    Hyperbolic,
+    /// Hugging Face Inference Providers router (`router.huggingface.co`).
+    /// Models are Hub ids, optionally with a `:provider`, `:fastest` or
+    /// `:cheapest` suffix.
+    HuggingFace,
+    /// NVIDIA NIM on the hosted API catalog (`integrate.api.nvidia.com`).
+    /// Point [`base_url`](crate::OpenAi::base_url) at a self-hosted NIM to
+    /// use one.
+    NvidiaNim,
+    /// `SambaNova` Cloud (`api.sambanova.ai`).
+    SambaNova,
+    /// Cohere's `OpenAI` compatibility API (`api.cohere.ai/compatibility`).
+    Cohere,
 }
 
 /// How the API key is sent.
@@ -85,6 +108,10 @@ pub enum MaxTokensField {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent per-server capability flags"
+)]
 pub struct Quirks {
     /// How the API key is sent. An empty key sends no auth header at all.
     pub auth: AuthStyle,
@@ -100,6 +127,9 @@ pub struct Quirks {
     pub json_schema: bool,
     /// Whether `response_format: {"type": "json_object"}` is supported.
     pub json_object: bool,
+    /// Whether `tool_choice` is accepted. When off, the field is left out
+    /// and the server picks (`auto`); tools are still sent.
+    pub tool_choice: bool,
 }
 
 impl Quirks {
@@ -110,6 +140,7 @@ impl Quirks {
         stream_usage_option: true,
         json_schema: true,
         json_object: true,
+        tool_choice: true,
     };
 
     /// A conservative default for unknown compatible servers: bearer auth,
@@ -120,6 +151,7 @@ impl Quirks {
         stream_usage_option: false,
         json_schema: false,
         json_object: true,
+        tool_choice: true,
     };
 
     /// Set [`auth`](Self::auth).
@@ -156,6 +188,13 @@ impl Quirks {
         self.json_object = on;
         self
     }
+
+    /// Set [`tool_choice`](Self::tool_choice).
+    #[must_use]
+    pub const fn with_tool_choice(mut self, on: bool) -> Self {
+        self.tool_choice = on;
+        self
+    }
 }
 
 /// One row of the preset table.
@@ -180,6 +219,7 @@ const fn quirks(
         stream_usage_option,
         json_schema,
         json_object,
+        tool_choice: true,
     }
 }
 
@@ -259,11 +299,105 @@ const SPECS: &[Spec] = &[
         default_model: None,
         quirks: quirks(MaxTokens, false, true, false),
     },
+    // https://docs.x.ai/docs/guides/chat (base URL) and
+    // https://docs.x.ai/developers/rest-api-reference/inference/chat-completions:
+    // `max_tokens` is deprecated for `max_completion_tokens`; `stream_options`
+    // and `json_schema` are supported.
+    Spec {
+        provider: Provider::Xai,
+        name: "xai",
+        base_url: Some("https://api.x.ai/v1"),
+        api_key_env: Some("XAI_API_KEY"),
+        default_model: None,
+        quirks: quirks(MaxCompletionTokens, true, true, true),
+    },
+    // https://docs.fireworks.ai/tools-sdks/openai-compatibility and
+    // https://docs.fireworks.ai/api-reference/post-chatcompletions:
+    // `max_completion_tokens` is only an alias of `max_tokens`.
+    Spec {
+        provider: Provider::Fireworks,
+        name: "fireworks",
+        base_url: Some("https://api.fireworks.ai/inference/v1"),
+        api_key_env: Some("FIREWORKS_API_KEY"),
+        default_model: None,
+        quirks: quirks(MaxTokens, true, true, true),
+    },
+    // https://inference-docs.cerebras.ai/resources/openai and
+    // https://inference-docs.cerebras.ai/api-reference/chat-completions:
+    // `stream_options` is not documented, so it is not sent.
+    Spec {
+        provider: Provider::Cerebras,
+        name: "cerebras",
+        base_url: Some("https://api.cerebras.ai/v1"),
+        api_key_env: Some("CEREBRAS_API_KEY"),
+        default_model: None,
+        quirks: quirks(MaxCompletionTokens, false, true, true),
+    },
+    // https://platform.kimi.ai/docs/guide/migrating-from-openai-to-kimi and
+    // https://platform.kimi.ai/docs/api/chat: `max_tokens` is deprecated for
+    // `max_completion_tokens`; temperature range is [0, 1].
+    Spec {
+        provider: Provider::Moonshot,
+        name: "moonshot",
+        base_url: Some("https://api.moonshot.ai/v1"),
+        api_key_env: Some("MOONSHOT_API_KEY"),
+        default_model: None,
+        quirks: quirks(MaxCompletionTokens, true, true, true),
+    },
+    // https://hyperbolic.ai/docs/inference/text-apis.md
+    Spec {
+        provider: Provider::Hyperbolic,
+        name: "hyperbolic",
+        base_url: Some("https://api.hyperbolic.ai/inference/v1"),
+        api_key_env: Some("HYPERBOLIC_API_KEY"),
+        default_model: None,
+        quirks: quirks(MaxTokens, true, true, true),
+    },
+    // https://huggingface.co/docs/inference-providers/index: chat only; the
+    // backend varies per request, so the conservative defaults apply.
+    Spec {
+        provider: Provider::HuggingFace,
+        name: "huggingface",
+        base_url: Some("https://router.huggingface.co/v1"),
+        api_key_env: Some("HF_TOKEN"),
+        default_model: None,
+        quirks: Quirks::GENERIC,
+    },
+    // https://docs.api.nvidia.com/nim/reference/llm-apis: the request schema
+    // has no `response_format`, `stream_options` or `tool_choice` and
+    // rejects unknown fields.
+    Spec {
+        provider: Provider::NvidiaNim,
+        name: "nvidia-nim",
+        base_url: Some("https://integrate.api.nvidia.com/v1"),
+        api_key_env: Some("NVIDIA_API_KEY"),
+        default_model: None,
+        quirks: quirks(MaxTokens, false, false, false).with_tool_choice(false),
+    },
+    // https://docs.sambanova.ai/docs/api-reference/chat-completions/create-chat-based-completion.md
+    Spec {
+        provider: Provider::SambaNova,
+        name: "sambanova",
+        base_url: Some("https://api.sambanova.ai/v1"),
+        api_key_env: Some("SAMBANOVA_API_KEY"),
+        default_model: None,
+        quirks: quirks(MaxTokens, true, true, true),
+    },
+    // https://docs.cohere.com/docs/compatibility-api: `max_tokens` only; no
+    // `stream_options` or `tool_choice`; JSON mode, not `json_schema`.
+    Spec {
+        provider: Provider::Cohere,
+        name: "cohere",
+        base_url: Some("https://api.cohere.ai/compatibility/v1"),
+        api_key_env: Some("COHERE_API_KEY"),
+        default_model: None,
+        quirks: quirks(MaxTokens, false, false, true).with_tool_choice(false),
+    },
 ];
 
 impl Provider {
     /// Every preset, in a stable order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 18] = [
         Self::OpenAi,
         Self::AzureOpenAi,
         Self::Mistral,
@@ -273,6 +407,15 @@ impl Provider {
         Self::OpenRouter,
         Self::Vllm,
         Self::LmStudio,
+        Self::Xai,
+        Self::Fireworks,
+        Self::Cerebras,
+        Self::Moonshot,
+        Self::Hyperbolic,
+        Self::HuggingFace,
+        Self::NvidiaNim,
+        Self::SambaNova,
+        Self::Cohere,
     ];
 
     fn spec(self) -> &'static Spec {
@@ -302,8 +445,9 @@ impl Provider {
     }
 
     /// The model a preset client starts with, if the provider has a
-    /// well-known default. Self-hosted servers (vLLM, LM Studio) and Azure
-    /// deployments have none.
+    /// well-known default. Self-hosted servers (vLLM, LM Studio), Azure
+    /// deployments and providers with fast-moving catalogs have none; set
+    /// one with [`OpenAi::model`](crate::OpenAi::model).
     #[must_use]
     pub fn default_model(self) -> Option<&'static str> {
         self.spec().default_model
@@ -360,6 +504,9 @@ mod tests {
         assert_eq!(Provider::AzureOpenAi.quirks().auth, AuthStyle::ApiKeyHeader);
         assert!(!Provider::DeepSeek.quirks().json_schema);
         assert!(!Provider::LmStudio.quirks().json_object);
+        assert!(!Provider::Cohere.quirks().tool_choice);
+        assert!(!Provider::NvidiaNim.quirks().tool_choice);
+        assert!(Provider::Xai.quirks().tool_choice);
         assert_eq!(
             Provider::Mistral.quirks().max_tokens_field,
             MaxTokensField::MaxTokens

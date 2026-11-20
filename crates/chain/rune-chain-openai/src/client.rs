@@ -795,7 +795,10 @@ impl OpenAi {
                     include_usage: true,
                 }),
             tools: map_tool_defs(opts.tools),
-            tool_choice: opts.tool_choice.map(map_tool_choice),
+            tool_choice: opts
+                .tool_choice
+                .filter(|_| self.quirks.tool_choice)
+                .map(map_tool_choice),
             response_format: opts.response_format,
         }
     }
