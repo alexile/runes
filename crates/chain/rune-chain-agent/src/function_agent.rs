@@ -134,6 +134,44 @@ impl FunctionCallingAgent {
     /// [`ToolErrorMode::Abort`](crate::ToolErrorMode::Abort). Hitting a limit is not an
     /// error: it shows up in [`FunctionAgentResult::stop_reason`].
     pub async fn run(&self, input: &str) -> Result<FunctionAgentResult, ChainError> {
+        self.run_messages(vec![Message::human(input)]).await
+    }
+
+    /// Run the loop on a whole conversation instead of a single input.
+    ///
+    /// `conversation` holds the turns that follow the system prompt: earlier
+    /// human and AI turns, then the new human turn. The agent puts its own
+    /// system prompt in front, so leave system messages out. Use it for
+    /// multi-turn chat or to add per-request context to the last turn.
+    ///
+    /// ```rust,no_run
+    /// # use std::sync::Arc;
+    /// # use rune_chain_core::{Llm, Message};
+    /// # use rune_chain_agent::FunctionCallingAgent;
+    /// # async fn run(llm: Arc<dyn Llm>) -> Result<(), rune_chain_core::ChainError> {
+    /// let agent = FunctionCallingAgent::new(llm);
+    /// let result = agent
+    ///     .run_messages(vec![
+    ///         Message::human("My name is Ada."),
+    ///         Message::ai("Nice to meet you, Ada."),
+    ///         Message::human("What is my name?"),
+    ///     ])
+    ///     .await?;
+    /// println!("{}", result.output);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As for [`run`](Self::run), plus an empty `conversation`.
+    pub async fn run_messages(
+        &self,
+        conversation: Vec<Message>,
+    ) -> Result<FunctionAgentResult, ChainError> {
+        if conversation.is_empty() {
+            return Err(ChainError::Other("the conversation is empty".into()));
+        }
         let tb = &self.toolbox;
         tb.check()?;
         let tool_defs = tb.definitions();
@@ -144,7 +182,9 @@ impl FunctionCallingAgent {
         );
         let deadline = tb.deadline();
 
-        let mut messages = vec![Message::system(system), Message::human(input)];
+        let mut messages = Vec::with_capacity(conversation.len() + 1);
+        messages.push(Message::system(system));
+        messages.extend(conversation);
         let mut out = FunctionAgentResult {
             output: String::new(),
             iterations: 0,
@@ -241,7 +281,7 @@ impl Chain for FunctionCallingAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rune_chain_core::{FunctionDefinition, LlmError, Tool, ToolCall, ToolError};
+    use rune_chain_core::{FunctionDefinition, LlmError, Role, Tool, ToolCall, ToolError};
     use std::sync::Mutex;
 
     struct EchoTool;
@@ -315,5 +355,59 @@ mod tests {
         let agent = FunctionCallingAgent::new(llm);
         let err = agent.call(prompt_args! {}).await.unwrap_err();
         assert!(matches!(err, ChainError::MissingVariable(_)));
+    }
+
+    struct Recorder(Mutex<Vec<Message>>);
+
+    #[async_trait]
+    impl Llm for Recorder {
+        async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
+            Ok(GenerateResult::from_text(""))
+        }
+
+        async fn generate_with_tools(
+            &self,
+            messages: &[Message],
+            _tools: &[FunctionDefinition],
+            _tool_choice: Option<ToolChoice>,
+        ) -> Result<GenerateResult, LlmError> {
+            *self.0.lock().unwrap() = messages.to_vec();
+            Ok(GenerateResult::from_text("Ada"))
+        }
+    }
+
+    #[tokio::test]
+    async fn run_messages_keeps_history_after_the_system_prompt() {
+        let llm = Arc::new(Recorder(Mutex::new(Vec::new())));
+        let agent = FunctionCallingAgent::new(llm.clone())
+            .system_prompt("Be brief.")
+            .tool(EchoTool);
+        let result = agent
+            .run_messages(vec![
+                Message::human("My name is Ada."),
+                Message::ai("Hi Ada."),
+                Message::human("What is my name?"),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(result.output, "Ada");
+
+        let seen = llm.0.lock().unwrap().clone();
+        let roles: Vec<_> = seen.iter().map(|m| m.role.clone()).collect();
+        assert_eq!(
+            roles,
+            [Role::System, Role::Human, Role::Ai, Role::Human],
+            "system prompt first, then the conversation in order"
+        );
+        assert!(seen[0].text().starts_with("Be brief."));
+        assert_eq!(seen[3].text(), "What is my name?");
+    }
+
+    #[tokio::test]
+    async fn run_messages_rejects_an_empty_conversation() {
+        let llm = Arc::new(Recorder(Mutex::new(Vec::new())));
+        let agent = FunctionCallingAgent::new(llm.clone());
+        assert!(agent.run_messages(Vec::new()).await.is_err());
+        assert!(llm.0.lock().unwrap().is_empty(), "no model call");
     }
 }
