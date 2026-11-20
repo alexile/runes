@@ -1,0 +1,45 @@
+[package]
+name = "rune-chain-eval"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Evaluation harness for rune-chain LLM apps: datasets, bounded concurrent runs, heuristic, LLM-as-judge, RAG and trajectory metrics, bootstrap CIs, run comparison for CI gates"
+license.workspace = true
+keywords = ["llm", "evaluation", "rag", "langchain", "ai"]
+categories = ["asynchronous", "science", "development-tools::testing"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-chain-core.workspace = true
+rune-chain-embed.workspace = true
+rune-chain-output-parser.workspace = true
+rune-chain-usage.workspace = true
+rune-chain-retrieval = { workspace = true, optional = true }
+async-trait.workspace = true
+futures.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[features]
+## `RagTarget`: retrieve with any `Retriever`, answer with any `Chain`, and record the contexts for RAG metrics.
+retrieval = ["dep:rune-chain-retrieval"]
+
+[dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tokio-test.workspace = true
+
+[[example]]
+name = "eval_quickstart"
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

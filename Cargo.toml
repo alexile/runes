@@ -116,6 +116,7 @@ members = [
     "crates/chain/rune-vectorstore-sqlite",
     "crates/chain/rune-mcp",
     "crates/chain/rune-chain-usage",
+    "crates/chain/rune-chain-eval",
     "crates/chain/rune-otel-genai",
     "crates/chain/rune-chain",
     "crates/chain/rune-chain-gemini",
@@ -317,11 +318,12 @@ rune-binary = { path = "crates/common/rune-binary", version = "0.2.2" }
 rune-burp-xml = { path = "crates/net/rune-burp-xml", version = "0.1.0" }
 rune-byte-magic = { path = "crates/common/rune-byte-magic", version = "0.3.1" }
 rune-caesar = { path = "crates/common/rune-caesar", version = "0.2.2" }
-rune-chain = { path = "crates/chain/rune-chain", version = "0.1.3" }
+rune-chain = { path = "crates/chain/rune-chain", version = "0.1.4" }
 rune-chain-agent = { path = "crates/chain/rune-chain-agent", version = "0.3.4" }
 rune-chain-anthropic = { path = "crates/chain/rune-chain-anthropic", version = "0.2.2" }
 rune-chain-core = { path = "crates/chain/rune-chain-core", version = "0.2.6" }
 rune-chain-embed = { path = "crates/chain/rune-chain-embed", version = "0.3.2" }
+rune-chain-eval = { path = "crates/chain/rune-chain-eval", version = "0.1.0" }
 rune-chain-gemini = { path = "crates/chain/rune-chain-gemini", version = "0.1.0" }
 rune-chain-graph = { path = "crates/chain/rune-chain-graph", version = "0.1.0" }
 rune-chain-macros = { path = "crates/chain/rune-chain-macros", version = "0.1.0" }
