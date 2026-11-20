@@ -12,7 +12,10 @@ use rune_chain_anthropic::{
 use rune_chain_core::LlmErrorKind;
 use rune_chain_core::testing::check_llm;
 use rune_chain_core::testing::http::{MockResponse, MockServer, RecordedRequest};
-use rune_chain_core::{FunctionDefinition, Llm, Message, ResponseFormat, StreamData, ToolChoice};
+use rune_chain_core::{
+    FunctionDefinition, Llm, Message, ResponseFormat, StreamAccumulator, StreamData,
+    StreamEvent as CoreEvent, ToolChoice,
+};
 use serde_json::json;
 
 macro_rules! fixture {
@@ -402,6 +405,37 @@ fn stream_message_yields_tool_calls_and_final_usage() {
         server.finish().unwrap()[0].json().unwrap()["tools"][0]["name"],
         "get_weather"
     );
+}
+
+#[test]
+fn llm_stream_events_stream_tool_input_fragments() {
+    let server =
+        MockServer::start([MockResponse::event_stream(fixture!("stream.sse")).chunked(7)]).unwrap();
+    let tools = [FunctionDefinition::single_input("get_weather", "Weather.")];
+    let llm: &dyn Llm = &client(&server);
+    let events: Vec<CoreEvent> = tokio_test::block_on(async {
+        let stream = llm
+            .stream_events(&[Message::human("Weather?")], Some(&tools), None)
+            .await
+            .unwrap();
+        stream.map(Result::unwrap).collect().await
+    });
+    let fragments = events
+        .iter()
+        .filter(|e| matches!(e, CoreEvent::ToolCallDelta { .. }))
+        .count();
+    assert_eq!(fragments, 3, "{events:?}");
+    let mut acc = StreamAccumulator::new();
+    for e in &events {
+        acc.push(e).unwrap();
+    }
+    let result = acc.finish();
+    assert_eq!(result.generation, "Hello!");
+    assert_eq!(result.tool_calls[0].arg("city"), Some(json!("Paris")));
+    assert_eq!(result.tokens.unwrap().cache_read_tokens, 2048);
+    let body = server.finish().unwrap()[0].json().unwrap();
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["tools"][0]["name"], "get_weather");
 }
 
 #[test]

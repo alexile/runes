@@ -13,6 +13,9 @@ Implements the `Llm` trait from `rune-chain-core` for the Anthropic Messages API
 Works with any Claude model — the model is a free-form id — with both blocking
 and token-streaming generation.
 System messages are automatically extracted and sent in the Anthropic `system` field.
+`Llm::stream_events` streams tool calls too: each `input_json_delta` fragment,
+thinking deltas with their signatures, then usage and the stop reason, so
+agents stream every turn.
 
 ## Installation
 

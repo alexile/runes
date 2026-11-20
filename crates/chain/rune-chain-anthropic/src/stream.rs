@@ -1,6 +1,6 @@
 //! Sans-I/O assembly of a streamed Messages API response.
 
-use rune_chain_core::{LlmError, ToolCall};
+use rune_chain_core::{LlmError, MAX_TOOL_ARGUMENTS_BYTES, StreamEvent as CoreEvent, ToolCall};
 use serde_json::Value;
 
 use crate::response::{
@@ -110,6 +110,18 @@ pub struct MessageAccumulator {
     max_bytes: usize,
     started: bool,
     finished: bool,
+    /// Core events produced by the current `push`, when translating.
+    core: Option<CoreOut>,
+}
+
+/// What [`MessageAccumulator::push_core`] collects while a payload is
+/// processed.
+#[derive(Debug, Default)]
+struct CoreOut {
+    events: Vec<CoreEvent>,
+    /// Some visible text went out (blocks are joined with a newline, as in
+    /// [`MessageResponse::text`]).
+    wrote_text: bool,
 }
 
 impl Default for MessageAccumulator {
@@ -141,7 +153,67 @@ impl MessageAccumulator {
             max_bytes,
             started: false,
             finished: false,
+            core: None,
         }
+    }
+
+    /// An accumulator for [`push_core`](Self::push_core), with the given
+    /// content cap.
+    #[must_use]
+    pub fn for_core_events(max_bytes: usize) -> Self {
+        let mut acc = Self::with_limit(max_bytes);
+        acc.core = Some(CoreOut::default());
+        acc
+    }
+
+    /// Like [`push`](Self::push), translated to core
+    /// [`StreamEvent`](rune_chain_core::StreamEvent)s: text and thinking
+    /// deltas, each tool call's start and `input_json_delta` fragments as
+    /// they arrive, its end when the block closes, then usage and the
+    /// finish reason at `message_stop`.
+    ///
+    /// Folded with a [`StreamAccumulator`](rune_chain_core::StreamAccumulator)
+    /// the events give the same result as
+    /// [`MessageResponse::to_generate_result`], except that tool arguments
+    /// keep the model's own JSON formatting and, after a server-side
+    /// fallback, calls made before the switch are not taken back.
+    ///
+    /// # Errors
+    ///
+    /// As [`push`](Self::push), plus tool input over
+    /// [`MAX_TOOL_ARGUMENTS_BYTES`].
+    pub fn push_core(&mut self, data: &str) -> Result<Vec<CoreEvent>, LlmError> {
+        let event = self.push(data)?;
+        let Some(core) = self.core.as_mut() else {
+            return Ok(Vec::new());
+        };
+        let mut out = std::mem::take(&mut core.events);
+        match event {
+            Some(StreamEvent::Text(t)) => {
+                core.wrote_text = true;
+                out.push(CoreEvent::TextDelta(t));
+            }
+            Some(StreamEvent::Thinking(t)) => out.push(CoreEvent::reasoning(t)),
+            Some(StreamEvent::Done(message)) => {
+                let result = message.to_generate_result();
+                out.extend(result.tokens.map(CoreEvent::Usage));
+                out.extend(result.finish_reason.map(CoreEvent::Finish));
+            }
+            // Tool calls went out in pieces; fallbacks have no core event.
+            Some(StreamEvent::ToolCall(_) | StreamEvent::Fallback(_)) | None => {}
+        }
+        Ok(out)
+    }
+
+    fn emit(&mut self, event: CoreEvent) {
+        if let Some(core) = self.core.as_mut() {
+            core.events.push(event);
+        }
+    }
+
+    /// The content cap in bytes.
+    pub(crate) const fn max_bytes(&self) -> usize {
+        self.max_bytes
     }
 
     /// `true` once `message_stop` has been seen.
@@ -309,6 +381,33 @@ impl MessageAccumulator {
             }
             ResponseContentBlock::Unknown => Partial::Unknown,
         };
+        if let Some(core) = self.core.as_mut() {
+            match &partial {
+                Partial::Text(text) => {
+                    if core.wrote_text {
+                        core.events.push(CoreEvent::text("\n"));
+                    }
+                    if !text.is_empty() {
+                        core.events.push(CoreEvent::text(text.as_str()));
+                    }
+                    core.wrote_text = true;
+                }
+                Partial::Thinking { thinking, .. } if !thinking.is_empty() => {
+                    core.events.push(CoreEvent::reasoning(thinking.as_str()));
+                }
+                Partial::Redacted(data) => {
+                    core.events.push(CoreEvent::RedactedReasoning(data.clone()));
+                }
+                Partial::ToolUse { id, name, .. } => {
+                    core.events.push(CoreEvent::tool_call_start(
+                        index,
+                        id.as_str(),
+                        name.as_str(),
+                    ));
+                }
+                _ => {}
+            }
+        }
         let event = match &partial {
             Partial::Fallback(switch) => Some(StreamEvent::Fallback(switch.clone())),
             _ => None,
@@ -345,7 +444,16 @@ impl MessageAccumulator {
                 Ok((!text.is_empty()).then_some(StreamEvent::Text(text)))
             }
             (Partial::ToolUse { json, .. }, Delta::InputJson { partial_json }) => {
+                if json.len().saturating_add(partial_json.len()) > MAX_TOOL_ARGUMENTS_BYTES {
+                    return Err(invalid(format!(
+                        "tool input of content block {index} exceeds \
+                         {MAX_TOOL_ARGUMENTS_BYTES} bytes"
+                    )));
+                }
                 json.push_str(&partial_json);
+                if !partial_json.is_empty() {
+                    self.emit(CoreEvent::tool_call_delta(index, partial_json));
+                }
                 Ok(None)
             }
             (Partial::Thinking { thinking: buf, .. }, Delta::Thinking { thinking }) => {
@@ -368,13 +476,35 @@ impl MessageAccumulator {
         let slot = self.open_slot(index)?;
         slot.closed = true;
         let block = finish_partial(&slot.partial, true)?;
+        let streamed_input =
+            matches!(&slot.partial, Partial::ToolUse { json, .. } if !json.trim().is_empty());
         let event = match &block {
             Some(ContentBlock::ToolUse { id, name, input }) => Some(StreamEvent::ToolCall(
                 ToolCall::new(id.clone(), name.clone(), input.to_string()),
             )),
             _ => None,
         };
+        let follow_up = match &block {
+            // No fragments arrived: the input is the block's initial one.
+            Some(ContentBlock::ToolUse { input, .. }) if !streamed_input => {
+                vec![
+                    CoreEvent::tool_call_delta(index, input.to_string()),
+                    CoreEvent::ToolCallEnd { index },
+                ]
+            }
+            Some(ContentBlock::ToolUse { .. }) => vec![CoreEvent::ToolCallEnd { index }],
+            Some(ContentBlock::Thinking { signature, .. }) if !signature.is_empty() => {
+                vec![CoreEvent::ReasoningDelta {
+                    text: String::new(),
+                    signature: Some(signature.clone()),
+                }]
+            }
+            _ => Vec::new(),
+        };
         slot.done = block;
+        for e in follow_up {
+            self.emit(e);
+        }
         Ok(event)
     }
 }

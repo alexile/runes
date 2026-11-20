@@ -1022,11 +1022,48 @@ where
     B: AsRef<[u8]>,
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
+    drive(
+        body,
+        MessageAccumulator::with_limit(max_bytes),
+        |acc, data| acc.push(data).map(|e| e.into_iter().collect()),
+    )
+}
+
+/// Like [`assemble_events`], yielding core events with tool-call
+/// fragments as they arrive.
+fn assemble_core_events<S, B, E>(
+    body: S,
+    max_bytes: usize,
+) -> impl Stream<Item = Result<rune_chain_core::StreamEvent, LlmError>> + Send
+where
+    S: Stream<Item = Result<B, E>> + Send + Unpin,
+    B: AsRef<[u8]>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    drive(
+        body,
+        MessageAccumulator::for_core_events(max_bytes),
+        MessageAccumulator::push_core,
+    )
+}
+
+/// Feed SSE payloads to `acc` until `message_stop` or the first error.
+fn drive<S, B, E, T>(
+    body: S,
+    mut acc: MessageAccumulator,
+    step: fn(&mut MessageAccumulator, &str) -> Result<Vec<T>, LlmError>,
+) -> impl Stream<Item = Result<T, LlmError>> + Send
+where
+    S: Stream<Item = Result<B, E>> + Send + Unpin,
+    B: AsRef<[u8]>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+    T: Send,
+{
+    let max_bytes = acc.max_bytes();
     let options = rune_sse::Options::default()
         .with_max_event_len(max_bytes.min(16 << 20))
         .with_max_line_len(max_bytes.min(16 << 20));
     let mut events = rune_sse::SseStream::with_options(body, options);
-    let mut acc = MessageAccumulator::with_limit(max_bytes);
     async_stream::stream! {
         while let Some(item) = events.next().await {
             let event = match item {
@@ -1039,12 +1076,12 @@ where
                     return;
                 }
             };
-            match acc.push(&event.data) {
-                Ok(None) => {}
-                Ok(Some(ev)) => {
-                    let done = matches!(ev, StreamEvent::Done(_));
-                    yield Ok(ev);
-                    if done {
+            match step(&mut acc, &event.data) {
+                Ok(out) => {
+                    for ev in out {
+                        yield Ok(ev);
+                    }
+                    if acc.is_finished() {
                         return;
                     }
                 }
@@ -1115,6 +1152,32 @@ impl rune_chain_core::Llm for Anthropic {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamData, LlmError>> + Send>>, LlmError> {
         let events = self.stream_message(messages, &[], None).await?;
         Ok(Box::pin(text_chunks(events)))
+    }
+
+    /// Native streaming with tool calls: text and thinking deltas, each
+    /// tool call's `input_json_delta` fragments as they arrive, then usage
+    /// (cache tokens included) and the finish reason. See
+    /// [`MessageAccumulator::push_core`] for how it compares with
+    /// [`generate_with_tools`](rune_chain_core::Llm::generate_with_tools).
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<rune_chain_core::EventStream, LlmError> {
+        self.preflight(messages, tool_choice.as_ref(), true)?;
+        let body = self.request_body(
+            messages,
+            tools.unwrap_or_default(),
+            tool_choice.as_ref(),
+            Some(true),
+        );
+        let beta = self.beta_header(body.fallbacks.is_some())?;
+        let response = self.send(MESSAGES_PATH, &body, beta, true).await?;
+        Ok(Box::pin(assemble_core_events(
+            Box::pin(response.bytes_stream()),
+            self.stream_limit(),
+        )))
     }
 
     /// Structured output per [`StructuredOutput`]: native

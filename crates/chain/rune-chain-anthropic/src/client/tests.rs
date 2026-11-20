@@ -486,6 +486,145 @@ fn events(body: &[u8], size: usize, limit: usize) -> Vec<Result<StreamEvent, Llm
     futures::executor::block_on(assemble_events(futures::stream::iter(chunks), limit).collect())
 }
 
+/// Run `body` through the core-event assembler in chunks of `size` bytes.
+fn core_events(body: &[u8], size: usize) -> Vec<Result<rune_chain_core::StreamEvent, LlmError>> {
+    let chunks: Vec<Result<Vec<u8>, std::io::Error>> =
+        body.chunks(size).map(|c| Ok(c.to_vec())).collect();
+    futures::executor::block_on(
+        assemble_core_events(futures::stream::iter(chunks), DEFAULT_MAX_STREAM_BYTES).collect(),
+    )
+}
+
+fn fold(events: &[rune_chain_core::StreamEvent]) -> GenerateResult {
+    let mut acc = rune_chain_core::StreamAccumulator::new();
+    for e in events {
+        acc.push(e).unwrap();
+    }
+    acc.finish()
+}
+
+/// Arguments parsed, so formatting differences do not count.
+fn parsed(result: &GenerateResult) -> Vec<(String, String, Value)> {
+    result
+        .tool_calls
+        .iter()
+        .map(|c| (c.id.clone(), c.name.clone(), c.parse_arguments().unwrap()))
+        .collect()
+}
+
+#[test]
+fn core_events_stream_input_json_fragments() {
+    use rune_chain_core::StreamEvent as E;
+    let body = fixture!("stream.sse").as_bytes();
+    let message = events(body, body.len(), DEFAULT_MAX_STREAM_BYTES)
+        .into_iter()
+        .find_map(|e| match e.unwrap() {
+            StreamEvent::Done(m) => Some(m),
+            _ => None,
+        })
+        .unwrap();
+    let expected = message.to_generate_result();
+    for size in [1, 3, 7, body.len()] {
+        let events: Vec<E> = core_events(body, size)
+            .into_iter()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let id = "toolu_01T1x1fJ34qAmk2tNTrN7Up6";
+        assert_eq!(
+            events[..7],
+            [
+                E::text("Hello"),
+                E::text("!"),
+                E::tool_call_start(1, id, "get_weather"),
+                E::tool_call_delta(1, "{\"city\": "),
+                E::tool_call_delta(1, "\"Par"),
+                E::tool_call_delta(1, "is\"}"),
+                E::ToolCallEnd { index: 1 },
+            ],
+            "chunk size {size}"
+        );
+        let result = fold(&events);
+        assert_eq!(result.generation, expected.generation);
+        assert_eq!(result.tokens, expected.tokens);
+        assert_eq!(result.finish_reason, Some(FinishReason::ToolCalls));
+        assert_eq!(parsed(&result), parsed(&expected));
+    }
+}
+
+#[test]
+fn core_events_match_generate_for_thinking_text_blocks_and_parallel_calls() {
+    let datas = [
+        r#"{"type":"message_start","message":{"id":"m","model":"x","usage":{"input_tokens":9,"cache_read_input_tokens":4}}}"#,
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Two "}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"calls."}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"EqQB"}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"opaque"}}"#,
+        r#"{"type":"content_block_stop","index":1}"#,
+        r#"{"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}"#,
+        r#"{"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"First."}}"#,
+        r#"{"type":"content_block_stop","index":2}"#,
+        r#"{"type":"content_block_start","index":3,"content_block":{"type":"tool_use","id":"t1","name":"a","input":{}}}"#,
+        r#"{"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"{\"q\":"}}"#,
+        r#"{"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":" [1, 2]}"}}"#,
+        r#"{"type":"content_block_stop","index":3}"#,
+        r#"{"type":"content_block_start","index":4,"content_block":{"type":"tool_use","id":"t2","name":"b","input":{}}}"#,
+        r#"{"type":"content_block_stop","index":4}"#,
+        r#"{"type":"content_block_start","index":5,"content_block":{"type":"text","text":"Second."}}"#,
+        r#"{"type":"content_block_stop","index":5}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":30}}"#,
+        r#"{"type":"message_stop"}"#,
+    ];
+    let mut plain = MessageAccumulator::new();
+    let mut core = MessageAccumulator::for_core_events(DEFAULT_MAX_STREAM_BYTES);
+    let mut events = Vec::new();
+    let mut message = None;
+    for data in datas {
+        if let Some(StreamEvent::Done(m)) = plain.push(data).unwrap() {
+            message = Some(m);
+        }
+        events.extend(core.push_core(data).unwrap());
+    }
+    let expected = message.unwrap().to_generate_result();
+    let result = fold(&events);
+    assert_eq!(result.generation, "First.\nSecond.");
+    assert_eq!(result.generation, expected.generation);
+    assert_eq!(result.reasoning, expected.reasoning);
+    assert_eq!(result.tokens, expected.tokens);
+    assert_eq!(result.finish_reason, expected.finish_reason);
+    assert_eq!(parsed(&result), parsed(&expected));
+    assert_eq!(
+        result.tool_calls[1].arguments, "{}",
+        "no fragments: the start input"
+    );
+}
+
+#[test]
+fn core_events_cap_tool_input() {
+    let mut acc = MessageAccumulator::for_core_events(DEFAULT_MAX_STREAM_BYTES);
+    acc.push_core(
+        r#"{"type":"message_start","message":{"id":"m","model":"x","usage":{"input_tokens":1}}}"#,
+    )
+    .unwrap();
+    acc.push_core(r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"a","input":{}}}"#)
+        .unwrap();
+    let piece = "x".repeat(64 * 1024);
+    let delta = json!({"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":piece}})
+        .to_string();
+    let err = (0..=16).find_map(|_| acc.push_core(&delta).err()).unwrap();
+    assert_eq!(err.kind(), LlmErrorKind::InvalidResponse);
+    assert!(!err.message().contains("xxx"));
+}
+
+#[test]
+fn core_events_truncated_stream_is_an_error() {
+    let body = fixture!("stream.sse");
+    let cut = &body[..body.find("event: message_delta").unwrap()];
+    let items = core_events(cut.as_bytes(), 16);
+    assert!(items.last().unwrap().is_err());
+}
+
 const START_TEXT: &str = "data: {\"type\":\"content_block_start\",\"index\":0,\
                           \"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n";
 
