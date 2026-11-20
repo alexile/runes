@@ -249,6 +249,7 @@ More in [`examples/`](examples): `agent_with_tools`, `tool_macro`, `rag`, `extra
 | `pgvector` | | `pgvector`: Postgres + pgvector store (`PgVectorStore`), HNSW or IVFFlat |
 | `sqlite` | | `sqlite`: embedded single-file SQLite store (`SqliteVectorStore`), exact search |
 | `retrieval` | | `retrieval`, `dynamic_context`, `EmbeddingIndex`: BM25, hybrid, MMR, reranking |
+| `eval` | | `eval`: datasets, heuristic, LLM-as-judge, RAG and trajectory metrics, run comparison for CI |
 | `mcp` | | `mcp`: MCP client and server; remote tools as agent tools |
 | `otel` | | `otel`: OpenTelemetry GenAI spans |
 | `macros` | yes | `#[tool]` (`rune_chain::tool`) and, with `embed`, `#[derive(Embed)]` (`rune_chain::embed::Embed`) |

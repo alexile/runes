@@ -1,6 +1,6 @@
 [package]
 name = "rune-chain"
-version = "0.1.3"
+version = "0.1.4"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -35,7 +35,9 @@ pgvector = ["dep:rune-vectorstore-pgvector", "vectorstore"]
 ## Embedded single-file SQLite vector store (`SqliteVectorStore`), exact search.
 sqlite = ["dep:rune-vectorstore-sqlite", "vectorstore"]
 ## RAG: `AgentBuilder::dynamic_context`, `EmbeddingIndex`, retrievers and rerankers.
-retrieval = ["dep:rune-chain-retrieval", "embed", "vectorstore"]
+retrieval = ["dep:rune-chain-retrieval", "embed", "vectorstore", "rune-chain-eval?/retrieval"]
+## Evaluation: datasets, heuristic, LLM-as-judge, RAG and trajectory metrics, run comparison.
+eval = ["dep:rune-chain-eval", "embed"]
 ## MCP client and server (`rune-mcp` with its `chain` bridge).
 mcp = ["dep:rune-mcp"]
 ## OpenTelemetry GenAI spans for model and tool calls.
@@ -45,7 +47,7 @@ tokio = ["rune-chain-core/tokio"]
 ## `testing::FakeLlm`, a scriptable offline model, plus trait-contract checks.
 testing = ["rune-chain-core/testing"]
 ## Everything above.
-full = ["openai", "anthropic", "gemini", "ollama", "embed", "macros", "vectorstore", "qdrant", "pgvector", "sqlite", "retrieval", "mcp", "otel", "tokio"]
+full = ["openai", "anthropic", "gemini", "ollama", "embed", "macros", "vectorstore", "qdrant", "pgvector", "sqlite", "retrieval", "eval", "mcp", "otel", "tokio"]
 
 [dependencies]
 rune-chain-core.workspace = true
@@ -64,6 +66,7 @@ rune-vectorstore-qdrant = { workspace = true, optional = true }
 rune-vectorstore-pgvector = { workspace = true, optional = true }
 rune-vectorstore-sqlite = { workspace = true, optional = true }
 rune-chain-retrieval = { workspace = true, optional = true }
+rune-chain-eval = { workspace = true, optional = true }
 rune-mcp = { workspace = true, optional = true, features = ["chain"] }
 rune-otel-genai = { workspace = true, optional = true }
 async-stream.workspace = true

@@ -98,6 +98,7 @@
 //! | `pgvector` | | [`pgvector`]: Postgres + pgvector store, HNSW or `IVFFlat` |
 //! | `sqlite` | | [`sqlite`]: embedded single-file SQLite store, exact search |
 //! | `retrieval` | | [`retrieval`], `dynamic_context`, [`EmbeddingIndex`]: BM25, hybrid, MMR, reranking |
+//! | `eval` | | [`eval`]: datasets, heuristic, judge, RAG and trajectory metrics, run comparison |
 //! | `mcp` | | [`mcp`]: MCP client and server, remote tools as agent tools |
 //! | `otel` | | [`otel`]: OpenTelemetry `GenAI` spans |
 //! | `macros` | yes | `#[tool]` (`rune_chain::tool`) and, with `embed`, `#[derive(Embed)]` (`embed::Embed`) |
@@ -208,6 +209,11 @@ pub use rune_vectorstore_pgvector as pgvector;
 /// Embedded single-file SQLite vector store: `SqliteVectorStore`, `SqliteConfig`.
 #[cfg(feature = "sqlite")]
 pub use rune_vectorstore_sqlite as sqlite;
+
+/// Evaluation: datasets, heuristic, LLM-as-judge, RAG and trajectory
+/// metrics, reports and run comparison for CI gates.
+#[cfg(feature = "eval")]
+pub use rune_chain_eval as eval;
 
 /// MCP client and server; remote MCP tools work as agent tools.
 #[cfg(feature = "mcp")]
