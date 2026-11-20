@@ -1,0 +1,5 @@
+error: #[tool] on methods isn't supported: write a free function and call the method from it
+ --> tests/ui/tool_method.rs:8:15
+  |
+8 |     fn lookup(&self, key: String) -> String {
+  |               ^

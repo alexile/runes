@@ -1,0 +1,5 @@
+error: #[derive(Embed)] works on structs only
+ --> tests/ui/embed_enum.rs:4:6
+  |
+4 | enum Doc {
+  |      ^^^

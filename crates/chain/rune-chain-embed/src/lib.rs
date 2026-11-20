@@ -26,6 +26,11 @@
 //!   (bounded in-memory [`LruStore`] included), embedding only cache misses
 //! - Checks: one vector per input, each index once, consistent dimensions —
 //!   [`EmbedError::DimensionMismatch`], never a panic
+//! - Documents: [`Embed`] says which texts of a value to embed
+//!   (`#[derive(Embed)]` with the `derive` feature); with the
+//!   `vectorstore` feature, [`to_records`] and
+//!   [`VectorStoreExt::add_documents`] embed a batch of them straight into a
+//!   `rune-vectorstore` store
 //! - Helpers: [`cosine_similarity`], [`try_cosine_similarity`], [`dot`],
 //!   [`l2_norm`], [`normalize`], [`check_dimensions`]
 //!
@@ -75,11 +80,18 @@
 //! # });
 //! ```
 
+// Lets `#[derive(Embed)]` refer to `::rune_chain_embed` from inside this
+// crate and its doctests.
+extern crate self as rune_chain_embed;
+
 mod batch;
 mod cache;
 mod cohere;
+mod document;
 mod embedder;
 mod http;
+#[cfg(feature = "vectorstore")]
+mod ingest;
 mod jina;
 mod openai;
 mod similarity;
@@ -91,16 +103,47 @@ pub use cohere::{
     COHERE_BASE_URL, CohereEmbedder, CohereInputType, DEFAULT_COHERE_BATCH_SIZE,
     DEFAULT_COHERE_MODEL,
 };
+pub use document::{Embed, EmbedText};
 pub use embedder::{EmbedError, Embedder};
 pub use http::{
     DEFAULT_CONNECT_TIMEOUT, DEFAULT_MAX_CONCURRENCY, DEFAULT_MAX_RESPONSE_BYTES,
     DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, MAX_ERROR_CHARS, MAX_RETRY_AFTER,
 };
+#[cfg(feature = "vectorstore")]
+pub use ingest::{IngestError, VectorStoreExt, to_records};
 pub use jina::{DEFAULT_JINA_BATCH_SIZE, DEFAULT_JINA_MODEL, JINA_BASE_URL, JinaEmbedder};
 pub use openai::{
     DEFAULT_BASE_URL, DEFAULT_OPENAI_BATCH_SIZE, DEFAULT_OPENAI_MODEL, EncodingFormat,
     OpenAiEmbedder,
 };
+/// Derive [`Embed`]: mark text fields `#[embed]` and, optionally, an id
+/// field `#[embed_id]`.
+///
+/// ```
+/// use rune_chain_embed::Embed;
+///
+/// #[derive(Embed)]
+/// struct Article {
+///     #[embed_id]
+///     slug: String,
+///     #[embed]
+///     title: String,
+///     #[embed]
+///     paragraphs: Vec<String>,
+///     year: u16,
+/// }
+///
+/// let a = Article {
+///     slug: "rust-2024".into(),
+///     title: "Rust 2024".into(),
+///     paragraphs: vec!["Edition.".into(), "Async closures.".into()],
+///     year: 2025,
+/// };
+/// assert_eq!(a.texts(), ["Rust 2024", "Edition.", "Async closures."]);
+/// assert_eq!(a.embed_id().as_deref(), Some("rust-2024"));
+/// ```
+#[cfg(feature = "derive")]
+pub use rune_chain_macros::Embed;
 pub use similarity::{
     check_dimensions, cosine_similarity, dot, l2_norm, normalize, try_cosine_similarity,
 };

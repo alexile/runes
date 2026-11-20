@@ -1,0 +1,5 @@
+error: #[tool] arguments can't be `&mut`: the value comes from the model
+ --> tests/ui/tool_mut_ref.rs:5:15
+  |
+5 | fn push(list: &mut Vec<String>) {
+  |               ^

@@ -1209,6 +1209,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2285,6 +2291,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "proc-macro-crate"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e67ba7e9b2b56446f1d419b1d807906278ffa1a658a8a5d8a39dcb1f5a78614f"
+dependencies = [
+ "toml_edit",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3341,11 +3356,13 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-core"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "async-trait",
  "futures",
  "proptest",
+ "rune-chain-macros",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror",
@@ -3355,13 +3372,15 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-embed"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "async-trait",
  "futures",
  "reqwest",
  "rune-base64",
  "rune-chain-core",
+ "rune-chain-macros",
+ "rune-vectorstore",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3409,6 +3428,25 @@ dependencies = [
  "rune-sha256",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "rune-chain-macros"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "proc-macro-crate",
+ "proc-macro2",
+ "quote",
+ "rune-chain-core",
+ "rune-chain-embed",
+ "rune-vectorstore",
+ "schemars",
+ "serde",
+ "serde_json",
+ "syn 2.0.119",
+ "tokio",
+ "trybuild",
 ]
 
 [[package]]
@@ -5970,6 +6008,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "target-tuple"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "876fef147edbcbddc8ac5cbbba92c7b86519e314e86638596c09673b2ed01e7f"
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5989,6 +6033,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5fed54709c5b3a53d09bb1c113ea4f5ceafd1e772ddcb0030a82e1d56c087b08"
 dependencies = [
  "new_debug_unreachable",
+]
+
+[[package]]
+name = "termcolor"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
+dependencies = [
+ "winapi-util",
 ]
 
 [[package]]
@@ -6166,6 +6219,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "173f25c883cd2176a2d8212155638c0a60d484a9d84546d270866f40f56b6e49"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.25.19+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd43688c4858d7264ae1cf9a9f874a67c3feb74a883b1cd7bebd6a4ea8307218"
+dependencies = [
+ "indexmap",
+ "toml_datetime",
+ "toml_parser",
+ "winnow",
 ]
 
 [[package]]
@@ -6365,6 +6430,21 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "trybuild"
+version = "1.0.125"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9838b494ee14d28f1eeea490e8f4f10248fa6dd371d4bc874b635de499408245"
+dependencies = [
+ "glob",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "target-tuple",
+ "termcolor",
+ "toml",
+]
 
 [[package]]
 name = "typenum"
@@ -6861,6 +6941,9 @@ name = "winnow"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "wit-bindgen"

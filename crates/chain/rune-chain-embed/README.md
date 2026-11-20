@@ -163,6 +163,35 @@ impl Embedder for LocalEmbedder {
 
 `Embedder` is also implemented for `Arc<E>`, `Box<E>` and `&E`.
 
+### Documents and vector stores
+
+`Embed` says which texts of a value to embed. With the `derive` feature,
+`#[derive(Embed)]` writes it; with the `vectorstore` feature,
+`add_documents` embeds a batch in one call and upserts one
+`rune-vectorstore` record per text (id from `#[embed_id]` or a content hash,
+the struct's fields as metadata).
+
+```toml
+rune-chain-embed = { version = "0.3", features = ["derive", "vectorstore"] }
+```
+
+```rust
+use rune_chain_embed::{Embed, VectorStoreExt};
+
+#[derive(Embed, serde::Serialize)]
+struct Article {
+    #[embed_id]
+    slug: String,
+    #[embed]
+    title: String,
+    #[embed]
+    paragraphs: Vec<String>,
+    year: u16,
+}
+
+let added = store.add_documents(&embedder, &articles).await?;
+```
+
 ## Migrating from 0.2
 
 0.3 only moves to `rune-chain-core` 0.2: `From<EmbedError>` now converts into

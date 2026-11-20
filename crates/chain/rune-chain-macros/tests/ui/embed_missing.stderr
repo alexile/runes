@@ -1,0 +1,5 @@
+error: #[derive(Embed)] needs at least one field marked #[embed]
+ --> tests/ui/embed_missing.rs:4:8
+  |
+4 | struct Doc {
+  |        ^^^

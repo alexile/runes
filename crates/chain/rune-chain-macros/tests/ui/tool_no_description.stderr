@@ -1,0 +1,5 @@
+error: #[tool] needs a description: add a `///` doc comment or #[tool(description = "...")]
+ --> tests/ui/tool_no_description.rs:4:4
+  |
+4 | fn undocumented(x: i32) -> i32 {
+  |    ^^^^^^^^^^^^

@@ -43,6 +43,8 @@
 //! - `testing` (feature `testing`) — reusable trait-contract checks that every
 //!   `Llm`, `Chain`, `Memory` and `Tool` implementation should pass, plus
 //!   `FakeLlm`, a scriptable offline `Llm` for testing code built on it
+//! - `#[tool]` (feature `macros`) — turn a plain or `async fn` into a
+//!   [`Tool`] with a JSON Schema generated from its argument types
 //!
 //! # Security notes
 //!
@@ -78,7 +80,42 @@
 //! assert_eq!(result, "hello");
 //! # });
 //! ```
+//!
+//! # `#[tool]`
+//!
+//! With the `macros` feature:
+//!
+//! ```rust
+//! # #[cfg(feature = "macros")] {
+//! use rune_chain_core::{Tool, tool};
+//!
+//! /// Add two integers.
+//! #[tool]
+//! fn add(
+//!     /// The first number.
+//!     a: i64,
+//!     /// The second number.
+//!     b: i64,
+//! ) -> i64 {
+//!     a + b
+//! }
+//!
+//! # tokio_test::block_on(async {
+//! assert_eq!(Add.name(), "add");
+//! assert_eq!(Add.schema()["required"], serde_json::json!(["a", "b"]));
+//! assert_eq!(Add.run(r#"{"a": 2, "b": 3}"#).await.unwrap(), "5");
+//! assert!(Add.run(r#"{"a": "two"}"#).await.is_err());
+//! # });
+//! # }
+//! ```
 
+// Lets `#[tool]` refer to `::rune_chain_core` from inside this crate and its
+// doctests.
+extern crate self as rune_chain_core;
+
+#[doc(hidden)]
+#[path = "macro_support.rs"]
+pub mod __private;
 mod cache;
 mod callbacks;
 mod chain;
@@ -128,3 +165,26 @@ pub use resilience::{MAX_RETRY_AFTER, WithRetry, WithTimeout};
 pub use response_format::{MAX_JSON_OUTPUT_BYTES, ResponseFormat};
 pub use stream::StreamData;
 pub use tool::Tool;
+
+/// Turn a function into a [`Tool`]. See the [crate docs](crate#tool).
+#[cfg(feature = "macros")]
+pub use rune_chain_macros::tool;
+
+#[doc(hidden)]
+#[cfg(feature = "macros")]
+#[macro_export]
+macro_rules! __rune_chain_core_require_macros {
+    () => {};
+}
+
+#[doc(hidden)]
+#[cfg(not(feature = "macros"))]
+#[macro_export]
+macro_rules! __rune_chain_core_require_macros {
+    () => {
+        ::core::compile_error!(
+            "#[tool] needs the `macros` feature of rune-chain-core: \
+             rune-chain-core = { version = \"0.2\", features = [\"macros\"] }"
+        );
+    };
+}

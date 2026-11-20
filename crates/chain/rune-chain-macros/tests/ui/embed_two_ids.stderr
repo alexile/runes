@@ -1,0 +1,11 @@
+error: only one field can be #[embed_id]
+ --> tests/ui/embed_two_ids.rs:7:5
+  |
+7 |     #[embed_id]
+  |     ^
+
+error: #[embed] on a field takes no options
+  --> tests/ui/embed_two_ids.rs:15:5
+   |
+15 |     #[embed(weight = 2)]
+   |     ^

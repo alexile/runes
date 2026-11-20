@@ -1,6 +1,6 @@
 [package]
 name = "rune-chain-core"
-version = "0.2.4"
+version = "0.2.5"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -15,12 +15,16 @@ publish = true
 [dependencies]
 async-trait.workspace = true
 futures.workspace = true
+rune-chain-macros = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, optional = true, features = ["time"] }
 
 [features]
+# `#[tool]`: turn a function into a `Tool` with a generated JSON Schema.
+macros = ["dep:rune-chain-macros", "dep:schemars"]
 # Reusable trait-contract checks and a scriptable `FakeLlm` (`rune_chain_core::testing`).
 testing = []
 # `.with_timeout(…)` and `.with_retry(…)`, which need Tokio's timer.
@@ -30,6 +34,9 @@ tokio = ["dep:tokio"]
 proptest.workspace = true
 tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-test.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

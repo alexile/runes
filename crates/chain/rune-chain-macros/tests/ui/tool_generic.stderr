@@ -1,0 +1,5 @@
+error: #[tool] functions can't be generic: the argument types make the JSON Schema
+ --> tests/ui/tool_generic.rs:5:8
+  |
+5 | fn echo<T: serde::Serialize>(value: T) -> T {
+  |        ^

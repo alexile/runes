@@ -1,0 +1,11 @@
+error: unknown #[tool] option; expected `name`, `description` or `crate`
+ --> tests/ui/tool_unknown_option.rs:4:8
+  |
+4 | #[tool(title = "x")]
+  |        ^^^^^
+
+error: unknown #[arg] option; expected `desc` or `default`
+  --> tests/ui/tool_unknown_option.rs:11:12
+   |
+11 | fn b(#[arg(required)] x: i32) -> i32 {
+   |            ^^^^^^^^

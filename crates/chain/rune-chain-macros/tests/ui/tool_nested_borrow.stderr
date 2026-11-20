@@ -1,0 +1,5 @@
+error: #[tool] arguments can borrow only at the top level (`&str`, `&[T]`, `&T`); use an owned type here
+ --> tests/ui/tool_nested_borrow.rs:5:23
+  |
+5 | fn greet(name: Option<&str>) -> String {
+  |                       ^

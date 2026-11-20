@@ -143,6 +143,33 @@ let llm = provider
 rune-chain-core = { version = "0.2", features = ["tokio"] }
 ```
 
+## `#[tool]`
+
+With the `macros` feature, a function becomes a `Tool`: the JSON Schema comes
+from the argument types, the descriptions from doc comments. See
+[`rune-chain-macros`](../rune-chain-macros) for the details.
+
+```toml
+rune-chain-core = { version = "0.2", features = ["macros"] }
+```
+
+```rust
+use rune_chain_core::{tool, Tool};
+
+/// Add two integers.
+#[tool]
+fn add(
+    /// The first number.
+    a: i64,
+    /// The second number.
+    b: i64,
+) -> i64 {
+    a + b
+}
+
+assert_eq!(Add.run(r#"{"a": 2, "b": 3}"#).await?, "5");
+```
+
 ## Security
 
 - Tool-call arguments and structured output are treated as untrusted: parsing is

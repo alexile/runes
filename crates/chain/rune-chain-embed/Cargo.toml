@@ -1,6 +1,6 @@
 [package]
 name = "rune-chain-embed"
-version = "0.3.1"
+version = "0.3.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -15,6 +15,8 @@ publish = true
 [dependencies]
 rune-chain-core.workspace = true
 rune-base64.workspace = true
+rune-chain-macros = { workspace = true, optional = true }
+rune-vectorstore = { workspace = true, optional = true }
 async-trait.workspace = true
 futures.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
@@ -24,11 +26,21 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time"] }
 
+[features]
+# `#[derive(Embed)]`.
+derive = ["dep:rune-chain-macros"]
+# `to_records` and `VectorStoreExt::add_documents`: embed `Embed` documents
+# straight into a `rune-vectorstore` store.
+vectorstore = ["dep:rune-vectorstore"]
+
 [dev-dependencies]
 rune-chain-core = { workspace = true, features = ["testing"] }
 rune-base64.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-test.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true

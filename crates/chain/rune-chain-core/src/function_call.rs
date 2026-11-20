@@ -112,21 +112,7 @@ impl ToolCall {
         &self,
         max_bytes: usize,
     ) -> Result<T, ToolError> {
-        let len = self.arguments.len();
-        if len > max_bytes {
-            return Err(ToolError::InvalidInput(format!(
-                "arguments for tool `{}` are {len} bytes, above the {max_bytes}-byte limit",
-                self.name
-            )));
-        }
-        let raw = self.arguments.trim();
-        let raw = if raw.is_empty() { "{}" } else { raw };
-        serde_json::from_str(raw).map_err(|e| {
-            ToolError::InvalidInput(format!(
-                "arguments for tool `{}` are not valid: {e}",
-                self.name
-            ))
-        })
+        parse_bounded(&self.name, &self.arguments, max_bytes)
     }
 
     /// Parse [`arguments`](Self::arguments) as a JSON object (bounded by
@@ -409,4 +395,24 @@ pub enum ToolChoice {
     Required,
     /// The model must call the named tool specifically.
     Tool(String),
+}
+
+/// Deserialise tool arguments: at most `max_bytes`, empty or all-whitespace
+/// input reads as `{}`, and errors never echo the input.
+pub fn parse_bounded<T: DeserializeOwned>(
+    tool: &str,
+    arguments: &str,
+    max_bytes: usize,
+) -> Result<T, ToolError> {
+    let len = arguments.len();
+    if len > max_bytes {
+        return Err(ToolError::InvalidInput(format!(
+            "arguments for tool `{tool}` are {len} bytes, above the {max_bytes}-byte limit"
+        )));
+    }
+    let raw = arguments.trim();
+    let raw = if raw.is_empty() { "{}" } else { raw };
+    serde_json::from_str(raw).map_err(|e| {
+        ToolError::InvalidInput(format!("arguments for tool `{tool}` are not valid: {e}"))
+    })
 }
