@@ -4390,6 +4390,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-gemm"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rayon",
+ "thiserror",
+]
+
+[[package]]
 name = "rune-geo-cluster"
 version = "0.1.0"
 dependencies = [
