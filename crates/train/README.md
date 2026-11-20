@@ -15,7 +15,7 @@ naive reference implementations and finite-difference gradients.
 | Numerics | [`rune-lowp`](rune-lowp) | bf16, f16, fp8 (E4M3/E5M2), microscaling block formats (MX fp8/fp6/fp4, 16-element fp4 with fp8 scales), stochastic rounding, per-tensor delayed and current scaling | 0.1.0 |
 | Kernels | [`rune-gemm`](rune-gemm) | Packed, cache-blocked, SIMD, multithreaded matrix multiply; batched and grouped (ragged MoE) GEMM; strided/transposed operands | 0.1.0 |
 | Kernels | [`rune-attn`](rune-attn) | Tiled online-softmax attention forward and backward in O(N) memory: causal, GQA/MQA, sliding window, logit softcap, varlen packed sequences, log-sum-exp output and partial-result merging for ring attention | 0.1.0 |
-| Kernels | [`rune-fused`](rune-fused) | Fused training ops with backward: RMSNorm, LayerNorm, SwiGLU/GeGLU, rotary embeddings (with long-context scaling), chunked linear + cross-entropy with z-loss and label smoothing | planned |
+| Kernels | [`rune-fused`](rune-fused) | Fused training ops with backward: RMSNorm, LayerNorm, SwiGLU/GeGLU, rotary embeddings (with long-context scaling), chunked linear + cross-entropy with z-loss and label smoothing | 0.1.0 |
 | Framework | [`rune-tensor`](rune-tensor) | Strided n-d tensor: views, broadcasting, reductions, elementwise ops | planned |
 | Framework | [`rune-autodiff`](rune-autodiff) | Reverse-mode autodiff tape over `rune-tensor`, wired to the fast kernels, with gradient checking | planned |
 | Parallelism | [`rune-collective`](rune-collective) | Communicator trait plus in-process and TCP backends: ring/tree all-reduce, reduce-scatter, all-gather, all-to-all(v), broadcast, barrier, gradient bucketing | planned |
