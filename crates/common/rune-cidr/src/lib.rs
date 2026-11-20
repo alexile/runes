@@ -156,7 +156,13 @@ fn ip_parts(ip: IpAddr) -> (u8, u128) {
 
 impl Cidr {
     /// Parse `"10.0.0.0/24"`, `"2001:db8::/32"`, or a bare address
-    /// (`"10.0.0.5"`), which is treated as `/32`/`/128`.
+    /// (`"10.0.0.5"`), which is treated as `/32`/`/128`. The prefix must be
+    /// plain digits with no sign or leading zeros (`/024` is rejected), and
+    /// IPv4 octets with leading zeros are rejected too.
+    ///
+    /// # Errors
+    ///
+    /// When the address or prefix is malformed, or the prefix is too long.
     pub fn parse(s: &str) -> Result<Self, CidrParseError> {
         let (addr_str, prefix_str) = match s.split_once('/') {
             Some((addr, prefix)) => (addr, Some(prefix)),
@@ -164,16 +170,17 @@ impl Cidr {
         };
         let addr: IpAddr = addr_str
             .parse()
-            .map_err(|_| CidrParseError(format!("'{s}' is not a valid IP address")))?;
-        let max_prefix = if addr.is_ipv4() { 32 } else { 128 };
+            .map_err(|_| CidrParseError(format!("{} is not a valid IP address", Quoted(s))))?;
+        let max_prefix = if addr.is_ipv4() { V4_BITS } else { V6_BITS };
         let prefix = match prefix_str {
             Some(prefix_str) => {
-                let prefix: u8 = prefix_str
-                    .parse()
-                    .map_err(|_| CidrParseError(format!("'{s}' has a non-numeric prefix")))?;
+                let prefix = parse_prefix(prefix_str).ok_or_else(|| {
+                    CidrParseError(format!("{} has a malformed prefix", Quoted(s)))
+                })?;
                 if prefix > max_prefix {
                     return Err(CidrParseError(format!(
-                        "'{s}' has prefix /{prefix}, but {addr} only has {max_prefix} bits"
+                        "{} has prefix /{prefix}, but {addr} only has {max_prefix} bits",
+                        Quoted(s)
                     )));
                 }
                 prefix
@@ -204,11 +211,12 @@ impl Cidr {
         Ok(Self::from_parts(bits, value, prefix_len))
     }
 
-    /// `(family bits, address, prefix length)`.
+    /// `(family bits, address, prefix length)`. A hand-built value with a
+    /// prefix past the family width is read as full length.
     fn parts(self) -> (u8, u128, u8) {
         match self {
-            Self::V4(addr, prefix) => (V4_BITS, u128::from(addr), prefix),
-            Self::V6(addr, prefix) => (V6_BITS, addr, prefix),
+            Self::V4(addr, prefix) => (V4_BITS, u128::from(addr), prefix.min(V4_BITS)),
+            Self::V6(addr, prefix) => (V6_BITS, addr, prefix.min(V6_BITS)),
         }
     }
 
@@ -353,11 +361,23 @@ impl Cidr {
 
     /// Whether `ip` falls within this range. Mismatched address families
     /// never match.
+    ///
+    /// An IPv4-mapped IPv6 address such as `::ffff:10.0.0.1` is IPv6 here;
+    /// call [`Ipv6Addr::to_canonical`] on it first to match IPv4 ranges.
     #[must_use]
     pub fn contains(&self, ip: IpAddr) -> bool {
-        let (bits, first, last) = self.bounds();
-        let (ip_bits, value) = ip_parts(ip);
-        bits == ip_bits && first <= value && value <= last
+        match (*self, ip) {
+            (Self::V4(addr, prefix), IpAddr::V4(v4)) => {
+                let m = u32::MAX
+                    .checked_shl(u32::from(V4_BITS - prefix.min(V4_BITS)))
+                    .unwrap_or(0);
+                (addr ^ u32::from(v4)) & m == 0
+            }
+            (Self::V6(addr, prefix), IpAddr::V6(v6)) => {
+                (addr ^ u128::from(v6)) & mask(V6_BITS, prefix.min(V6_BITS)) == 0
+            }
+            _ => false,
+        }
     }
 
     /// Whether `other` lies entirely within this range.
@@ -417,6 +437,37 @@ impl Cidr {
             back: last & !low_ones(host_bits),
             done: false,
         })
+    }
+}
+
+/// A prefix length: plain ASCII digits, no sign, no leading zeros.
+fn parse_prefix(s: &str) -> Option<u8> {
+    let b = s.as_bytes();
+    if b.is_empty() || b.len() > 3 || !b.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    if b.len() > 1 && b[0] == b'0' {
+        return None;
+    }
+    s.parse().ok()
+}
+
+/// Input echoed in an error: quoted, and cut short so a huge string does
+/// not end up copied into the message.
+struct Quoted<'a>(&'a str);
+
+impl fmt::Display for Quoted<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const MAX: usize = 64;
+        let s = self.0;
+        if s.len() <= MAX {
+            return write!(f, "{s:?}");
+        }
+        let mut end = MAX;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        write!(f, "{:?}...", &s[..end])
     }
 }
 
@@ -601,16 +652,20 @@ pub fn aggregate(nets: &[Cidr]) -> Vec<Cidr> {
             .map(|(_, first, last)| (first, last))
             .collect();
         ranges.sort_unstable();
-        let mut merged: Vec<(u128, u128)> = Vec::with_capacity(ranges.len());
-        for (first, last) in ranges {
-            match merged.last_mut() {
-                Some((_, end)) if end.checked_add(1).is_none_or(|next| first <= next) => {
-                    *end = (*end).max(last);
-                }
-                _ => merged.push((first, last)),
+        // Merge in place: `ranges[..len]` holds the merged runs so far.
+        let mut len: usize = 0;
+        for i in 0..ranges.len() {
+            let (first, last) = ranges[i];
+            if let Some(prev) = len.checked_sub(1).map(|j| &mut ranges[j])
+                && prev.1.checked_add(1).is_none_or(|next| first <= next)
+            {
+                prev.1 = prev.1.max(last);
+                continue;
             }
+            ranges[len] = (first, last);
+            len += 1;
         }
-        for (first, last) in merged {
+        for &(first, last) in &ranges[..len] {
             push_range(&mut out, bits, first, last);
         }
     }
@@ -687,6 +742,88 @@ mod tests {
     fn rejects_prefix_wider_than_the_address_family_allows() {
         assert!(Cidr::parse("10.0.0.0/33").is_err());
         assert!(Cidr::parse("::1/129").is_err());
+    }
+
+    #[test]
+    fn rejects_sloppy_prefixes() {
+        for s in [
+            "10.0.0.0/+24",
+            "10.0.0.0/024",
+            "10.0.0.0/00",
+            "10.0.0.0/",
+            "10.0.0.0/-0",
+            "::/+0",
+            "::/0128",
+            "10.0.0.0/ 24",
+        ] {
+            assert!(Cidr::parse(s).is_err(), "{s} should be rejected");
+        }
+        assert_eq!(c("10.0.0.0/0").prefix_len(), 0);
+        assert_eq!(c("::/0").prefix_len(), 0);
+    }
+
+    #[test]
+    fn rejects_octal_looking_and_odd_addresses() {
+        for s in [
+            "010.0.0.1/8",
+            "10.0.0.01",
+            "0x0a.0.0.1",
+            "10.1",
+            "fe80::1%eth0/64",
+            " 10.0.0.0/8",
+        ] {
+            assert!(Cidr::parse(s).is_err(), "{s} should be rejected");
+        }
+    }
+
+    #[test]
+    fn ipv4_mapped_ipv6_stays_ipv6() {
+        let n = c("::ffff:10.0.0.0/104");
+        assert!(n.is_ipv6());
+        assert!(n.contains(ip("::ffff:10.1.2.3")));
+        assert!(!n.contains(ip("10.1.2.3")));
+        assert!(!c("10.0.0.0/8").contains(ip("::ffff:10.1.2.3")));
+    }
+
+    #[test]
+    fn error_does_not_echo_huge_input() {
+        let long = "1".repeat(100_000);
+        let err = Cidr::parse(&long).unwrap_err().to_string();
+        assert!(err.len() < 200, "error is {} bytes", err.len());
+        let err = Cidr::parse(&format!("10.0.0.0/{long}"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.len() < 200, "error is {} bytes", err.len());
+    }
+
+    #[test]
+    fn out_of_range_prefix_in_hand_built_values_does_not_panic() {
+        for n in [
+            Cidr::V4(0x0a00_0001, 40),
+            Cidr::V4(0, 255),
+            Cidr::V6(1, 129),
+            Cidr::V6(0, 255),
+        ] {
+            let full = Cidr::from(n.addr());
+            assert_eq!(n.prefix_len(), n.max_prefix_len());
+            assert_eq!(n.address_count(), 1);
+            assert_eq!(n.host_count(), 1);
+            assert_eq!(n.network(), n.addr());
+            assert_eq!(n.last(), n.addr());
+            assert_eq!(n.netmask(), full.netmask());
+            assert_eq!(n.hostmask(), full.hostmask());
+            assert_eq!(n.trunc(), full);
+            assert!(n.contains(n.addr()));
+            assert!(n.contains_cidr(&full) && n.overlaps(&full));
+            assert_eq!(n.addresses().count(), 1);
+            assert_eq!(n.hosts().count(), 1);
+            assert_eq!(n.split(n.max_prefix_len()).unwrap().count(), 1);
+            assert!(n.split(0).is_err());
+            assert_eq!(n.subnets(), None);
+            assert!(n.supernet().is_some());
+            assert_eq!(aggregate(&[n]), [full]);
+            assert_eq!(n.to_string(), full.to_string());
+        }
     }
 
     #[test]
@@ -1025,6 +1162,19 @@ mod proptests {
         #[test]
         fn parse_never_panics(s in "\\PC{0,48}") {
             let _ = Cidr::parse(&s);
+        }
+
+        #[test]
+        fn contains_agrees_with_bounds(n in any_cidr(), a in any::<u128>()) {
+            let addr = if n.is_ipv4() {
+                IpAddr::V4(Ipv4Addr::from(u32::try_from(a >> 96).unwrap()))
+            } else {
+                IpAddr::V6(Ipv6Addr::from(a))
+            };
+            let (_, first, last) = n.bounds();
+            let (_, v) = ip_parts(addr);
+            prop_assert_eq!(n.contains(addr), first <= v && v <= last);
+            prop_assert!(n.contains(n.network()) && n.contains(n.last()));
         }
 
         #[test]

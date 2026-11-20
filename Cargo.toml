@@ -320,7 +320,7 @@ rune-chain-output-parser = { path = "crates/chain/rune-chain-output-parser", ver
 rune-chain-prompt = { path = "crates/chain/rune-chain-prompt", version = "0.2.2" }
 rune-chain-splitter = { path = "crates/chain/rune-chain-splitter", version = "0.2.2" }
 rune-chain-usage = { path = "crates/chain/rune-chain-usage", version = "0.1.1" }
-rune-cidr = { path = "crates/common/rune-cidr", version = "0.2.1" }
+rune-cidr = { path = "crates/common/rune-cidr", version = "0.2.2" }
 rune-config = { path = "crates/common/rune-config", version = "0.2.0" }
 rune-cloud-ranges = { path = "crates/net/rune-cloud-ranges", version = "0.1.0" }
 rune-cookie = { path = "crates/net/rune-cookie", version = "0.1.0" }
