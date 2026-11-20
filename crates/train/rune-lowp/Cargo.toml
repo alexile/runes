@@ -1,0 +1,32 @@
+[package]
+name = "rune-lowp"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Low-precision numerics for mixed-precision training: bf16, f16, fp8, MX block formats, stochastic rounding and FP8 scaling recipes"
+license.workspace = true
+keywords = ["bfloat16", "fp8", "microscaling", "quantization", "mixed-precision"]
+categories = ["science", "mathematics", "encoding"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = []
+# Serialize / deserialize the scalar types (as raw bits) and the small config types.
+serde = ["dep:serde"]
+# Parallel bulk conversion and block quantization for large inputs.
+rayon = ["dep:rayon"]
+
+[dependencies]
+rayon = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
