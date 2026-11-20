@@ -1,0 +1,29 @@
+[package]
+name = "rune-ml-metrics"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Model evaluation metrics — classification, ranking (ROC/PR), regression and clustering scores matching scikit-learn"
+license.workspace = true
+keywords = ["metrics", "machine-learning", "roc-auc", "f1", "clustering"]
+categories = ["science", "mathematics", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = []
+# Parallel silhouette computation (one row per task, result is deterministic).
+rayon = ["dep:rayon"]
+
+[dependencies]
+rayon = { workspace = true, optional = true }
+rune-ml-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

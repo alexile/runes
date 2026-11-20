@@ -4383,6 +4383,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-ml-metrics"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rayon",
+ "rune-ml-core",
+ "thiserror",
+]
+
+[[package]]
 name = "rune-morse"
 version = "0.2.2"
 dependencies = [

@@ -9,6 +9,7 @@ Unsupervised ML: clustering, dimensionality reduction, graph embeddings, communi
 | [`rune-labelprop`](rune-labelprop) | Label propagation — semi-supervised node classification via iterative neighbourhood smoothing |
 | [`rune-leiden`](rune-leiden) | Leiden and Louvain community detection — find densely-connected clusters in weighted graphs |
 | [`rune-ml-core`](rune-ml-core) | Shared ML core: row-major matrices, distance metrics, deterministic RNG and estimator traits |
+| [`rune-ml-metrics`](rune-ml-metrics) | Model evaluation metrics — classification, ranking (ROC/PR), regression and clustering scores matching scikit-learn |
 | [`rune-node2vec`](rune-node2vec) | Node2Vec — graph node embeddings via biased random walks and skip-gram |
 | [`rune-pagerank`](rune-pagerank) | PageRank — score graph nodes by importance via random-walk convergence |
 | [`rune-pca`](rune-pca) | Principal component analysis — exact, randomized and incremental (batched) PCA, whitening, inverse transform |
