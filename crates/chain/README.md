@@ -1,6 +1,6 @@
 # Chain (LLM)
 
-LLM orchestration: core traits, OpenAI/Anthropic/Gemini/Ollama providers, prompts, memory, agents, tools, RAG and MCP.
+LLM toolkit. Start with [`rune-chain`](rune-chain), which re-exports the rest behind features: providers, agents, `#[tool]` macros, RAG and vector stores, graphs, evals, multimodal and MCP.
 
 | Crate | Description |
 | --- | --- |
