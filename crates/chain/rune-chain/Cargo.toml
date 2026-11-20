@@ -1,6 +1,6 @@
 [package]
 name = "rune-chain"
-version = "0.1.7"
+version = "0.1.8"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -72,6 +72,12 @@ pgvector = ["dep:rune-vectorstore-pgvector", "vectorstore"]
 sqlite = ["dep:rune-vectorstore-sqlite", "vectorstore", "rune-chain-graph?/sqlite"]
 ## RAG: `AgentBuilder::dynamic_context`, `EmbeddingIndex`, retrievers and rerankers.
 retrieval = ["dep:rune-chain-retrieval", "embed", "vectorstore", "rune-chain-eval?/retrieval"]
+## Document loaders (`rune_chain::loader`): text, HTML, JSON, CSV, jailed directory walks.
+loader = ["dep:rune-chain-loader"]
+## PDF loading, one document per page (`rune_chain::loader::pdf`).
+pdf = ["loader", "rune-chain-loader/pdf"]
+## EPUB loading, one document per chapter (`rune_chain::loader::epub`).
+epub = ["loader", "rune-chain-loader/epub"]
 ## Evaluation: datasets, heuristic, LLM-as-judge, RAG and trajectory metrics, run comparison.
 eval = ["dep:rune-chain-eval", "embed"]
 ## Stateful graphs (`StateGraph`), checkpoints, interrupts and `create_react_agent`;
@@ -86,7 +92,7 @@ tokio = ["rune-chain-core/tokio"]
 ## `testing::FakeLlm`, a scriptable offline model, plus trait-contract checks.
 testing = ["rune-chain-core/testing"]
 ## Everything above.
-full = ["all-providers", "embed", "macros", "vectorstore", "qdrant", "pgvector", "sqlite", "retrieval", "eval", "graph", "mcp", "otel", "tokio"]
+full = ["all-providers", "embed", "macros", "vectorstore", "qdrant", "pgvector", "sqlite", "retrieval", "loader", "pdf", "epub", "eval", "graph", "mcp", "otel", "tokio"]
 
 [dependencies]
 rune-chain-core.workspace = true
@@ -105,6 +111,7 @@ rune-vectorstore-qdrant = { workspace = true, optional = true }
 rune-vectorstore-pgvector = { workspace = true, optional = true }
 rune-vectorstore-sqlite = { workspace = true, optional = true }
 rune-chain-retrieval = { workspace = true, optional = true }
+rune-chain-loader = { workspace = true, optional = true }
 rune-chain-eval = { workspace = true, optional = true }
 rune-chain-graph = { workspace = true, optional = true }
 rune-mcp = { workspace = true, optional = true, features = ["chain"] }

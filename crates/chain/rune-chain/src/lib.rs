@@ -255,6 +255,10 @@ pub use rune_tool_schema as tool_schema;
 /// Embedders: OpenAI-compatible, Cohere, Voyage, Jina, batching, caching.
 #[cfg(feature = "embed")]
 pub use rune_chain_embed as embed;
+/// Document loaders: text, HTML, JSON, CSV and directory walks, plus PDF
+/// (feature `pdf`) and EPUB (feature `epub`).
+#[cfg(feature = "loader")]
+pub use rune_chain_loader as loader;
 /// Retrieval: BM25, embedding retrievers, hybrid fusion, MMR, reranking,
 /// `RetrievalQaChain`.
 #[cfg(feature = "retrieval")]

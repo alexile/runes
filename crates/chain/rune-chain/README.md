@@ -365,6 +365,8 @@ Tool and model support still depends on the model you pick on a given provider.
 | `pgvector` | | `pgvector`: Postgres + pgvector store (`PgVectorStore`), HNSW or IVFFlat |
 | `sqlite` | | `sqlite`: embedded single-file SQLite store (`SqliteVectorStore`), exact search |
 | `retrieval` | | `retrieval`, `dynamic_context`, `EmbeddingIndex`: BM25, hybrid, MMR, reranking |
+| `loader` | | `loader`: hardened text, HTML, JSON, CSV and directory-walk document loaders |
+| `pdf`, `epub` | | `loader::pdf` / `loader::epub`: PDF pages and EPUB chapters as documents, with page, bomb and timeout limits |
 | `eval` | | `eval`: datasets, heuristic, LLM-as-judge, RAG and trajectory metrics, run comparison for CI |
 | `graph` | | `graph`: `StateGraph`, checkpoints, human-in-the-loop interrupts, `create_react_agent` (with `sqlite`, `SqliteCheckpointer`) |
 | `mcp` | | `mcp`: MCP client and server; remote tools as agent tools |
