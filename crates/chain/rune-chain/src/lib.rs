@@ -99,6 +99,7 @@
 //! | `sqlite` | | [`sqlite`]: embedded single-file SQLite store, exact search |
 //! | `retrieval` | | [`retrieval`], `dynamic_context`, [`EmbeddingIndex`]: BM25, hybrid, MMR, reranking |
 //! | `eval` | | [`eval`]: datasets, heuristic, judge, RAG and trajectory metrics, run comparison |
+//! | `graph` | | [`graph`]: `StateGraph`, checkpoints, interrupts, `create_react_agent` (with `sqlite`, `SqliteCheckpointer`) |
 //! | `mcp` | | [`mcp`]: MCP client and server, remote tools as agent tools |
 //! | `otel` | | [`otel`]: OpenTelemetry `GenAI` spans |
 //! | `macros` | yes | `#[tool]` (`rune_chain::tool`) and, with `embed`, `#[derive(Embed)]` (`embed::Embed`) |
@@ -200,12 +201,12 @@ pub use rune_chain_retrieval as retrieval;
 /// Vector stores: the `VectorStore` trait, exact and HNSW in-memory stores.
 #[cfg(feature = "vectorstore")]
 pub use rune_vectorstore as vectorstore;
-/// Qdrant vector store: `QdrantStore` and `QdrantConfig`.
-#[cfg(feature = "qdrant")]
-pub use rune_vectorstore_qdrant as qdrant;
 /// Postgres + pgvector vector store: `PgVectorStore`, `PgVectorConfig`, `PgIndex`.
 #[cfg(feature = "pgvector")]
 pub use rune_vectorstore_pgvector as pgvector;
+/// Qdrant vector store: `QdrantStore` and `QdrantConfig`.
+#[cfg(feature = "qdrant")]
+pub use rune_vectorstore_qdrant as qdrant;
 /// Embedded single-file SQLite vector store: `SqliteVectorStore`, `SqliteConfig`.
 #[cfg(feature = "sqlite")]
 pub use rune_vectorstore_sqlite as sqlite;
@@ -214,6 +215,11 @@ pub use rune_vectorstore_sqlite as sqlite;
 /// metrics, reports and run comparison for CI gates.
 #[cfg(feature = "eval")]
 pub use rune_chain_eval as eval;
+
+/// Stateful graphs for workflows and agents: typed state with reducers,
+/// parallel supersteps, checkpoints, interrupts and `create_react_agent`.
+#[cfg(feature = "graph")]
+pub use rune_chain_graph as graph;
 
 /// MCP client and server; remote MCP tools work as agent tools.
 #[cfg(feature = "mcp")]

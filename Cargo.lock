@@ -3503,6 +3503,7 @@ dependencies = [
  "rune-chain-embed",
  "rune-chain-eval",
  "rune-chain-gemini",
+ "rune-chain-graph",
  "rune-chain-memory",
  "rune-chain-ollama",
  "rune-chain-openai",

@@ -250,6 +250,7 @@ More in [`examples/`](examples): `agent_with_tools`, `tool_macro`, `rag`, `extra
 | `sqlite` | | `sqlite`: embedded single-file SQLite store (`SqliteVectorStore`), exact search |
 | `retrieval` | | `retrieval`, `dynamic_context`, `EmbeddingIndex`: BM25, hybrid, MMR, reranking |
 | `eval` | | `eval`: datasets, heuristic, LLM-as-judge, RAG and trajectory metrics, run comparison for CI |
+| `graph` | | `graph`: `StateGraph`, checkpoints, human-in-the-loop interrupts, `create_react_agent` (with `sqlite`, `SqliteCheckpointer`) |
 | `mcp` | | `mcp`: MCP client and server; remote tools as agent tools |
 | `otel` | | `otel`: OpenTelemetry GenAI spans |
 | `macros` | yes | `#[tool]` (`rune_chain::tool`) and, with `embed`, `#[derive(Embed)]` (`rune_chain::embed::Embed`) |
