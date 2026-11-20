@@ -1,0 +1,86 @@
+[package]
+name = "rune-chain"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "One-dependency LLM toolkit: OpenAI/Anthropic/Ollama clients, agents with tools, RAG and memory, typed extraction, streaming. Re-exports the rune-chain stack behind features"
+license.workspace = true
+keywords = ["llm", "agent", "rag", "openai", "anthropic"]
+categories = ["asynchronous", "science", "web-programming::http-client"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = ["openai"]
+## OpenAI and OpenAI-compatible providers (also turns on `embed` for OpenAI embeddings).
+openai = ["dep:rune-chain-openai", "embed"]
+## Anthropic Claude.
+anthropic = ["dep:rune-chain-anthropic"]
+## Ollama local models, chat and embeddings.
+ollama = ["dep:rune-chain-ollama", "embed"]
+## `Embedder`, `EmbeddingsClient` and the OpenAI/Cohere/Voyage/Jina embedders.
+embed = ["dep:rune-chain-embed"]
+## Vector stores: the `VectorStore` trait, exact and HNSW in-memory indexes.
+vectorstore = ["dep:rune-vectorstore"]
+## RAG: `AgentBuilder::dynamic_context`, `EmbeddingIndex`, retrievers and rerankers.
+retrieval = ["dep:rune-chain-retrieval", "embed", "vectorstore"]
+## MCP client and server (`rune-mcp` with its `chain` bridge).
+mcp = ["dep:rune-mcp"]
+## OpenTelemetry GenAI spans for model and tool calls.
+otel = ["dep:rune-otel-genai"]
+## `.with_timeout(..)` and `.with_retry(..)` on any `Llm` or `Chain`.
+tokio = ["rune-chain-core/tokio"]
+## `testing::FakeLlm`, a scriptable offline model, plus trait-contract checks.
+testing = ["rune-chain-core/testing"]
+## Everything above.
+full = ["openai", "anthropic", "ollama", "embed", "vectorstore", "retrieval", "mcp", "otel", "tokio"]
+
+[dependencies]
+rune-chain-core.workspace = true
+rune-chain-agent.workspace = true
+rune-chain-memory.workspace = true
+rune-chain-output-parser = { workspace = true, features = ["schemars"] }
+rune-chain-prompt.workspace = true
+rune-tool-schema = { workspace = true, features = ["schemars"] }
+rune-chain-openai = { workspace = true, optional = true }
+rune-chain-anthropic = { workspace = true, optional = true }
+rune-chain-ollama = { workspace = true, optional = true }
+rune-chain-embed = { workspace = true, optional = true }
+rune-vectorstore = { workspace = true, optional = true }
+rune-chain-retrieval = { workspace = true, optional = true }
+rune-mcp = { workspace = true, optional = true, features = ["chain"] }
+rune-otel-genai = { workspace = true, optional = true }
+async-stream.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[[example]]
+name = "agent_with_tools"
+required-features = ["openai"]
+
+[[example]]
+name = "extractor"
+required-features = ["openai"]
+
+[[example]]
+name = "rag"
+required-features = ["openai", "retrieval"]
+
+[[example]]
+name = "streaming"
+required-features = ["anthropic"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
