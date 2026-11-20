@@ -12,6 +12,7 @@ LLM orchestration: core traits, OpenAI/Anthropic/Gemini/Ollama providers, prompt
 | [`rune-chain-core`](rune-chain-core) | Core traits and types for the rune-chain LLM orchestration framework |
 | [`rune-chain-embed`](rune-chain-embed) | Embedder trait, hardened OpenAI-compatible/Cohere/Voyage/Jina embedding providers, batching and caching for the rune-chain LLM framework |
 | [`rune-chain-gemini`](rune-chain-gemini) | Google Gemini LLM provider for rune-chain: Gemini API and Vertex AI, streaming, tools, structured output, thinking, safety settings and embeddings |
+| [`rune-chain-graph`](rune-chain-graph) | Stateful graph orchestration for LLM workflows and agents: typed state with reducers, parallel supersteps, checkpoints, time travel, human-in-the-loop interrupts and a prebuilt ReAct agent |
 | [`rune-chain-knowledge-graph`](rune-chain-knowledge-graph) | GraphRAG for the rune-chain LLM framework: schema-validated entity and relation extraction, entity resolution, provenance, and bounded k-hop retrieval with cited context |
 | [`rune-chain-llm`](rune-chain-llm) | LlmChain for rune-chain: prompt template + LLM + memory, with structured output, output parsers, streaming into memory, usage and finish reason |
 | [`rune-chain-loader`](rune-chain-loader) | Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV and jailed directory walks with limits |

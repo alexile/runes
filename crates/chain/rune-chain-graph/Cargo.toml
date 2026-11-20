@@ -1,0 +1,39 @@
+[package]
+name = "rune-chain-graph"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Stateful graph orchestration for LLM workflows and agents: typed state with reducers, parallel supersteps, checkpoints, time travel, human-in-the-loop interrupts and a prebuilt ReAct agent"
+license.workspace = true
+keywords = ["llm", "agent", "langgraph", "workflow", "graph"]
+categories = ["asynchronous", "science"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## `SqliteCheckpointer`, persisting checkpoints in SQLite (bundled).
+sqlite = ["dep:rusqlite"]
+
+[dependencies]
+rune-chain-core.workspace = true
+rune-chain-agent.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
+
+[dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
+tokio-test.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
