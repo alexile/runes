@@ -10,7 +10,10 @@ use rune_chain_core::testing::check_llm;
 use rune_chain_core::testing::http::{MockResponse, MockServer, RecordedRequest};
 use std::time::Duration;
 
-use rune_chain_core::{FunctionDefinition, Llm, Message, ResponseFormat, StreamData, ToolChoice};
+use rune_chain_core::{
+    FunctionDefinition, Llm, Message, ResponseFormat, StreamAccumulator, StreamData,
+    StreamEvent as CoreEvent, ToolChoice,
+};
 use rune_chain_openai::{OpenAi, StreamEvent, collect_events, models};
 use serde_json::json;
 
@@ -271,6 +274,45 @@ fn stream_events_report_tool_calls_and_usage() {
     let body = requests[0].json().unwrap();
     assert_eq!(body["stream"], true);
     assert_eq!(body["stream_options"], json!({ "include_usage": true }));
+    assert_eq!(body["tools"][0]["function"]["name"], "get_weather");
+}
+
+#[test]
+fn llm_stream_events_stream_tool_call_fragments() {
+    let server = MockServer::start([
+        MockResponse::event_stream(fixture!("stream_tool_calls.sse")).chunked(7),
+    ])
+    .unwrap();
+    let llm: &dyn Llm = &client(&server);
+    let tools = [FunctionDefinition::single_input("get_weather", "Weather.")];
+    let events: Vec<CoreEvent> = tokio_test::block_on(async {
+        let s = llm
+            .stream_events(
+                &[Message::human("Weather?")],
+                Some(&tools),
+                Some(ToolChoice::Auto),
+            )
+            .await
+            .unwrap();
+        s.map(Result::unwrap).collect().await
+    });
+    let deltas = events
+        .iter()
+        .filter(|e| matches!(e, CoreEvent::ToolCallDelta { .. }))
+        .count();
+    assert_eq!(deltas, 4, "{events:?}");
+    let mut acc = StreamAccumulator::new();
+    for e in &events {
+        acc.push(e).unwrap();
+    }
+    let result = acc.finish();
+    assert_eq!(result.tool_calls[0].arg("location"), Some(json!("Oslo")));
+    assert_eq!(result.tool_calls[1].arg("tz"), Some(json!("UTC")));
+    assert_eq!(result.tokens.unwrap().total_tokens, 61);
+
+    let body = server.finish().unwrap()[0].json().unwrap();
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["tool_choice"], "auto");
     assert_eq!(body["tools"][0]["function"]["name"], "get_weather");
 }
 

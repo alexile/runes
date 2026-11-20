@@ -6,7 +6,8 @@ use std::pin::Pin;
 
 use futures::{Stream, StreamExt};
 use rune_chain_core::{
-    FinishReason, GenerateResult, LlmError, ReasoningBlock, StreamData, TokenUsage, ToolCall,
+    FinishReason, GenerateResult, LlmError, MAX_TOOL_ARGUMENTS_BYTES, ReasoningBlock, StreamData,
+    StreamEvent as CoreEvent, TokenUsage, ToolCall,
 };
 
 use crate::types::{ChatChunk, ToolCallDelta, error_message};
@@ -107,6 +108,30 @@ struct PartialCall {
     id: String,
     name: String,
     arguments: String,
+    /// A core `ToolCallStart` went out for this call.
+    started: bool,
+}
+
+/// State for translating to core [`CoreEvent`]s (tool-call fragments as
+/// they arrive, refusals folded the way [`collect_events`] does).
+#[derive(Debug, Default)]
+struct CoreState {
+    /// Start / argument events from tool-call deltas of the current chunk.
+    fragments: Vec<CoreEvent>,
+    /// Argument fill-ins and end events from the last flush.
+    ends: Vec<CoreEvent>,
+    refusal: String,
+    saw_text: bool,
+    saw_calls: bool,
+    refusal_sent: bool,
+}
+
+impl CoreState {
+    /// A refusal with no text or tool calls is the answer, as in
+    /// [`collect_events`].
+    const fn refusal_only(&self) -> bool {
+        !self.refusal_sent && !self.saw_text && !self.saw_calls && !self.refusal.is_empty()
+    }
 }
 
 /// Sans-I/O state machine over the `data` of SSE events.
@@ -118,9 +143,80 @@ pub struct Assembler {
     slots: BTreeMap<usize, usize>,
     finished: bool,
     done: bool,
+    /// Set when translating to core events.
+    core: Option<CoreState>,
 }
 
 impl Assembler {
+    /// An assembler that also tracks what [`push_core`](Self::push_core)
+    /// needs.
+    pub fn for_core_events() -> Self {
+        Self {
+            core: Some(CoreState::default()),
+            ..Self::default()
+        }
+    }
+
+    /// Like [`push`](Self::push), translated to core events: tool-call
+    /// starts and argument fragments come out as they arrive.
+    pub fn push_core(&mut self, data: &str) -> Result<Vec<CoreEvent>, LlmError> {
+        let events = self.push(data)?;
+        Ok(self.translate(events))
+    }
+
+    /// Like [`finish`](Self::finish), translated to core events.
+    pub fn finish_core(&mut self) -> Result<Vec<CoreEvent>, LlmError> {
+        let events = self.finish()?;
+        Ok(self.translate(events))
+    }
+
+    fn translate(&mut self, events: Vec<StreamEvent>) -> Vec<CoreEvent> {
+        let Some(core) = self.core.as_mut() else {
+            return Vec::new();
+        };
+        let mut fragments = std::mem::take(&mut core.fragments);
+        let mut out = Vec::with_capacity(events.len() + fragments.len());
+        for event in events {
+            match event {
+                StreamEvent::Text(t) => {
+                    core.saw_text = true;
+                    out.push(CoreEvent::TextDelta(t));
+                }
+                StreamEvent::Reasoning(t) => out.push(CoreEvent::reasoning(t)),
+                StreamEvent::Refusal(t) => core.refusal.push_str(&t),
+                StreamEvent::ToolCalls(_) => {
+                    core.saw_calls = true;
+                    out.append(&mut fragments);
+                    out.append(&mut core.ends);
+                }
+                StreamEvent::Finished { reason } => {
+                    out.append(&mut fragments);
+                    let reason = if core.refusal_only() {
+                        core.refusal_sent = true;
+                        out.push(CoreEvent::TextDelta(std::mem::take(&mut core.refusal)));
+                        FinishReason::Refusal
+                    } else {
+                        crate::types::finish_reason(&reason)
+                    };
+                    out.push(CoreEvent::Finish(reason));
+                }
+                StreamEvent::Usage(u) => {
+                    out.append(&mut fragments);
+                    out.push(CoreEvent::Usage(u));
+                }
+                StreamEvent::Done => {
+                    out.append(&mut fragments);
+                    if core.refusal_only() {
+                        core.refusal_sent = true;
+                        out.push(CoreEvent::TextDelta(std::mem::take(&mut core.refusal)));
+                        out.push(CoreEvent::Finish(FinishReason::Refusal));
+                    }
+                }
+            }
+        }
+        out.append(&mut fragments);
+        out
+    }
     /// Feed one event's data; returns the events it produces.
     pub fn push(&mut self, data: &str) -> Result<Vec<StreamEvent>, LlmError> {
         let data = data.trim();
@@ -227,6 +323,7 @@ impl Assembler {
         {
             call.id = id;
         }
+        let mut fragment = None;
         if let Some(f) = delta.function {
             if let Some(name) = f.name.filter(|n| !n.is_empty())
                 && call.name.is_empty()
@@ -234,7 +331,34 @@ impl Assembler {
                 call.name = name;
             }
             if let Some(args) = f.arguments {
+                if call.arguments.len().saturating_add(args.len()) > MAX_TOOL_ARGUMENTS_BYTES {
+                    return Err(LlmError::invalid_response(format!(
+                        "streamed tool call {index} has arguments over \
+                         {MAX_TOOL_ARGUMENTS_BYTES} bytes"
+                    )));
+                }
                 call.arguments.push_str(&args);
+                fragment = Some(args);
+            }
+        }
+        if let Some(core) = self.core.as_mut() {
+            // Start once the name is known; arguments seen before that go
+            // out with the start.
+            if !call.started && !call.name.is_empty() {
+                call.started = true;
+                core.fragments.push(CoreEvent::tool_call_start(
+                    index,
+                    call_id(&call.id, index),
+                    call.name.clone(),
+                ));
+                if !call.arguments.is_empty() {
+                    core.fragments
+                        .push(CoreEvent::tool_call_delta(index, call.arguments.clone()));
+                }
+            } else if call.started
+                && let Some(args) = fragment.filter(|a| !a.is_empty())
+            {
+                core.fragments.push(CoreEvent::tool_call_delta(index, args));
             }
         }
         Ok(())
@@ -271,6 +395,14 @@ impl Assembler {
             return Ok(());
         }
         self.slots.clear();
+        if let Some(core) = self.core.as_mut() {
+            for (&index, c) in &self.calls {
+                if c.started && c.arguments.is_empty() {
+                    core.ends.push(CoreEvent::tool_call_delta(index, "{}"));
+                }
+                core.ends.push(CoreEvent::ToolCallEnd { index });
+            }
+        }
         let calls = std::mem::take(&mut self.calls)
             .into_iter()
             .map(|(index, c)| {
@@ -279,11 +411,7 @@ impl Assembler {
                         "streamed tool call {index} has no function name"
                     )));
                 }
-                let id = if c.id.is_empty() {
-                    format!("call_{index}")
-                } else {
-                    c.id
-                };
+                let id = call_id(&c.id, index);
                 let arguments = if c.arguments.trim().is_empty() {
                     "{}".to_string()
                 } else {
@@ -309,12 +437,54 @@ where
     B: AsRef<[u8]>,
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
+    drive(
+        body,
+        max_event_len,
+        Assembler::default(),
+        Assembler::push,
+        Assembler::finish,
+    )
+}
+
+/// Turn an SSE byte stream into core [`CoreEvent`]s, with tool-call
+/// fragments as they arrive. Same parser and limits as [`assemble_events`].
+pub fn assemble_core_events<S, B, E>(body: S, max_event_len: usize) -> rune_chain_core::EventStream
+where
+    S: Stream<Item = Result<B, E>> + Send + Unpin + 'static,
+    B: AsRef<[u8]>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    drive(
+        body,
+        max_event_len,
+        Assembler::for_core_events(),
+        Assembler::push_core,
+        Assembler::finish_core,
+    )
+}
+
+type Step<T> = fn(&mut Assembler, &str) -> Result<Vec<T>, LlmError>;
+type Finish<T> = fn(&mut Assembler) -> Result<Vec<T>, LlmError>;
+
+/// Feed SSE events to `asm` until `[DONE]`, the end of input or an error.
+fn drive<S, B, E, T>(
+    body: S,
+    max_event_len: usize,
+    mut asm: Assembler,
+    step: Step<T>,
+    finish: Finish<T>,
+) -> Pin<Box<dyn Stream<Item = Result<T, LlmError>> + Send>>
+where
+    S: Stream<Item = Result<B, E>> + Send + Unpin + 'static,
+    B: AsRef<[u8]>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+    T: Send + 'static,
+{
     let options = rune_sse::Options::default()
         .with_max_event_len(max_event_len)
         .with_max_line_len(max_event_len);
     let mut sse = rune_sse::SseStream::with_options(body, options);
     Box::pin(async_stream::stream! {
-        let mut asm = Assembler::default();
         while let Some(item) = sse.next().await {
             let event = match item {
                 Ok(item) => match item.into_event() {
@@ -326,14 +496,13 @@ where
                     return;
                 }
             };
-            match asm.push(&event.data) {
+            match step(&mut asm, &event.data) {
                 Ok(events) => {
                     for ev in events {
-                        let done = matches!(ev, StreamEvent::Done);
                         yield Ok(ev);
-                        if done {
-                            return;
-                        }
+                    }
+                    if asm.done {
+                        return;
                     }
                 }
                 Err(e) => {
@@ -342,7 +511,7 @@ where
                 }
             }
         }
-        match asm.finish() {
+        match finish(&mut asm) {
             Ok(events) => for ev in events { yield Ok(ev); },
             Err(e) => yield Err(e),
         }
@@ -371,6 +540,15 @@ pub fn text_stream(
             }
         }
     })
+}
+
+/// The call id, or `call_<index>` when the server sent none.
+fn call_id(id: &str, index: usize) -> String {
+    if id.is_empty() {
+        format!("call_{index}")
+    } else {
+        id.to_owned()
+    }
 }
 
 /// An error object sent as a stream event, classified by its code.

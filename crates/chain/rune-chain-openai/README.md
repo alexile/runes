@@ -22,6 +22,8 @@ server that speaks its dialect. Pass any slice of `Message`s and get back a
   mode or prompting elsewhere.
 - **Streaming events**: `stream_events` yields text, fully assembled tool calls,
   the finish reason and token usage (`stream_options.include_usage`).
+  `Llm::stream_events` (the portable version, used by agents) streams each
+  tool call's argument fragments as they arrive.
 - **Audio and images**: `TranscriptionModel` (`/audio/transcriptions`, multipart
   upload capped at 25 MiB), `ImageGenerationModel` (`/images/generations`, base64
   decoded, `https`-only URLs) and `SpeechModel` (`/audio/speech`), with a 64 MiB

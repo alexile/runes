@@ -355,6 +355,130 @@ fn collect_events_folds_a_stream() {
     assert!(result.wants_tool_calls());
 }
 
+/// Run `body` through the core-event assembler in chunks of `size` bytes.
+fn core_events(body: &[u8], size: usize) -> Vec<rune_chain_core::StreamEvent> {
+    let chunks: Vec<Result<Vec<u8>, std::io::Error>> =
+        body.chunks(size).map(|c| Ok(c.to_vec())).collect();
+    futures::executor::block_on(
+        stream::assemble_core_events(futures::stream::iter(chunks), 1 << 20)
+            .map(Result::unwrap)
+            .collect(),
+    )
+}
+
+fn fold(events: &[rune_chain_core::StreamEvent]) -> GenerateResult {
+    let mut acc = rune_chain_core::StreamAccumulator::new();
+    for e in events {
+        acc.push(e).unwrap();
+    }
+    acc.finish()
+}
+
+#[test]
+fn core_events_stream_interleaved_tool_call_fragments() {
+    use rune_chain_core::StreamEvent as E;
+    let body = fixture!("stream_tool_calls.sse").as_bytes();
+    let expected = futures::executor::block_on(crate::collect_events(stream::assemble_events(
+        futures::stream::iter([Ok::<_, std::io::Error>(body.to_vec())]),
+        1 << 20,
+    )))
+    .unwrap();
+    for size in [1, 5, 13, body.len()] {
+        let events = core_events(body, size);
+        assert_eq!(
+            events,
+            [
+                E::tool_call_start(0, "call_a", "get_weather"),
+                E::tool_call_delta(0, "{\"loc"),
+                E::tool_call_start(1, "call_b", "get_time"),
+                E::tool_call_delta(1, "{\"tz\":"),
+                E::tool_call_delta(0, "ation\":\"Oslo\"}"),
+                E::tool_call_delta(1, "\"UTC\"}"),
+                E::ToolCallEnd { index: 0 },
+                E::ToolCallEnd { index: 1 },
+                E::Finish(FinishReason::ToolCalls),
+                E::Usage(rune_chain_core::TokenUsage::new(40, 21)),
+            ],
+            "chunk size {size}"
+        );
+        assert_eq!(fold(&events), expected, "same as the provider fold");
+    }
+}
+
+#[test]
+fn core_events_match_the_text_stream_and_generate() {
+    let body = fixture!("stream.sse").as_bytes();
+    let events = core_events(body, 3);
+    let result = fold(&events);
+    assert_eq!(result.generation, "Hello there");
+    assert_eq!(result.finish_reason, Some(FinishReason::Stop));
+}
+
+#[test]
+fn core_events_late_name_and_missing_arguments() {
+    use rune_chain_core::StreamEvent as E;
+    let mut asm = stream::Assembler::for_core_events();
+    // Arguments before the name go out with the start; no id gets one.
+    let out = asm
+        .push_core(r#"{"choices":[{"delta":{"tool_calls":[{"index":2,"function":{"arguments":"{\"a\""}}]}}]}"#)
+        .unwrap();
+    assert_eq!(out, [] as [rune_chain_core::StreamEvent; 0]);
+    let out = asm
+        .push_core(r#"{"choices":[{"delta":{"tool_calls":[{"index":2,"function":{"name":"f","arguments":":1}"}},{"index":3,"id":"c3","function":{"name":"g"}}]}}]}"#)
+        .unwrap();
+    assert_eq!(
+        out,
+        [
+            E::tool_call_start(2, "call_2", "f"),
+            E::tool_call_delta(2, "{\"a\":1}"),
+            E::tool_call_start(3, "c3", "g"),
+        ]
+    );
+    let out = asm.push_core("[DONE]").unwrap();
+    assert_eq!(
+        out,
+        [
+            E::ToolCallEnd { index: 2 },
+            E::tool_call_delta(3, "{}"),
+            E::ToolCallEnd { index: 3 },
+        ]
+    );
+    assert_eq!(
+        fold(&[E::tool_call_start(3, "c3", "g"), out[1].clone()]).tool_calls[0].arguments,
+        "{}"
+    );
+}
+
+#[test]
+fn core_events_turn_a_bare_refusal_into_the_answer() {
+    let mut asm = stream::Assembler::for_core_events();
+    let mut events = asm
+        .push_core(r#"{"choices":[{"delta":{"refusal":"I can't"}}]}"#)
+        .unwrap();
+    events.extend(
+        asm.push_core(r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#)
+            .unwrap(),
+    );
+    events.extend(asm.push_core("[DONE]").unwrap());
+    let result = fold(&events);
+    assert_eq!(result.generation, "I can't");
+    assert_eq!(result.finish_reason, Some(FinishReason::Refusal));
+}
+
+#[test]
+fn oversized_streamed_arguments_are_rejected() {
+    let mut asm = stream::Assembler::for_core_events();
+    asm.push_core(r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"f","arguments":""}}]}}]}"#)
+        .unwrap();
+    let piece = "x".repeat(64 * 1024);
+    let chunk =
+        json!({"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":piece}}]}}]})
+            .to_string();
+    let err = (0..=16).find_map(|_| asm.push_core(&chunk).err()).unwrap();
+    assert_eq!(err.kind(), LlmErrorKind::InvalidResponse);
+    assert!(!err.message().contains("xxx"));
+}
+
 #[test]
 fn tool_calls_without_index_are_keyed_by_id() {
     // Mistral-style: whole calls, no `index`.

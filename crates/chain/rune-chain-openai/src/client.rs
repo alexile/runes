@@ -906,7 +906,15 @@ impl OpenAi {
         decode_response(&bytes).map_err(|e| self.scrub(e))
     }
 
-    async fn open_stream(&self, body: &ChatRequest) -> Result<EventStream, LlmError> {
+    /// Send `body` and return the response bytes, capped at
+    /// `max_response_bytes` in total.
+    async fn open_bytes(
+        &self,
+        body: &ChatRequest,
+    ) -> Result<
+        impl Stream<Item = Result<impl AsRef<[u8]> + use<>, BoxError>> + Send + Unpin + use<>,
+        LlmError,
+    > {
         let response = self.send(body).await?;
         let limit = self.max_response_bytes;
         let mut seen = 0usize;
@@ -920,7 +928,12 @@ impl OpenAi {
                 }
                 Ok(chunk)
             });
-        Ok(stream::assemble_events(Box::pin(bytes), limit))
+        Ok(Box::pin(bytes))
+    }
+
+    async fn open_stream(&self, body: &ChatRequest) -> Result<EventStream, LlmError> {
+        let bytes = self.open_bytes(body).await?;
+        Ok(stream::assemble_events(bytes, self.max_response_bytes))
     }
 
     /// Stream a completion as [`StreamEvent`](crate::StreamEvent)s: text
@@ -1039,6 +1052,30 @@ impl rune_chain_core::Llm for OpenAi {
             },
         );
         Ok(stream::text_stream(self.open_stream(&body).await?))
+    }
+
+    /// Native streaming with tool calls: text, reasoning and each tool
+    /// call's argument fragments arrive as the server sends them, then usage
+    /// (when reported) and the finish reason.
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<rune_chain_core::EventStream, LlmError> {
+        self.preflight(messages)?;
+        let body = self.request_body(
+            messages,
+            BodyOptions {
+                tools: tools.unwrap_or_default(),
+                tool_choice: tool_choice.as_ref(),
+                stream: true,
+                include_usage: true,
+                ..BodyOptions::default()
+            },
+        );
+        let bytes = self.open_bytes(&body).await?;
+        Ok(stream::assemble_core_events(bytes, self.max_response_bytes))
     }
 
     /// Native structured output. [`ResponseFormat::JsonSchema`] is sent as
