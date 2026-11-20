@@ -281,6 +281,7 @@ members = [
     "crates/train/rune-lowp",
     "crates/train/rune-attn",
     "crates/train/rune-fused",
+    "crates/train/rune-optim",
 ]
 
 [workspace.package]
@@ -314,6 +315,7 @@ rune-axum-timeout = { path = "crates/axum/rune-axum-timeout", version = "0.1.0" 
 rune-gemm = { path = "crates/train/rune-gemm", version = "0.1.0" }
 rune-attn = { path = "crates/train/rune-attn", version = "0.1.0" }
 rune-fused = { path = "crates/train/rune-fused", version = "0.1.0" }
+rune-optim = { path = "crates/train/rune-optim", version = "0.1.0" }
 rune-epss = { path = "crates/secops/rune-epss", version = "0.1.0" }
 rune-subdomain-permute = { path = "crates/net/rune-subdomain-permute", version = "0.1.0" }
 rune-port-scan = { path = "crates/net/rune-port-scan", version = "0.1.0" }

@@ -22,7 +22,7 @@ naive reference implementations and finite-difference gradients.
 | Parallelism | [`rune-shard`](rune-shard) | Device mesh (data, fully-sharded, tensor, pipeline, context, expert axes), shard/replicate/partial placements, redistribution plans, ZeRO 1–3 partitioning | planned |
 | Parallelism | [`rune-pipesched`](rune-pipesched) | Pipeline schedules (fill-drain, one-forward-one-backward, interleaved virtual stages, zero-bubble split backward, bidirectional), a validator and a bubble/memory simulator | planned |
 | Parallelism | [`rune-moe`](rune-moe) | Mixture-of-experts routing: softmax/sigmoid top-k, group-limited routing, bias-based (aux-loss-free) balancing, auxiliary losses, capacity and dropping, token permute/unpermute, expert-parallel dispatch layout | planned |
-| Optimization | [`rune-optim`](rune-optim) | AdamW, Lion, Adafactor, Muon (Newton–Schulz orthogonalization), schedules (warmup-cosine, warmup-stable-decay), global-norm clipping, EMA, flat sharded state | planned |
+| Optimization | [`rune-optim`](rune-optim) | AdamW, Lion, Adafactor, Muon (Newton–Schulz orthogonalization), schedules (warmup-cosine, warmup-stable-decay), global-norm clipping, EMA, flat sharded state | 0.1.0 |
 | Data | [`rune-bpe`](rune-bpe) | Byte-level BPE: fast trainer, encoder with a hand-written pre-tokenizer, special tokens, rank-file import/export | planned |
 | Data | [`rune-neardup`](rune-neardup) | Exact and near-duplicate detection: shingling, MinHash, LSH banding, union-find clustering | planned |
 | Data | [`rune-text-quality`](rune-text-quality) | Heuristic quality filters for web text: repetition, symbol ratios, line rules, stop-word presence, length bounds | planned |

@@ -1,0 +1,31 @@
+[package]
+name = "rune-optim"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Optimizers and schedules for large-model training: AdamW, Lion, Adafactor, Muon, warmup-cosine and WSD schedules, global-norm clipping, loss scaling, EMA"
+license.workspace = true
+keywords = ["optimizer", "adamw", "muon", "deep-learning", "training"]
+categories = ["science", "mathematics", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = []
+# Serialize / deserialize optimizer state, configs, schedules, the loss scaler and EMA.
+serde = ["dep:serde"]
+
+[dependencies]
+rayon.workspace = true
+rune-gemm.workspace = true
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -4991,6 +4991,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-optim"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rayon",
+ "rune-gemm",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "rune-otel-genai"
 version = "0.1.2"
 dependencies = [
