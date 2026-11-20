@@ -75,6 +75,13 @@ pub enum MlError {
         /// Why the value was rejected.
         reason: String,
     },
+    /// A linear system is singular (or not positive definite) to working
+    /// precision.
+    #[error("matrix is singular to working precision (pivot {pivot})")]
+    Singular {
+        /// Index of the pivot (row or column) where the solver gave up.
+        pivot: usize,
+    },
     /// An iterative method stopped before converging.
     #[error("did not converge within {iterations} iterations")]
     NoConvergence {

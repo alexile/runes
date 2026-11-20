@@ -6,6 +6,7 @@
 //! | [`Float`] | Sealed scalar trait for `f32` / `f64` |
 //! | [`Matrix`], [`MatrixView`] | Owned / borrowed row-major dense matrix over a flat buffer |
 //! | [`Metric`] | Euclidean, squared Euclidean, Manhattan, cosine, Chebyshev; `pairwise`, `cdist`, `nearest` |
+//! | [`linalg`] | Dense Cholesky and Householder QR least-squares solvers |
 //! | [`kernels`] | Unrolled, auto-vectorisable slice kernels (`dot`, `sq_euclidean`, …) |
 //! | [`trustworthiness`] | Neighbourhood-preservation score of an embedding (Venna & Kaski) |
 //! | [`Rng`], [`SplitMix64`] | Reproducible xoshiro256++ / `SplitMix64` generators |
@@ -45,6 +46,7 @@
 mod error;
 mod float;
 pub mod kernels;
+pub mod linalg;
 mod matrix;
 mod metric;
 mod quality;

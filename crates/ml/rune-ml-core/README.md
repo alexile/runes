@@ -14,6 +14,7 @@ functions, PRNG and `Vec<Vec<f64>>` plumbing.
 | Item | What it is |
 |------|------------|
 | `Float` | Sealed scalar trait for `f32` / `f64` |
+| `linalg` | Dense Cholesky and Householder QR least-squares solvers |
 | `Matrix<F>`, `MatrixView<'a, F>` | Owned / borrowed row-major dense matrix over one flat buffer |
 | `Metric` | `Euclidean`, `SqEuclidean`, `Manhattan`, `Cosine`, `Chebyshev`, with `distance`, `pairwise`, `cdist`, `nearest` |
 | `kernels` | Unrolled 8-lane slice kernels (`dot`, `sq_euclidean`, `manhattan`, `cosine`, …) that LLVM auto-vectorises |
