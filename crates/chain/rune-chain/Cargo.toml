@@ -1,6 +1,6 @@
 [package]
 name = "rune-chain"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -26,6 +26,8 @@ ollama = ["dep:rune-chain-ollama", "embed"]
 embed = ["dep:rune-chain-embed"]
 ## Vector stores: the `VectorStore` trait, exact and HNSW in-memory indexes.
 vectorstore = ["dep:rune-vectorstore"]
+## Qdrant vector store (`QdrantStore`) over the REST API.
+qdrant = ["dep:rune-vectorstore-qdrant", "vectorstore"]
 ## RAG: `AgentBuilder::dynamic_context`, `EmbeddingIndex`, retrievers and rerankers.
 retrieval = ["dep:rune-chain-retrieval", "embed", "vectorstore"]
 ## MCP client and server (`rune-mcp` with its `chain` bridge).
@@ -37,7 +39,7 @@ tokio = ["rune-chain-core/tokio"]
 ## `testing::FakeLlm`, a scriptable offline model, plus trait-contract checks.
 testing = ["rune-chain-core/testing"]
 ## Everything above.
-full = ["openai", "anthropic", "gemini", "ollama", "embed", "vectorstore", "retrieval", "mcp", "otel", "tokio"]
+full = ["openai", "anthropic", "gemini", "ollama", "embed", "vectorstore", "qdrant", "retrieval", "mcp", "otel", "tokio"]
 
 [dependencies]
 rune-chain-core.workspace = true
@@ -52,6 +54,7 @@ rune-chain-gemini = { workspace = true, optional = true }
 rune-chain-ollama = { workspace = true, optional = true }
 rune-chain-embed = { workspace = true, optional = true }
 rune-vectorstore = { workspace = true, optional = true }
+rune-vectorstore-qdrant = { workspace = true, optional = true }
 rune-chain-retrieval = { workspace = true, optional = true }
 rune-mcp = { workspace = true, optional = true, features = ["chain"] }
 rune-otel-genai = { workspace = true, optional = true }

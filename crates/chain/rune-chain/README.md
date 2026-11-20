@@ -218,6 +218,7 @@ More in [`examples/`](examples): `agent_with_tools`, `rag`, `extractor` and `str
 | `ollama` | | `ollama`: local models and embeddings |
 | `embed` | via `openai`/`gemini`/`ollama` | `embed`: `Embedder`, Cohere/Voyage/Jina embedders, batching, caching |
 | `vectorstore` | | `vectorstore`: exact and HNSW in-memory stores, filters, snapshots |
+| `qdrant` | | `qdrant`: `QdrantStore`, a Qdrant-backed `VectorStore` |
 | `retrieval` | | `retrieval`, `dynamic_context`, `EmbeddingIndex`: BM25, hybrid, MMR, reranking |
 | `mcp` | | `mcp`: MCP client and server; remote tools as agent tools |
 | `otel` | | `otel`: OpenTelemetry GenAI spans |

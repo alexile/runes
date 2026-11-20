@@ -69,6 +69,7 @@
 //! | `ollama` | | [`ollama`]: local models and embeddings |
 //! | `embed` | via `openai`/`gemini`/`ollama` | [`embed`]: `Embedder`, Cohere/Voyage/Jina embedders, batching and caching |
 //! | `vectorstore` | | [`vectorstore`]: exact and HNSW in-memory stores, filters, snapshots |
+//! | `qdrant` | | [`qdrant`]: `QdrantStore`, a Qdrant-backed `VectorStore` |
 //! | `retrieval` | | [`retrieval`], `dynamic_context`, [`EmbeddingIndex`]: BM25, hybrid, MMR, reranking |
 //! | `mcp` | | [`mcp`]: MCP client and server, remote tools as agent tools |
 //! | `otel` | | [`otel`]: OpenTelemetry `GenAI` spans |
@@ -170,6 +171,9 @@ pub use rune_chain_retrieval as retrieval;
 /// Vector stores: the `VectorStore` trait, exact and HNSW in-memory stores.
 #[cfg(feature = "vectorstore")]
 pub use rune_vectorstore as vectorstore;
+/// Qdrant vector store: `QdrantStore` and `QdrantConfig`.
+#[cfg(feature = "qdrant")]
+pub use rune_vectorstore_qdrant as qdrant;
 
 /// MCP client and server; remote MCP tools work as agent tools.
 #[cfg(feature = "mcp")]
