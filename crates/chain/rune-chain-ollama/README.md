@@ -16,7 +16,8 @@ model you have pulled with `ollama pull <model>` is usable; no API key needed.
 
 - **Generation and streaming** over `/api/chat`, with token usage.
 - **Native tool calling** (`tools`), including tool calls in streams via
-  `stream_events`. `ToolChoice` is emulated (Ollama has none).
+  `stream_events` (and the portable `Llm::stream_events`, used by agents).
+  `ToolChoice` is emulated (Ollama has none).
 - **Native structured output**: `generate_structured` sends Ollama's `format`
   (a JSON Schema, or `"json"`).
 - **Thinking models**: `.think(Think::On)` (or `Low`/`Medium`/`High`); the

@@ -240,6 +240,57 @@ where
     })
 }
 
+/// Adapt an [`EventStream`] to core [`StreamEvent`](rune_chain_core::StreamEvent)s
+/// for [`Llm::stream_events`](rune_chain_core::Llm::stream_events).
+///
+/// Ollama sends tool calls whole, so each one becomes a start, one
+/// argument fragment and an end, numbered across the stream. A `stop` with
+/// tool calls finishes as [`FinishReason::ToolCalls`](rune_chain_core::FinishReason::ToolCalls),
+/// as in the non-streaming reply.
+pub fn core_events(mut events: EventStream) -> rune_chain_core::EventStream {
+    use rune_chain_core::{FinishReason, MAX_TOOL_ARGUMENTS_BYTES, StreamEvent as E};
+    Box::pin(async_stream::stream! {
+        let mut next_index = 0usize;
+        while let Some(event) = events.next().await {
+            let event = match event {
+                Ok(event) => event,
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            };
+            match event {
+                StreamEvent::Thinking(t) => yield Ok(E::reasoning(t)),
+                StreamEvent::Text(t) => yield Ok(E::TextDelta(t)),
+                StreamEvent::ToolCalls(calls) => {
+                    for call in calls {
+                        if call.arguments.len() > MAX_TOOL_ARGUMENTS_BYTES {
+                            yield Err(LlmError::invalid_response(format!(
+                                "tool call {next_index} has arguments over \
+                                 {MAX_TOOL_ARGUMENTS_BYTES} bytes"
+                            )));
+                            return;
+                        }
+                        let index = next_index;
+                        next_index += 1;
+                        yield Ok(E::tool_call_start(index, call.id, call.name));
+                        yield Ok(E::tool_call_delta(index, call.arguments));
+                        yield Ok(E::ToolCallEnd { index });
+                    }
+                }
+                StreamEvent::Finished { reason } => {
+                    yield Ok(E::Finish(match reason.as_str() {
+                        "stop" if next_index > 0 => FinishReason::ToolCalls,
+                        _ => FinishReason::from(reason),
+                    }));
+                }
+                StreamEvent::Usage(u) => yield Ok(E::Usage(u)),
+                StreamEvent::Done => return,
+            }
+        }
+    })
+}
+
 /// Adapt an [`EventStream`] to the [`Llm::stream`](rune_chain_core::Llm::stream)
 /// shape: text chunks, then one terminal chunk.
 pub fn text_stream(

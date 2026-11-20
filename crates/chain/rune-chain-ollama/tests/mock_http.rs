@@ -187,6 +187,38 @@ fn stream_events_assemble_tool_calls_and_thinking() {
 }
 
 #[test]
+fn llm_stream_events_yield_tool_calls_as_they_arrive() {
+    let server =
+        MockServer::start([MockResponse::ndjson(fixture!("stream_tool_calls.ndjson")).chunked(7)])
+            .unwrap();
+    let ollama = client(&server).model("qwen3");
+    let llm: &dyn Llm = &ollama;
+    let events: Vec<rune_chain_core::StreamEvent> = tokio_test::block_on(async {
+        llm.stream_events(&[Message::human("Weather?")], Some(&[weather()]), None)
+            .await
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+            .await
+    });
+    let mut acc = rune_chain_core::StreamAccumulator::new();
+    for e in &events {
+        acc.push(e).unwrap();
+    }
+    let result = acc.finish();
+    assert_eq!(result.generation, "Checking.");
+    assert_eq!(result.reasoning_text(), "The user wants weather.");
+    assert_eq!(result.tool_calls[1].id, "call_xyz");
+    assert_eq!(
+        result.finish_reason,
+        Some(rune_chain_core::FinishReason::ToolCalls)
+    );
+    let body = server.finish().unwrap()[0].json().unwrap();
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["tools"][0]["function"]["name"], "get_weather");
+}
+
+#[test]
 fn structured_output_sends_schema_as_format() {
     let server = MockServer::start([MockResponse::json(
         200,

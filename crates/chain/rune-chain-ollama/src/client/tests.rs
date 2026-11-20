@@ -605,6 +605,64 @@ fn stream_events_report_finish_and_usage() {
     assert!(matches!(items[4], StreamEvent::Done));
 }
 
+fn core(body: &[u8], size: usize) -> Vec<Result<rune_chain_core::StreamEvent, LlmError>> {
+    let chunks: Vec<Result<Vec<u8>, std::io::Error>> =
+        body.chunks(size).map(|c| Ok(c.to_vec())).collect();
+    futures::executor::block_on(
+        crate::stream::core_events(assemble_events(futures::stream::iter(chunks), BIG)).collect(),
+    )
+}
+
+#[test]
+fn core_events_match_the_non_streaming_reply() {
+    use rune_chain_core::{StreamAccumulator, StreamEvent as E};
+    let plain = br#"{"model":"qwen3","message":{"role":"assistant","content":"Checking.",
+        "thinking":"The user wants weather.","tool_calls":[
+        {"function":{"name":"get_weather","arguments":{"city":"Oslo"}}},
+        {"id":"call_xyz","function":{"name":"get_time","arguments":{"tz":"CET"}}}]},
+        "done":true,"done_reason":"stop","prompt_eval_count":50,"eval_count":20}"#;
+    let expected = decode_response(plain).unwrap().result;
+    let body = fixture!("stream_tool_calls.ndjson").as_bytes();
+    for size in [1, 7, body.len()] {
+        let events: Vec<E> = core(body, size)
+            .into_iter()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            events[2..8],
+            [
+                E::tool_call_start(0, "call_0", "get_weather"),
+                E::tool_call_delta(0, r#"{"city":"Oslo"}"#),
+                E::ToolCallEnd { index: 0 },
+                E::tool_call_start(1, "call_xyz", "get_time"),
+                E::tool_call_delta(1, r#"{"tz":"CET"}"#),
+                E::ToolCallEnd { index: 1 },
+            ]
+        );
+        let mut acc = StreamAccumulator::new();
+        for e in &events {
+            acc.push(e).unwrap();
+        }
+        assert_eq!(acc.finish(), expected, "chunk size {size}");
+    }
+}
+
+#[test]
+fn core_events_reject_oversized_arguments_and_truncation() {
+    let big = "x".repeat(rune_chain_core::MAX_TOOL_ARGUMENTS_BYTES);
+    let line = json!({"message":{"role":"assistant","content":"","tool_calls":[
+        {"function":{"name":"f","arguments":big}}]},"done":false})
+    .to_string();
+    let items = core(line.as_bytes(), 1 << 16);
+    let err = items.last().unwrap().as_ref().unwrap_err();
+    assert_eq!(err.kind(), LlmErrorKind::InvalidResponse);
+    assert!(!err.message().contains("xxx"));
+
+    let body = fixture!("stream.ndjson");
+    let cut = &body[..=body.rfind("\n{").unwrap()];
+    assert!(core(cut.as_bytes(), 5).last().unwrap().is_err());
+}
+
 #[test]
 fn streamed_tool_calls_and_thinking_at_any_chunking() {
     let body = fixture!("stream_tool_calls.ndjson").as_bytes();

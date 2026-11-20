@@ -810,8 +810,22 @@ impl rune_chain_core::Llm for Ollama {
         messages: &[Message],
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamData, LlmError>> + Send>>, LlmError> {
         Ok(stream::text_stream(
-            self.stream_events(messages, &[], None).await?,
+            Self::stream_events(self, messages, &[], None).await?,
         ))
+    }
+
+    /// Native streaming with tool calls on `/api/chat`: thinking and text
+    /// deltas as they arrive, each tool call as soon as Ollama sends it
+    /// (whole), then the finish reason and usage.
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<rune_chain_core::EventStream, LlmError> {
+        let events =
+            Self::stream_events(self, messages, tools.unwrap_or_default(), tool_choice).await?;
+        Ok(stream::core_events(events))
     }
 
     /// Native structured output via Ollama's `format`:
