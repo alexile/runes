@@ -21,6 +21,7 @@ rune-chain = "0.1"
 | [Secops](crates/secops/README.md) | Security findings, CVE/CVSS/EPSS, SARIF, correlation and Linux sandboxing. |
 | [Web](crates/web/README.md) | Web security headers and well-known files: CSP, CORS, HSTS, robots, security.txt, tech detection. |
 | [Common](crates/common/README.md) | Small utilities: encodings, hashes, ciphers, binary formats, secrets, logging. |
+| [Train](crates/train/README.md) | LLM training building blocks: low-precision formats, GEMM, attention and fused kernels, autodiff, collectives, sharding, pipeline schedules, MoE routing, optimizers, tokenizers, data pipelines, checkpoints, RL losses. |
 | [ML](crates/ml/README.md) | ML: metrics, linear models, clustering, dimensionality reduction, graph embeddings, community detection. |
 | [Time series](crates/ts/README.md) | Time series: statistics, smoothing, resampling, change points, forecasting. |
 | [Geo](crates/geo/README.md) | Geospatial: geohash, polylines, simplification, geofencing, map matching, tracking. |
