@@ -10,8 +10,20 @@ use crate::jail::Jail;
 use crate::limits::Limits;
 use crate::{html, meta};
 
-/// Patterns a [`DirectoryLoader`] includes unless told otherwise.
-pub const DEFAULT_INCLUDE: &[&str] = &["*.txt", "*.md", "*.markdown", "*.rst", "*.html", "*.htm"];
+/// Patterns a [`DirectoryLoader`] includes unless told otherwise. With the
+/// `pdf` and `epub` features, `*.pdf` and `*.epub` are included too.
+pub const DEFAULT_INCLUDE: &[&str] = &[
+    "*.txt",
+    "*.md",
+    "*.markdown",
+    "*.rst",
+    "*.html",
+    "*.htm",
+    #[cfg(feature = "pdf")]
+    "*.pdf",
+    #[cfg(feature = "epub")]
+    "*.epub",
+];
 
 /// Walks a directory tree and loads one [`Document`] per matching file.
 ///
@@ -32,7 +44,9 @@ pub const DEFAULT_INCLUDE: &[&str] = &["*.txt", "*.md", "*.markdown", "*.rst", "
 /// Files are matched with [`Glob`]s against their path relative to the
 /// root; an `exclude` that matches a directory prunes it. With
 /// [`html`](Self::html) on (the default), `.html`/`.htm` files are converted
-/// with [`html::html_to_text`].
+/// with [`html::html_to_text`]. With the `pdf` / `epub` features, `.pdf`
+/// and `.epub` files yield one document per page or chapter (see
+/// [`pdf`](Self::pdf) and [`epub`](Self::epub)).
 ///
 /// Loading is lazy: [`documents`](Self::documents) reads one file per `next()`.
 ///
@@ -71,6 +85,8 @@ pub struct DirectoryLoader {
     follow_symlinks: bool,
     hidden: bool,
     html: bool,
+    pdf: bool,
+    epub: bool,
 }
 
 impl DirectoryLoader {
@@ -86,6 +102,8 @@ impl DirectoryLoader {
             follow_symlinks: false,
             hidden: false,
             html: true,
+            pdf: true,
+            epub: true,
         }
     }
 
@@ -158,6 +176,23 @@ impl DirectoryLoader {
         self
     }
 
+    /// Load `.pdf` files page by page (default `true`; needs the `pdf`
+    /// feature, otherwise they are read as text and skipped as not UTF-8).
+    #[must_use]
+    pub const fn pdf(mut self, pdf: bool) -> Self {
+        self.pdf = pdf;
+        self
+    }
+
+    /// Load `.epub` files chapter by chapter (default `true`; needs the
+    /// `epub` feature, otherwise they are read as text and skipped as not
+    /// UTF-8).
+    #[must_use]
+    pub const fn epub(mut self, epub: bool) -> Self {
+        self.epub = epub;
+        self
+    }
+
     /// Lazily walk the tree, yielding the matching files without reading them.
     pub fn paths(&self) -> Result<Walk, LoadError> {
         let jail = Jail::new(&self.root)?;
@@ -195,18 +230,31 @@ impl DirectoryLoader {
         })
     }
 
-    /// Lazily walk the tree and load each file, one per `next()`.
+    /// Lazily walk the tree and load each file, one file per step (a PDF or
+    /// EPUB yields all of its pages or chapters in turn).
     ///
-    /// Per-file problems (too large, not UTF-8) are yielded as errors and the
-    /// walk continues; [`LoadError::TooManyFiles`] ends it.
+    /// Per-file problems (too large, not UTF-8, a broken PDF) are yielded as
+    /// errors and the walk continues; [`LoadError::TooManyFiles`] ends it.
     pub fn documents(
         &self,
     ) -> Result<impl Iterator<Item = Result<Document, LoadError>> + use<>, LoadError> {
         let walk = self.paths()?;
-        let max_bytes = self.limits.max_file_bytes;
-        let html = self.html;
+        let opts = EntryOptions {
+            limits: self.limits,
+            html: self.html,
+            #[cfg(feature = "pdf")]
+            pdf: self.pdf,
+            #[cfg(feature = "epub")]
+            epub: self.epub,
+        };
         let jail = walk.jail.clone();
-        Ok(walk.map(move |entry| load_entry(&entry?, &jail, max_bytes, html)))
+        Ok(walk.flat_map(move |entry| {
+            let docs = entry.and_then(|entry| load_entry(&entry, &jail, &opts));
+            match docs {
+                Ok(docs) => docs.into_iter().map(Ok).collect::<Vec<_>>(),
+                Err(err) => vec![Err(err)],
+            }
+        }))
     }
 
     /// Walk the tree and load every matching file, skipping files that fail
@@ -225,20 +273,63 @@ impl DirectoryLoader {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools, reason = "independent format switches")]
+struct EntryOptions {
+    limits: Limits,
+    html: bool,
+    #[cfg(feature = "pdf")]
+    pdf: bool,
+    #[cfg(feature = "epub")]
+    epub: bool,
+}
+
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
+/// Load a PDF or EPUB from a walk, or `None` if `entry` is neither (or the
+/// format is switched off or not compiled in).
+#[allow(
+    unused_variables,
+    clippy::unnecessary_wraps,
+    reason = "the body depends on the enabled features"
+)]
+fn load_binary(
+    entry: &WalkEntry,
+    bytes: &[u8],
+    opts: &EntryOptions,
+) -> Option<Result<Vec<Document>, LoadError>> {
+    let source = entry.path.display().to_string();
+    #[cfg(feature = "pdf")]
+    if opts.pdf && has_extension(&entry.path, &["pdf"]) {
+        return Some(crate::pdf::extract(bytes, &source, &opts.limits));
+    }
+    #[cfg(feature = "epub")]
+    if opts.epub && has_extension(&entry.path, &["epub"]) {
+        return Some(crate::epub::extract(bytes, &source, &opts.limits));
+    }
+    None
+}
+
 fn load_entry(
     entry: &WalkEntry,
     jail: &Jail,
-    max_bytes: u64,
-    html: bool,
-) -> Result<Document, LoadError> {
-    let bytes = read_file(&entry.path, Some(jail), max_bytes)?;
+    opts: &EntryOptions,
+) -> Result<Vec<Document>, LoadError> {
+    let bytes = read_file(&entry.path, Some(jail), opts.limits.max_file_bytes)?;
+    if let Some(result) = load_binary(entry, &bytes, opts) {
+        let mut docs = result.map_err(|e| e.with_path(&entry.path))?;
+        for doc in &mut docs {
+            doc.metadata
+                .insert(meta::RELATIVE_PATH.to_string(), entry.relative_path.clone());
+        }
+        return Ok(docs);
+    }
     let text = utf8(bytes, Some(&entry.path))?;
-    let is_html = html
-        && entry
-            .path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"));
+    let is_html = opts.html && has_extension(&entry.path, &["html", "htm"]);
     let mut doc = if is_html {
         html::load_str(&text)
     } else {
@@ -249,7 +340,7 @@ fn load_entry(
     doc.metadata
         .insert(meta::RELATIVE_PATH.to_string(), entry.relative_path.clone());
     meta::stamp_hash(&mut doc);
-    Ok(doc)
+    Ok(vec![doc])
 }
 
 /// A file found by a directory walk.

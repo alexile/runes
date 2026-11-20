@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Everything that can go wrong while loading documents.
 ///
@@ -88,6 +89,50 @@ pub enum LoadError {
         /// Why it was rejected.
         reason: &'static str,
     },
+    /// A PDF or EPUB is encrypted (password protected or DRM).
+    Encrypted {
+        /// The path involved, if any.
+        path: Option<PathBuf>,
+    },
+    /// A PDF or EPUB is broken beyond what the loader can recover from.
+    Malformed {
+        /// The path involved, if any.
+        path: Option<PathBuf>,
+        /// What went wrong.
+        message: String,
+    },
+    /// A PDF has more than [`Limits::max_pages`](crate::Limits::max_pages)
+    /// pages, or an EPUB more spine chapters.
+    TooManyPages {
+        /// The limit that was exceeded.
+        limit: usize,
+    },
+    /// An EPUB archive has more than
+    /// [`Limits::max_archive_entries`](crate::Limits::max_archive_entries) entries.
+    TooManyEntries {
+        /// The limit that was exceeded.
+        limit: usize,
+    },
+    /// A PDF or EPUB decompresses to more than
+    /// [`Limits::max_decompressed_bytes`](crate::Limits::max_decompressed_bytes).
+    DecompressedTooLarge {
+        /// The limit that was exceeded, in bytes.
+        limit: u64,
+    },
+    /// An archive entry compresses better than
+    /// [`Limits::max_compression_ratio`](crate::Limits::max_compression_ratio),
+    /// the mark of a zip bomb.
+    CompressionRatio {
+        /// The entry's name inside the archive.
+        entry: String,
+        /// The ratio that was exceeded.
+        limit: u64,
+    },
+    /// Loading took longer than [`Limits::max_duration`](crate::Limits::max_duration).
+    TimedOut {
+        /// The budget that was exceeded.
+        limit: Duration,
+    },
 }
 
 impl LoadError {
@@ -100,13 +145,41 @@ impl LoadError {
     }
 
     /// `true` for errors confined to the content of one file (too large, not
-    /// UTF-8, not a regular file) that a bulk loader may skip and carry on.
+    /// UTF-8, not a regular file, a broken or encrypted PDF or EPUB) that a
+    /// bulk loader may skip and carry on.
     #[must_use]
     pub const fn is_per_file(&self) -> bool {
         matches!(
             self,
-            Self::TooLarge { .. } | Self::InvalidUtf8 { .. } | Self::NotRegularFile { .. }
+            Self::TooLarge { .. }
+                | Self::InvalidUtf8 { .. }
+                | Self::NotRegularFile { .. }
+                | Self::OutputTooLarge { .. }
+                | Self::Encrypted { .. }
+                | Self::Malformed { .. }
+                | Self::TooManyPages { .. }
+                | Self::TooManyEntries { .. }
+                | Self::DecompressedTooLarge { .. }
+                | Self::CompressionRatio { .. }
+                | Self::TimedOut { .. }
         )
+    }
+
+    /// Fill in the path of a path-less error from a bytes loader.
+    pub(crate) fn with_path(mut self, given: &std::path::Path) -> Self {
+        match &mut self {
+            Self::Io { path, .. }
+            | Self::TooLarge { path, .. }
+            | Self::InvalidUtf8 { path, .. }
+            | Self::Encrypted { path }
+            | Self::Malformed { path, .. }
+                if path.is_none() =>
+            {
+                *path = Some(given.to_path_buf());
+            }
+            _ => {}
+        }
+        self
     }
 }
 
@@ -153,6 +226,25 @@ impl fmt::Display for LoadError {
             Self::InvalidPattern { pattern, reason } => {
                 write!(f, "invalid pattern `{pattern}`: {reason}")
             }
+            Self::Encrypted { path } => {
+                write!(f, "document is encrypted{}", path_suffix(path.as_ref()))
+            }
+            Self::Malformed { path, message } => {
+                write!(
+                    f,
+                    "malformed document{}: {message}",
+                    path_suffix(path.as_ref())
+                )
+            }
+            Self::TooManyPages { limit } => write!(f, "more than {limit} pages or chapters"),
+            Self::TooManyEntries { limit } => write!(f, "archive has more than {limit} entries"),
+            Self::DecompressedTooLarge { limit } => {
+                write!(f, "decompressed content exceeds {limit} bytes")
+            }
+            Self::CompressionRatio { entry, limit } => {
+                write!(f, "archive entry `{entry}` compresses more than {limit}:1")
+            }
+            Self::TimedOut { limit } => write!(f, "loading took longer than {limit:?}"),
         }
     }
 }
@@ -174,14 +266,22 @@ impl From<LoadError> for io::Error {
             | LoadError::RecordTooLarge { .. }
             | LoadError::TooManyRecords { .. }
             | LoadError::OutputTooLarge { .. }
-            | LoadError::TooManyFiles { .. } => io::ErrorKind::FileTooLarge,
-            LoadError::OutsideRoot { .. } => io::ErrorKind::PermissionDenied,
+            | LoadError::TooManyFiles { .. }
+            | LoadError::TooManyPages { .. }
+            | LoadError::TooManyEntries { .. }
+            | LoadError::DecompressedTooLarge { .. }
+            | LoadError::CompressionRatio { .. } => io::ErrorKind::FileTooLarge,
+            LoadError::TimedOut { .. } => io::ErrorKind::TimedOut,
+            LoadError::OutsideRoot { .. } | LoadError::Encrypted { .. } => {
+                io::ErrorKind::PermissionDenied
+            }
             LoadError::NotRegularFile { .. } | LoadError::InvalidPattern { .. } => {
                 io::ErrorKind::InvalidInput
             }
             LoadError::InvalidUtf8 { .. }
             | LoadError::Parse { .. }
-            | LoadError::MissingField { .. } => io::ErrorKind::InvalidData,
+            | LoadError::MissingField { .. }
+            | LoadError::Malformed { .. } => io::ErrorKind::InvalidData,
         };
         match err {
             LoadError::Io { source, .. } => source,

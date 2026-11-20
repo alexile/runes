@@ -23,8 +23,22 @@ pub const RECORD: &str = "record";
 pub const BYTE_START: &str = "byte_start";
 /// Byte offset one past the record's last byte (line terminator excluded).
 pub const BYTE_END: &str = "byte_end";
-/// The `<title>` of an HTML document.
+/// The `<title>` of an HTML document, or the title of a PDF or EPUB.
 pub const TITLE: &str = "title";
+/// The author of a PDF (`/Author`) or EPUB (`dc:creator`, joined with `, `).
+pub const AUTHOR: &str = "author";
+/// 1-based page number of a PDF page.
+pub const PAGE: &str = "page";
+/// Number of pages in the PDF a page came from.
+pub const PAGE_COUNT: &str = "page_count";
+/// 1-based position of an EPUB chapter in the spine.
+pub const CHAPTER: &str = "chapter";
+/// Number of items in the EPUB spine a chapter came from.
+pub const CHAPTER_COUNT: &str = "chapter_count";
+/// The `<title>` of an EPUB chapter's XHTML file, when it has one.
+pub const CHAPTER_TITLE: &str = "chapter_title";
+/// Path of an EPUB chapter inside the archive.
+pub const ENTRY: &str = "entry";
 
 /// Set [`CONTENT_SHA256`] from the current content (always overwrites, so a
 /// record cannot spoof it).

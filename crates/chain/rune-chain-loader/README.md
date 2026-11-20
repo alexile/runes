@@ -1,6 +1,6 @@
 # rune-chain-loader
 
-> Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV and jailed directory walks with limits.
+> Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV, PDF, EPUB and jailed directory walks with limits.
 
 [![crates.io](https://img.shields.io/crates/v/rune-chain-loader)](https://crates.io/crates/rune-chain-loader)
 [![docs.rs](https://img.shields.io/docsrs/rune-chain-loader)](https://docs.rs/rune-chain-loader)
@@ -19,17 +19,21 @@
 | `jsonl::JsonlLoader` | JSON Lines, streamed | line |
 | `json::JsonLoader` | JSON array/object, field selectors | record |
 | `csv::CsvLoader` | CSV / TSV, streamed | row |
+| `pdf::PdfLoader`, `pdf::load_file`, `pdf::load_bytes` (feature `pdf`) | PDF file / bytes / reader | page with text |
+| `epub::EpubLoader`, `epub::load_file`, `epub::load_bytes` (feature `epub`) | EPUB file / bytes / reader | spine chapter with text |
 
-Every document carries `source` (when the input has a name) and `content_sha256`. Record loaders add `line` / `row` / `record` and `byte_start` / `byte_end`, so a retrieved chunk can be traced to the exact bytes it came from. Directory walks add `relative_path`, HTML adds `title`. The key names are constants in `rune_chain_loader::meta`.
+Every document carries `source` (when the input has a name) and `content_sha256`. Record loaders add `line` / `row` / `record` and `byte_start` / `byte_end`, so a retrieved chunk can be traced to the exact bytes it came from. Directory walks add `relative_path`, HTML adds `title`. PDF pages add `page` and `page_count`; EPUB chapters add `chapter`, `chapter_count`, `entry` and `chapter_title`; both add `title` and `author` when the file has them. The key names are constants in `rune_chain_loader::meta`.
 
-Dependencies: `serde_json` and `rune-sha256`. No network code.
+Dependencies: `serde_json` and `rune-sha256`; `lopdf` with the `pdf` feature, `zip`, `flate2` and `quick-xml` with `epub`. All pure Rust, no network code.
 
 ## Installation
 
 ```toml
 [dependencies]
-rune-chain-loader = "0.2"
+rune-chain-loader = { version = "0.2", features = ["pdf", "epub"] }
 ```
+
+With `pdf` / `epub` on, `DirectoryLoader` also picks up `*.pdf` and `*.epub` files (switch them off with `.pdf(false)` / `.epub(false)`).
 
 ## Usage
 
@@ -71,6 +75,17 @@ let rows = csv::CsvLoader::new()
 # Ok::<(), rune_chain_loader::LoadError>(())
 ```
 
+PDF and EPUB (features `pdf`, `epub`):
+
+```rust,ignore
+use rune_chain_loader::{Limits, epub, pdf::PdfLoader};
+
+let pages = PdfLoader::new()
+    .limits(Limits::default().with_max_pages(2_000))
+    .load_file("paper.pdf")?; // one document per page with text
+let chapters = epub::load_bytes(&std::fs::read("book.epub")?, "book.epub")?;
+```
+
 ## Security
 
 Loaders assume their input is hostile.
@@ -81,6 +96,8 @@ Loaders assume their input is hostile.
 - **Special files** (FIFOs, sockets, devices) are refused or skipped before they are opened.
 - **Parsers** are linear-time and property-tested against arbitrary input: HTML-to-text is a single scan without recursion, globs match in `O(pattern × path)` without backtracking, CSV is a byte-level state machine, and JSON nesting is capped at 128 levels by `serde_json`.
 - **Loader metadata cannot be spoofed** by a record: `line`, `byte_*`, `record`, `row` and `content_sha256` always overwrite record fields. (`source` from a record still wins over the file path, as in 0.1.)
+- **PDF**: one decompression budget (256 MiB) covers page content and font maps, object streams inflated during parsing get a share of it, and pages (10,000), extracted text and wall-clock time (60 s) are capped. Encrypted PDFs are `LoadError::Encrypted`. Parser panics become `LoadError::Malformed`, and `lopdf` 0.47 bounds object nesting.
+- **EPUB**: at most 10,000 archive entries; each entry's declared and real size count against the decompression budget, and an entry over 1 MiB that compresses more than 100:1 is refused as a zip bomb. Entry names with `..`, absolute paths or backslashes are never read, duplicate names are an error, and links that climb out of the archive are `LoadError::OutsideRoot`. Nothing is extracted to disk. DRM-encrypted chapters are refused; XML is parsed without DTD entity expansion.
 - There are **no URL / web loaders** in this crate; fetch remotely with a hardened client and pass the body to `html::load_str` or a loader's `iter`.
 
 ## Migrating from 0.1

@@ -250,7 +250,7 @@ fn push_decoded(out: &mut String, text: &str, from: usize, to: usize) {
     }
 }
 
-fn convert(html: &str) -> (String, Option<String>) {
+pub(crate) fn convert(html: &str) -> (String, Option<String>) {
     let bytes = html.as_bytes();
     let mut raw = String::with_capacity(html.len());
     let mut title = None;
@@ -314,7 +314,7 @@ fn handle_markup(html: &str, lt: usize, out: &mut String, title: &mut Option<Str
 
 /// Collapse runs of whitespace within lines, trim lines, and drop empty
 /// lines.
-fn normalise(raw: &str) -> String {
+pub(crate) fn normalise(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for line in raw.split('\n') {
         let mut words = line.split_whitespace().peekable();

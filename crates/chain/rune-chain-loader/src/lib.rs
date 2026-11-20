@@ -14,10 +14,14 @@
 //! | [`jsonl::JsonlLoader`] | JSON Lines, streamed | line |
 //! | [`json::JsonLoader`] | JSON array/object, field selectors | record |
 //! | [`csv::CsvLoader`] | CSV/TSV, streamed | row |
+//! | `pdf::PdfLoader` (feature `pdf`) | PDF file or bytes | page |
+//! | `epub::EpubLoader` (feature `epub`) | EPUB file or bytes | chapter |
 //!
 //! Every document carries `source` (when the input has a name) and
 //! `content_sha256`; record loaders add `line` / `row` / `record` and
-//! `byte_start` / `byte_end`. The keys are constants in [`meta`].
+//! `byte_start` / `byte_end`; PDF pages add `page` / `page_count` and EPUB
+//! chapters `chapter` / `chapter_count` / `entry`, both with `title` and
+//! `author` when known. The keys are constants in [`meta`].
 //!
 //! # Security
 //!
@@ -26,7 +30,10 @@
 //! loaders refuse FIFOs, sockets and devices without opening them, and can
 //! be confined to a [`Jail`] root. Directory walks skip symlinks (or follow
 //! them only within the root, each directory once), skip hidden entries, and
-//! never recurse on the call stack. Parsers are linear-time and
+//! never recurse on the call stack. PDF and EPUB loaders also cap pages,
+//! archive entries, decompressed bytes, compression ratio and wall-clock
+//! time, refuse encrypted input, and turn parser panics into errors.
+//! Parsers are linear-time and
 //! property-tested not to panic on arbitrary input. There are no network
 //! loaders in this crate.
 //!
@@ -62,8 +69,12 @@
 
 /// The [`Document`] type produced by every loader.
 pub mod document;
+#[cfg(feature = "epub")]
+pub mod epub;
 mod error;
 mod glob;
+#[cfg(any(feature = "pdf", feature = "epub"))]
+mod guard;
 pub mod html;
 mod io;
 mod jail;
@@ -72,6 +83,8 @@ pub mod json;
 pub mod jsonl;
 mod limits;
 pub mod meta;
+#[cfg(feature = "pdf")]
+pub mod pdf;
 #[cfg(test)]
 mod tests;
 /// Loader for plain-text files.

@@ -16,7 +16,7 @@ LLM toolkit. Start with [`rune-chain`](rune-chain), which re-exports the rest be
 | [`rune-chain-graph`](rune-chain-graph) | Stateful graph orchestration for LLM workflows and agents: typed state with reducers, parallel supersteps, checkpoints, time travel, human-in-the-loop interrupts and a prebuilt ReAct agent |
 | [`rune-chain-knowledge-graph`](rune-chain-knowledge-graph) | GraphRAG for the rune-chain LLM framework: schema-validated entity and relation extraction, entity resolution, provenance, and bounded k-hop retrieval with cited context |
 | [`rune-chain-llm`](rune-chain-llm) | LlmChain for rune-chain: prompt template + LLM + memory, with structured output, output parsers, streaming into memory, usage and finish reason |
-| [`rune-chain-loader`](rune-chain-loader) | Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV and jailed directory walks with limits |
+| [`rune-chain-loader`](rune-chain-loader) | Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV, PDF, EPUB and jailed directory walks with limits |
 | [`rune-chain-macros`](rune-chain-macros) | Proc macros for rune-chain: #[tool] turns a function into an LLM tool with a generated JSON Schema, #[derive(Embed)] marks the text fields to embed |
 | [`rune-chain-memory`](rune-chain-memory) | In-process conversation memory for rune-chain: windowed, token-budget and summary buffers, plus optional vector-retrieval and entity memories |
 | [`rune-chain-ollama`](rune-chain-ollama) | Ollama (local models) provider for rune-chain: streaming, native tool calls, structured output, embeddings, model management |

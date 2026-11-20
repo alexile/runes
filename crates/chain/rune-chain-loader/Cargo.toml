@@ -1,10 +1,10 @@
 [package]
 name = "rune-chain-loader"
-version = "0.2.1"
+version = "0.2.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV and jailed directory walks with limits"
+description = "Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV, PDF, EPUB and jailed directory walks with limits"
 license.workspace = true
 keywords = ["loader", "documents", "rag", "langchain", "ai"]
 categories = ["filesystem", "encoding"]
@@ -12,14 +12,29 @@ repository.workspace = true
 readme = "README.md"
 publish = true
 
+[features]
+## PDF text extraction, one document per page (`pdf` module, via `lopdf`).
+pdf = ["dep:lopdf"]
+## EPUB chapters in spine order (`epub` module, via `zip` and `quick-xml`).
+epub = ["dep:zip", "dep:flate2", "dep:quick-xml"]
+
 [dependencies]
 rune-chain-core.workspace = true
 rune-sha256.workspace = true
 serde_json.workspace = true
+lopdf = { version = "0.47", default-features = false, optional = true }
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2"], optional = true }
+flate2 = { workspace = true, optional = true }
+quick-xml = { workspace = true, optional = true }
 
 [dev-dependencies]
+flate2.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2"] }
+
+[package.metadata.docs.rs]
+all-features = true
 
 [lints]
 workspace = true
