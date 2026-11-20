@@ -1,0 +1,38 @@
+[package]
+name = "rune-vectorstore-pgvector"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "PostgreSQL + pgvector backend for rune-vectorstore: HNSW or IVFFlat indexes, batched upserts, metadata filters as bound jsonb conditions"
+license.workspace = true
+keywords = ["vector", "pgvector", "postgres", "embeddings", "rag"]
+categories = ["database", "asynchronous", "science"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+## `PgVectorStore::connect` over TLS (rustls with the ring provider and the
+## webpki root certificates), used when the URL asks for `sslmode=require`
+## or `prefer`.
+rustls = ["dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots"]
+
+[dependencies]
+rune-vectorstore.workspace = true
+async-trait.workspace = true
+deadpool-postgres = { version = "0.14.2", default-features = false, features = ["rt_tokio_1"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
+serde_json.workspace = true
+tokio-postgres = { version = "0.7.18", default-features = false, features = ["runtime", "with-serde_json-1"] }
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"], optional = true }
+webpki-roots = { version = "1", optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true
