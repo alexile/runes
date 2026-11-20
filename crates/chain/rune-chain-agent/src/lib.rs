@@ -38,6 +38,8 @@
 //! - **Errors.** Tool errors, timeouts and panics are returned to the model as
 //!   results ([`ToolErrorMode`]), truncated and passed through
 //!   [`sanitize::redact_secrets`].
+//! - **Reuse.** [`ToolExecutor`] runs one turn's tool calls under the same
+//!   rules for loops you drive yourself, such as a state graph.
 //! - **Observability.** [`AgentEvent`]s report each step, tool call, tool
 //!   result and the final answer to an [`AgentObserver`].
 //!
@@ -172,6 +174,7 @@ pub mod approval;
 mod builder;
 /// Observability events.
 pub mod event;
+mod executor;
 /// Agent driven by native function calling.
 pub mod function_agent;
 mod runner;
@@ -181,5 +184,6 @@ pub mod sanitize;
 pub use agent::{AgentExecutor, AgentResult};
 pub use approval::{Approval, ApprovalRequest, Approver};
 pub use event::{AgentEvent, AgentObserver, StopReason, ToolStatus};
+pub use executor::ToolExecutor;
 pub use function_agent::{FunctionAgentResult, FunctionCallingAgent};
 pub use runner::{AgentLimits, ToolErrorMode, ToolInvocation};
