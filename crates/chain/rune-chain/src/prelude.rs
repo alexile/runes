@@ -1,8 +1,9 @@
 //! The traits and builders most programs need: `use rune_chain::prelude::*;`.
 
 pub use crate::{
-    Agent, AgentBuilder, AgentResponse, CompletionClient, CompletionModel, Extractor,
-    ExtractorBuilder, ImageGenerationClient, SpeechClient, TranscriptionClient, Typed, TypedTool,
+    Agent, AgentBuilder, AgentResponse, AgentStreamItem, CompletionClient, CompletionModel,
+    Extractor, ExtractorBuilder, ImageGenerationClient, SpeechClient, TranscriptionClient, Typed,
+    TypedTool,
 };
 pub use rune_chain_core::{
     Chain, ChainError, ChainExt, GenerateResult, ImageGenerationModel, ImageGenerationRequest, Llm,

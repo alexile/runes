@@ -62,7 +62,8 @@ re-exports the rest of the stack behind cargo features:
   `.transcription_model(name)`, `.image_generation_model(name)` and `.speech_model(name)`
   (OpenAI for all three, Gemini for images and speech).
 - **Agents.** `AgentBuilder` takes a preamble, static documents, tools, per-prompt RAG, memory,
-  sampling settings and limits. `Agent` has `.prompt()`, `.chat()` and `.stream_prompt()`.
+  sampling settings and limits. `Agent` has `.prompt()`, `.chat()`, `.stream_prompt()` and
+  `.stream_events()`. Streaming works with tools too: tokens stream in every turn.
 - **Tools that can't run away.** With tools, the agent runs the multi-turn loop from
   `rune-chain-agent`. Every call is checked against the tool's JSON Schema before it runs. Calls run
   under limits on rounds, calls per round, concurrency, time and output size. Tool output is fenced
@@ -98,6 +99,7 @@ re-exports the rest of the stack behind cargo features:
 | `.multi_turn(n)` | `recursion_limit` | `.max_turns(n)` |
 | `client.extractor::<T>(m).build()` | `with_structured_output(T)` | `client.extractor::<T>(m).build()?` |
 | `agent.stream_prompt(q)` | `.stream(...)` | `agent.stream_prompt(q).await?` |
+| `MultiTurnStreamItem` | `astream_events` | `agent.stream_events(q).await?` (`AgentStreamItem`) |
 | `InMemoryVectorStore` + `.index(embedder)` | `InMemoryVectorStore` | `EmbeddingIndex::new(embedder, store)` |
 | agent as a tool | agent as a tool | `.tool(other_agent)` |
 | `client.transcription_model(m)` | `OpenAIWhisperParser` | `client.transcription_model(m)` |
@@ -203,8 +205,41 @@ while let Some(chunk) = stream.next().await {
 # }
 ```
 
-Without tools, tokens arrive as the provider streams them. With tools, the tool rounds run first
-and the final answer arrives as one chunk.
+Tokens arrive as the provider streams them, with or without tools. With tools, each turn streams:
+the text the model writes before calling tools, then (after the tools run) the next turn, up to
+the answer. Tool calls run under the same checks and limits as `prompt`.
+
+To see the tool calls as well, use `stream_events`. It yields `AgentStreamItem`s: `Text`,
+`Reasoning`, `ToolCall` (as soon as the model starts one), `ToolResult` and finally `Final` with
+the full `AgentResponse`:
+
+```rust,no_run
+use futures::StreamExt;
+use rune_chain::{AgentStreamItem, anthropic, prelude::*};
+
+# async fn run(search: impl Tool + 'static) -> Result<(), Box<dyn std::error::Error>> {
+let agent = anthropic::Client::from_env()?
+    .agent("claude-sonnet-5-5")
+    .tool(search)
+    .build();
+let mut stream = agent.stream_events("What's new in Rust 2024?").await?;
+while let Some(item) = stream.next().await {
+    match item? {
+        AgentStreamItem::Text(t) => print!("{t}"),
+        AgentStreamItem::ToolCall { name, .. } => println!("\n[calling {name}]"),
+        AgentStreamItem::ToolResult { invocation, .. } => println!("[{}]", invocation.status),
+        AgentStreamItem::Final(response) => println!("\n({} tool calls)", response.tool_calls.len()),
+        _ => {}
+    }
+}
+# Ok(())
+# }
+```
+
+Underneath, `Llm::stream_events` streams one model reply as typed `StreamEvent`s (text,
+reasoning, tool-call starts and argument fragments, usage, finish reason) and
+`StreamAccumulator` folds them back into a `GenerateResult`. The OpenAI, Anthropic, Gemini and
+Ollama clients stream tool calls natively; any other `Llm` falls back to one whole reply.
 
 ### Audio and images
 
@@ -264,10 +299,11 @@ More in [`examples/`](examples): `agent_with_tools`, `tool_macro`, `rag`, `extra
 | `.temperature(t)` / `.max_tokens(n)` | Sampling, for provider models |
 | `.max_turns(n)` / `.limits(AgentLimits)` | Tool-loop limits (default 10 rounds) |
 | `.tool_choice(c)` / `.tool_error_mode(m)` / `.on_event(f)` | Tool-loop behaviour and events |
-| `.memory(m)` | Conversation memory used by `prompt` and `stream_prompt` |
+| `.memory(m)` | Conversation memory used by `prompt`, `stream_prompt` and `stream_events` |
 | `.name(s)` / `.description(s)` | How the agent looks when used as a tool |
 
-`Agent` methods: `prompt`, `prompt_with_details`, `chat`, `chat_with_details`, `stream_prompt`, `stream_chat`.
+`Agent` methods: `prompt`, `prompt_with_details`, `chat`, `chat_with_details`, `stream_prompt`, `stream_chat`,
+`stream_events`, `stream_chat_events`.
 `*_with_details` returns usage, tool calls, rounds, the stop reason and the retrieved documents.
 
 ## Features

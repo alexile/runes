@@ -1,5 +1,6 @@
 //! [`AgentBuilder`] and [`Agent`]: a model plus preamble, context, tools,
-//! RAG and memory, behind `prompt` / `chat` / `stream_prompt`.
+//! RAG and memory, behind `prompt` / `chat` / `stream_prompt` /
+//! `stream_events`.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -7,14 +8,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt, stream};
+use futures::{Stream, StreamExt};
 use rune_chain_agent::{
-    AgentLimits, AgentObserver, Approver, FunctionCallingAgent, StopReason, ToolErrorMode,
-    ToolInvocation,
+    AgentLimits, AgentObserver, AgentStreamEvent, Approver, FunctionCallingAgent, StopReason,
+    ToolErrorMode, ToolInvocation,
 };
 use rune_chain_core::{
-    Chain, ChainError, GenerateResult, Llm, LlmError, Memory, Message, PromptArgs, StreamData,
-    TokenUsage, Tool, ToolChoice, ToolError,
+    Chain, ChainError, GenerateResult, Llm, LlmError, Memory, Message, PromptArgs,
+    StreamAccumulator, StreamData, StreamEvent, TokenUsage, Tool, ToolChoice, ToolError,
 };
 use serde_json::{Value, json};
 
@@ -24,6 +25,43 @@ use crate::tool::{Typed, TypedTool};
 
 /// A stream of answer chunks, as returned by [`Agent::stream_prompt`].
 pub type TextStream = Pin<Box<dyn Stream<Item = Result<StreamData, ChainError>> + Send>>;
+
+/// A stream of [`AgentStreamItem`]s, as returned by [`Agent::stream_events`].
+pub type AgentItemStream = Pin<Box<dyn Stream<Item = Result<AgentStreamItem, ChainError>> + Send>>;
+
+/// One item of [`Agent::stream_events`].
+///
+/// Text and reasoning arrive as the model writes them, in every turn, so
+/// with tools the text before a round of tool calls streams too. The last
+/// item is [`Final`](Self::Final).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum AgentStreamItem {
+    /// A fragment of the model's text.
+    Text(String),
+    /// A fragment of the model's reasoning.
+    Reasoning(String),
+    /// The model started a tool call (it is checked and run once the turn
+    /// ends).
+    ToolCall {
+        /// Tool round, from 1.
+        turn: usize,
+        /// Tool-call id.
+        call_id: String,
+        /// Requested tool name, sanitised.
+        name: String,
+    },
+    /// A tool call finished: its status and the output the model sees.
+    ToolResult {
+        /// Tool round, from 1.
+        turn: usize,
+        /// The call and its result.
+        invocation: ToolInvocation,
+    },
+    /// The run ended. As with [`Agent::prompt_with_details`], hitting a
+    /// limit is not an error: check [`AgentResponse::stop_reason`].
+    Final(AgentResponse),
+}
 
 /// Preamble used when documents are given but no preamble is.
 const DEFAULT_PREAMBLE: &str = "You are a helpful assistant.";
@@ -482,10 +520,16 @@ impl Agent {
 
     /// Stream the answer to `text` as it is generated.
     ///
-    /// Without tools, tokens arrive as the provider streams them. With
-    /// tools, the tool rounds run first and the final answer arrives as one
-    /// chunk. With memory, the exchange is stored once the stream ends
-    /// cleanly.
+    /// Tokens arrive as the provider streams them, in every turn: with
+    /// tools, the text the model writes before a round of tool calls
+    /// streams too, then the tools run (under the same limits, validation
+    /// and approval as [`prompt`](Self::prompt)) and the next turn streams.
+    /// The last chunk is the terminal one. A run that hits a limit ends
+    /// with an error item. With memory, the exchange is stored once the
+    /// stream ends cleanly.
+    ///
+    /// Use [`stream_events`](Self::stream_events) to see tool calls and
+    /// results as well.
     ///
     /// # Errors
     ///
@@ -496,7 +540,76 @@ impl Agent {
         text: impl AsRef<str> + Send,
     ) -> Result<TextStream, ChainError> {
         let history = self.history().await?;
+        Ok(text_only(
+            self.stream_inner(text.as_ref(), history, true).await?,
+        ))
+    }
+
+    /// Stream the run for `text` as [`AgentStreamItem`]s: text and
+    /// reasoning deltas from every turn, each tool call as the model starts
+    /// it, each tool result, and finally the [`AgentResponse`].
+    ///
+    /// Memory works as in [`stream_prompt`](Self::stream_prompt).
+    ///
+    /// ```rust
+    /// use futures::StreamExt;
+    /// use rune_chain::prelude::*;
+    /// use rune_chain::testing::{FakeLlm, FakeReply};
+    /// use rune_chain::{AgentStreamItem, ToolCall};
+    ///
+    /// struct Clock;
+    ///
+    /// #[rune_chain::async_trait]
+    /// impl Tool for Clock {
+    ///     fn name(&self) -> &str { "clock" }
+    ///     fn description(&self) -> &str { "The time." }
+    ///     async fn run(&self, _: &str) -> Result<String, ToolError> {
+    ///         Ok("noon".into())
+    ///     }
+    /// }
+    ///
+    /// # tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap().block_on(async {
+    /// let agent = AgentBuilder::new(FakeLlm::with_replies([
+    ///     FakeReply::tool_calls([ToolCall::new("c1", "clock", r#"{"input":"now"}"#)]),
+    ///     FakeReply::text("It is noon."),
+    /// ]))
+    /// .tool(Clock)
+    /// .build();
+    /// let mut stream = agent.stream_events("Time?").await.unwrap();
+    /// while let Some(item) = stream.next().await {
+    ///     match item.unwrap() {
+    ///         AgentStreamItem::ToolCall { name, .. } => assert_eq!(name, "clock"),
+    ///         AgentStreamItem::ToolResult { invocation, .. } => assert_eq!(invocation.output, "noon"),
+    ///         AgentStreamItem::Final(response) => assert_eq!(response.output, "It is noon."),
+    ///         _ => {}
+    ///     }
+    /// }
+    /// # });
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As for [`stream_prompt`](Self::stream_prompt).
+    pub async fn stream_events(
+        &self,
+        text: impl AsRef<str> + Send,
+    ) -> Result<AgentItemStream, ChainError> {
+        let history = self.history().await?;
         self.stream_inner(text.as_ref(), history, true).await
+    }
+
+    /// [`stream_events`](Self::stream_events) as the next turn of
+    /// `history`. Memory is neither read nor written.
+    ///
+    /// # Errors
+    ///
+    /// As for [`stream_prompt`](Self::stream_prompt).
+    pub async fn stream_chat_events(
+        &self,
+        text: impl AsRef<str> + Send,
+        history: Vec<Message>,
+    ) -> Result<AgentItemStream, ChainError> {
+        self.stream_inner(text.as_ref(), history, false).await
     }
 
     /// [`stream_prompt`](Self::stream_prompt) as the next turn of
@@ -510,7 +623,9 @@ impl Agent {
         text: impl AsRef<str> + Send,
         history: Vec<Message>,
     ) -> Result<TextStream, ChainError> {
-        self.stream_inner(text.as_ref(), history, false).await
+        Ok(text_only(
+            self.stream_inner(text.as_ref(), history, false).await?,
+        ))
     }
 
     /// The system prompt sent with every request, if any (preamble, static
@@ -639,52 +754,146 @@ impl Agent {
     async fn stream_inner(
         &self,
         text: &str,
-        history: Vec<Message>,
+        mut history: Vec<Message>,
         record: bool,
-    ) -> Result<TextStream, ChainError> {
-        if self.inner.runner.is_some() {
-            let response = self.respond(text, history).await?.into_final()?;
-            if record {
-                self.remember(text, &response.output).await?;
-            }
-            let chunks = [
-                Ok(StreamData::chunk(response.output)),
-                Ok(StreamData::done()),
-            ];
-            return Ok(Box::pin(stream::iter(chunks)));
-        }
-
-        let (user, _) = self.user_turn(text).await?;
-        let mut inner = self.inner.llm.stream(&self.messages(history, user)).await?;
+    ) -> Result<AgentItemStream, ChainError> {
+        let (user, documents) = self.user_turn(text).await?;
         let memory = if record {
             self.inner.memory.clone()
         } else {
             None
         };
         let text = text.to_owned();
-        Ok(Box::pin(async_stream::stream! {
-            let mut answer = String::new();
-            while let Some(item) = inner.next().await {
-                match item {
-                    Ok(chunk) => {
-                        if memory.is_some() {
-                            answer.push_str(&chunk.content);
+
+        if self.inner.runner.is_some() {
+            history.push(Message::human(user));
+            let inner = Arc::clone(&self.inner);
+            return Ok(Box::pin(async_stream::stream! {
+                let Some(runner) = inner.runner.as_ref() else {
+                    return;
+                };
+                let mut run = runner.run_stream(history);
+                while let Some(item) = run.next().await {
+                    let event = match item {
+                        Ok(event) => event,
+                        Err(err) => {
+                            yield Err(err);
+                            return;
                         }
-                        yield Ok(chunk);
-                    }
+                    };
+                    let item = match event {
+                        AgentStreamEvent::TextDelta(t) => AgentStreamItem::Text(t),
+                        AgentStreamEvent::ReasoningDelta(t) => AgentStreamItem::Reasoning(t),
+                        AgentStreamEvent::ToolCallStarted {
+                            iteration,
+                            call_id,
+                            name,
+                        } => AgentStreamItem::ToolCall {
+                            turn: iteration,
+                            call_id,
+                            name,
+                        },
+                        AgentStreamEvent::ToolResult {
+                            iteration,
+                            invocation,
+                        } => AgentStreamItem::ToolResult {
+                            turn: iteration,
+                            invocation,
+                        },
+                        AgentStreamEvent::Done(run) => {
+                            let response = AgentResponse {
+                                output: run.output,
+                                usage: run.tokens,
+                                tool_calls: run.tool_invocations,
+                                turns: run.iterations,
+                                stop_reason: run.stop_reason,
+                                documents,
+                            };
+                            if response.stop_reason == StopReason::FinalAnswer
+                                && let Some(memory) = &memory
+                                && let Err(err) =
+                                    remember(memory.as_ref(), &text, &response.output).await
+                            {
+                                yield Err(err);
+                                return;
+                            }
+                            yield Ok(AgentStreamItem::Final(response));
+                            return;
+                        }
+                        _ => continue,
+                    };
+                    yield Ok(item);
+                }
+            }));
+        }
+
+        let mut events = self
+            .inner
+            .llm
+            .stream_events(&self.messages(history, user), None, None)
+            .await?;
+        Ok(Box::pin(async_stream::stream! {
+            let mut acc = StreamAccumulator::new();
+            while let Some(item) = events.next().await {
+                let event = match item {
+                    Ok(event) => event,
                     Err(err) => {
                         yield Err(ChainError::from(err));
                         return;
                     }
+                };
+                if let Err(err) = acc.push(&event) {
+                    yield Err(ChainError::from(err));
+                    return;
+                }
+                match event {
+                    StreamEvent::TextDelta(t) if !t.is_empty() => {
+                        yield Ok(AgentStreamItem::Text(t));
+                    }
+                    StreamEvent::ReasoningDelta { text, .. } if !text.is_empty() => {
+                        yield Ok(AgentStreamItem::Reasoning(text));
+                    }
+                    _ => {}
                 }
             }
-            if let Some(memory) = memory
-                && let Err(err) = remember(memory.as_ref(), &text, &answer).await
+            let result = acc.finish();
+            if let Some(memory) = &memory
+                && let Err(err) = remember(memory.as_ref(), &text, &result.generation).await
             {
                 yield Err(err);
+                return;
             }
+            yield Ok(AgentStreamItem::Final(AgentResponse {
+                output: result.generation,
+                usage: result.tokens,
+                tool_calls: Vec::new(),
+                turns: 0,
+                stop_reason: StopReason::FinalAnswer,
+                documents,
+            }));
         }))
     }
+}
+
+/// The text chunks of an item stream, then the terminal chunk; a run that
+/// stopped on a limit ends with an error instead.
+fn text_only(mut items: AgentItemStream) -> TextStream {
+    Box::pin(async_stream::stream! {
+        while let Some(item) = items.next().await {
+            match item {
+                Ok(AgentStreamItem::Text(t)) => yield Ok(StreamData::chunk(t)),
+                Ok(AgentStreamItem::Final(response)) => {
+                    yield response.into_final().map(|_| StreamData::done());
+                    return;
+                }
+                Ok(_) => {}
+                Err(err) => {
+                    yield Err(err);
+                    return;
+                }
+            }
+        }
+    })
 }
 
 async fn remember(memory: &dyn Memory, text: &str, output: &str) -> Result<(), ChainError> {

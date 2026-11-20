@@ -154,7 +154,10 @@ mod tool;
 
 pub mod prelude;
 
-pub use builder::{Agent, AgentBuilder, AgentResponse, ContextDocument, TextStream};
+pub use builder::{
+    Agent, AgentBuilder, AgentItemStream, AgentResponse, AgentStreamItem, ContextDocument,
+    TextStream,
+};
 #[cfg(feature = "embed")]
 pub use client::EmbeddingsClient;
 pub use client::{

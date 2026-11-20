@@ -3492,7 +3492,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3525,8 +3525,9 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-agent"
-version = "0.3.4"
+version = "0.3.5"
 dependencies = [
+ "async-stream",
  "async-trait",
  "futures",
  "rune-chain-core",
@@ -3537,7 +3538,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-anthropic"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3582,7 +3583,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-core"
-version = "0.2.7"
+version = "0.2.8"
 dependencies = [
  "async-trait",
  "futures",
@@ -3636,7 +3637,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-gemini"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3746,7 +3747,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-ollama"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3761,7 +3762,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-openai"
-version = "0.2.3"
+version = "0.2.4"
 dependencies = [
  "async-stream",
  "async-trait",

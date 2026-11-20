@@ -7,6 +7,7 @@
     clippy::assert_is_empty,
     clippy::type_complexity,
     clippy::unwrap_used,
+    clippy::panic,
     reason = "test code"
 )]
 
@@ -311,7 +312,7 @@ async fn stream_prompt_streams_tokens_and_records_memory() {
     assert!(chunks.last().unwrap().is_finished);
     let text: String = chunks.iter().map(|c| c.content.as_str()).collect();
     assert_eq!(text, "Hello there, Ada.");
-    assert_eq!(llm.last_request().unwrap().method, FakeMethod::Stream);
+    assert_eq!(llm.last_request().unwrap().method, FakeMethod::StreamEvents);
 
     let stored: Vec<_> = memory
         .messages()
@@ -336,12 +337,22 @@ async fn a_failed_stream_is_not_remembered() {
 }
 
 #[tokio::test]
-async fn stream_prompt_with_tools_runs_the_loop_first() {
-    let llm = Arc::new(FakeLlm::with_replies([
-        FakeReply::tool_calls([add_call("c1", 2, 2)]),
-        FakeReply::text("4"),
-    ]));
-    let agent = AgentBuilder::new(Arc::clone(&llm)).typed_tool(Add).build();
+async fn stream_prompt_with_tools_streams_every_turn() {
+    let llm = Arc::new(
+        FakeLlm::with_replies([
+            FakeReply::result(
+                GenerateResult::from_text("Adding them up. ")
+                    .with_tool_calls(vec![add_call("c1", 2, 2)]),
+            ),
+            FakeReply::text("The sum is 4."),
+        ])
+        .with_chunk_chars(5),
+    );
+    let memory = Arc::new(SimpleMemory::new());
+    let agent = AgentBuilder::new(Arc::clone(&llm))
+        .typed_tool(Add)
+        .memory(Arc::clone(&memory))
+        .build();
     let chunks: Vec<_> = agent
         .stream_prompt("2+2")
         .await
@@ -349,9 +360,115 @@ async fn stream_prompt_with_tools_runs_the_loop_first() {
         .map(Result::unwrap)
         .collect()
         .await;
-    assert_eq!(chunks[0].content, "4");
+    let text: String = chunks.iter().map(|c| c.content.as_str()).collect();
+    assert_eq!(text, "Adding them up. The sum is 4.");
+    assert!(chunks.len() > 4, "tokens, not one chunk: {chunks:?}");
     assert!(chunks.last().unwrap().is_finished);
     assert_eq!(llm.call_count(), 2);
+    assert!(
+        llm.requests()
+            .iter()
+            .all(|r| r.method == FakeMethod::StreamEvents && r.tool_names() == ["add"])
+    );
+    let stored: Vec<_> = memory
+        .messages()
+        .await
+        .unwrap()
+        .iter()
+        .map(Message::text)
+        .collect();
+    assert_eq!(stored, ["2+2", "The sum is 4."], "only the final answer");
+}
+
+#[tokio::test]
+async fn stream_events_report_tool_calls_results_and_the_response() {
+    use rune_chain::agent::ToolStatus;
+    use rune_chain::{AgentStreamItem, StreamEvent};
+
+    // Two calls whose argument fragments interleave across chunks.
+    let llm = Arc::new(FakeLlm::with_replies([
+        FakeReply::events([
+            StreamEvent::tool_call_start(0, "c1", "add"),
+            StreamEvent::tool_call_start(1, "c2", "add"),
+            StreamEvent::tool_call_delta(0, r#"{"a":1,"#),
+            StreamEvent::tool_call_delta(1, r#"{"a":5,"b""#),
+            StreamEvent::tool_call_delta(0, r#""b":2}"#),
+            StreamEvent::tool_call_delta(1, ":5}"),
+        ]),
+        FakeReply::text("3 and 10.").with_usage(rune_chain::TokenUsage::new(9, 3)),
+    ]));
+    let agent = AgentBuilder::new(Arc::clone(&llm)).typed_tool(Add).build();
+    let items: Vec<AgentStreamItem> = agent
+        .stream_chat_events("1+2 and 5+5?", Vec::new())
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+        .await;
+    let calls: Vec<(usize, &str)> = items
+        .iter()
+        .filter_map(|i| match i {
+            AgentStreamItem::ToolCall { turn, call_id, .. } => Some((*turn, call_id.as_str())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls, [(1, "c1"), (1, "c2")]);
+    let results: Vec<(&str, ToolStatus)> = items
+        .iter()
+        .filter_map(|i| match i {
+            AgentStreamItem::ToolResult { invocation, .. } => {
+                Some((invocation.output.as_str(), invocation.status))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results, [("3", ToolStatus::Ok), ("10", ToolStatus::Ok)]);
+    let Some(AgentStreamItem::Final(response)) = items.last() else {
+        panic!("{items:?}")
+    };
+    assert_eq!(response.output, "3 and 10.");
+    assert_eq!(response.turns, 1);
+    assert_eq!(response.tool_calls.len(), 2);
+    assert_eq!(response.usage.as_ref().unwrap().total_tokens, 12);
+}
+
+#[tokio::test]
+async fn streamed_limits_end_text_streams_with_an_error() {
+    let llm = FakeLlm::with_replies([
+        FakeReply::tool_calls([add_call("c1", 1, 1)]),
+        FakeReply::tool_calls([add_call("c2", 1, 1)]),
+    ]);
+    let memory = Arc::new(SimpleMemory::new());
+    let agent = AgentBuilder::new(llm)
+        .typed_tool(Add)
+        .max_turns(1)
+        .memory(Arc::clone(&memory))
+        .build();
+    let items: Vec<_> = agent.stream_prompt("loop").await.unwrap().collect().await;
+    let err = items.last().unwrap().as_ref().unwrap_err();
+    assert!(err.to_string().contains("iteration limit"), "{err}");
+    assert!(memory.messages().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn stream_events_without_tools_report_usage() {
+    use rune_chain::AgentStreamItem;
+    let agent = AgentBuilder::new(FakeLlm::with_replies([
+        FakeReply::text("pong").with_usage(rune_chain::TokenUsage::new(2, 1))
+    ]))
+    .build();
+    let items: Vec<_> = agent
+        .stream_events("ping")
+        .await
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+        .await;
+    assert!(matches!(&items[0], AgentStreamItem::Text(t) if t == "pong"));
+    let Some(AgentStreamItem::Final(response)) = items.last() else {
+        panic!("{items:?}")
+    };
+    assert_eq!(response.usage.as_ref().unwrap().total_tokens, 3);
 }
 
 #[tokio::test]
