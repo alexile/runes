@@ -1,6 +1,6 @@
 [package]
 name = "rune-otel-genai"
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -29,6 +29,7 @@ serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
 opentelemetry = { workspace = true, features = ["trace", "metrics"] }
 opentelemetry_sdk = { workspace = true, features = ["trace", "metrics", "testing"] }
 tokio-test.workspace = true

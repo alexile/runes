@@ -338,7 +338,7 @@ rune-chain-retrieval = { path = "crates/chain/rune-chain-retrieval", version = "
 rune-chain-splitter = { path = "crates/chain/rune-chain-splitter", version = "0.2.2" }
 rune-chain-usage = { path = "crates/chain/rune-chain-usage", version = "0.1.2" }
 rune-mcp = { path = "crates/chain/rune-mcp", version = "0.2.1" }
-rune-otel-genai = { path = "crates/chain/rune-otel-genai", version = "0.1.0" }
+rune-otel-genai = { path = "crates/chain/rune-otel-genai", version = "0.1.2" }
 rune-cidr = { path = "crates/common/rune-cidr", version = "0.2.2" }
 rune-config = { path = "crates/common/rune-config", version = "0.2.0" }
 rune-cloud-ranges = { path = "crates/net/rune-cloud-ranges", version = "0.1.0" }

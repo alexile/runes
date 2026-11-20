@@ -32,7 +32,7 @@ Notes on the conventions:
 Things the conventions don't cover use `rune.gen_ai.*`:
 `rune.gen_ai.usage.cost_usd` (from `rune_chain_core::Pricing`, cache reads
 and writes at their own rates), `rune.gen_ai.usage.estimated` (counts were
-estimated locally because the provider sent none, e.g. streams) and
+estimated locally because the provider sent none, e.g. plain `stream`) and
 `rune.gen_ai.response.tool_calls`. Each tool call the model asks for is also
 a `gen_ai.tool.call` span event.
 

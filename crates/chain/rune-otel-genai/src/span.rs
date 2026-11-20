@@ -329,26 +329,9 @@ pub fn record_result(
     let (usage, estimated) = result_usage(result, input_estimate);
     record_usage(span, &usage, config.pricing.as_ref(), estimated);
     if let Some(reason) = &result.finish_reason {
-        span.record(
-            "gen_ai.response.finish_reasons",
-            semconv_finish_reason(reason),
-        );
+        record_finish_reason(span, reason);
     }
-    span.record(
-        "rune.gen_ai.response.tool_calls",
-        result.tool_calls.len() as u64,
-    );
-    span.in_scope(|| {
-        for call in &result.tool_calls {
-            // The message becomes the OpenTelemetry event name.
-            tracing::event!(
-                target: TARGET,
-                tracing::Level::INFO,
-                { gen_ai.tool.name = %call.name, gen_ai.tool.call.id = %call.id },
-                "gen_ai.tool.call"
-            );
-        }
-    });
+    record_tool_calls(span, &result.tool_calls);
     if config.content.is_enabled() {
         span.record(
             "gen_ai.output.messages",
@@ -361,6 +344,31 @@ pub fn record_result(
             .to_string(),
         );
     }
+}
+
+/// Records `gen_ai.response.finish_reasons`.
+pub fn record_finish_reason(span: &Span, reason: &FinishReason) {
+    span.record(
+        "gen_ai.response.finish_reasons",
+        semconv_finish_reason(reason),
+    );
+}
+
+/// Records the tool-call count and one `gen_ai.tool.call` event per call,
+/// with its name and id only (never the arguments).
+pub fn record_tool_calls(span: &Span, calls: &[ToolCall]) {
+    span.record("rune.gen_ai.response.tool_calls", calls.len() as u64);
+    span.in_scope(|| {
+        for call in calls {
+            // The message becomes the OpenTelemetry event name.
+            tracing::event!(
+                target: TARGET,
+                tracing::Level::INFO,
+                { gen_ai.tool.name = %call.name, gen_ai.tool.call.id = %call.id },
+                "gen_ai.tool.call"
+            );
+        }
+    });
 }
 
 /// The usage a result reports, or an estimate (flagged `true`) when it
