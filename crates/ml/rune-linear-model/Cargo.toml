@@ -1,0 +1,31 @@
+[package]
+name = "rune-linear-model"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Linear models — OLS, ridge, lasso, elastic net, logistic regression and SGD, matching scikit-learn"
+license.workspace = true
+keywords = ["regression", "lasso", "logistic", "sgd", "machine-learning"]
+categories = ["science", "mathematics", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[features]
+default = []
+# Serialize / deserialize estimators and fitted models.
+serde = ["dep:serde", "rune-ml-core/serde"]
+
+[dependencies]
+rune-ml-core.workspace = true
+rune-ml-metrics.workspace = true
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
