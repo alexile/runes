@@ -1,13 +1,17 @@
 use std::{collections::HashMap, pin::Pin};
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt, stream};
 use serde_json::Value;
 
 use crate::{ChainError, GenerateResult, PromptArgs, StreamData};
 
 const DEFAULT_OUTPUT_KEY: &str = "output";
 const DEFAULT_RESULT_KEY: &str = "generate_result";
+
+/// How many requests [`Chain::batch`] and [`Llm::batch`](crate::Llm::batch)
+/// run at once.
+pub const DEFAULT_BATCH_CONCURRENCY: usize = 8;
 
 /// A composable unit of LLM work that maps [`PromptArgs`] to a [`GenerateResult`].
 ///
@@ -83,6 +87,52 @@ pub trait Chain: Sync + Send {
             serde_json::to_value(&result).unwrap_or(Value::Null),
         );
         Ok(map)
+    }
+
+    /// Run the chain on many inputs, at most [`DEFAULT_BATCH_CONCURRENCY`]
+    /// at a time.
+    ///
+    /// Results come back in input order, one per input; a failed input does
+    /// not stop the others. Collect into `Result<Vec<_>, _>` for
+    /// all-or-nothing behaviour.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rune_chain_core::{Chain, ChainError, GenerateResult, PromptArgs, prompt_args};
+    ///
+    /// struct Upper;
+    /// #[async_trait]
+    /// impl Chain for Upper {
+    ///     async fn call(&self, input: PromptArgs) -> Result<GenerateResult, ChainError> {
+    ///         let text = input["input"].as_str().unwrap_or_default().to_uppercase();
+    ///         Ok(GenerateResult::from_text(text))
+    ///     }
+    /// }
+    ///
+    /// # tokio_test::block_on(async {
+    /// let inputs = vec![prompt_args! { "input" => "a" }, prompt_args! { "input" => "b" }];
+    /// let out: Vec<_> = Upper.batch(inputs).await.into_iter().map(|r| r.unwrap().generation).collect();
+    /// assert_eq!(out, ["A", "B"]);
+    /// # });
+    /// ```
+    async fn batch(&self, inputs: Vec<PromptArgs>) -> Vec<Result<GenerateResult, ChainError>> {
+        self.batch_with_concurrency(inputs, DEFAULT_BATCH_CONCURRENCY)
+            .await
+    }
+
+    /// Like [`Chain::batch`] with an explicit concurrency limit (`0` is
+    /// treated as `1`).
+    async fn batch_with_concurrency(
+        &self,
+        inputs: Vec<PromptArgs>,
+        max_concurrency: usize,
+    ) -> Vec<Result<GenerateResult, ChainError>> {
+        stream::iter(inputs.into_iter().map(|input| self.call(input)))
+            .buffered(max_concurrency.max(1))
+            .collect()
+            .await
     }
 
     /// Stream tokens as they are produced rather than waiting for the full completion.

@@ -1,10 +1,11 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt, stream};
 
 use crate::{
-    FunctionDefinition, GenerateResult, LlmError, Message, ResponseFormat, StreamData, ToolChoice,
+    DEFAULT_BATCH_CONCURRENCY, FunctionDefinition, GenerateResult, LlmError, Message,
+    ResponseFormat, StreamData, ToolChoice,
 };
 
 /// An async interface to a large language model.
@@ -127,5 +128,52 @@ pub trait Llm: Sync + Send {
         } else {
             self.generate(messages).await
         }
+    }
+
+    /// Run [`generate`](Llm::generate) on many conversations, at most
+    /// [`DEFAULT_BATCH_CONCURRENCY`] at a time.
+    ///
+    /// Results come back in input order, one per conversation; a failed
+    /// request does not stop the others. The conversations are borrowed,
+    /// not cloned.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use rune_chain_core::{GenerateResult, Llm, LlmError, Message};
+    ///
+    /// struct Echo;
+    /// #[async_trait]
+    /// impl Llm for Echo {
+    ///     async fn generate(&self, m: &[Message]) -> Result<GenerateResult, LlmError> {
+    ///         Ok(GenerateResult::from_text(m[0].text()))
+    ///     }
+    /// }
+    ///
+    /// # tokio_test::block_on(async {
+    /// let inputs = [vec![Message::human("a")], vec![Message::human("b")]];
+    /// let out = Echo.batch(&inputs).await;
+    /// assert_eq!(out[1].as_ref().unwrap().generation, "b");
+    /// # });
+    /// ```
+    async fn batch(&self, inputs: &[Vec<Message>]) -> Vec<Result<GenerateResult, LlmError>> {
+        self.batch_with_concurrency(inputs, DEFAULT_BATCH_CONCURRENCY)
+            .await
+    }
+
+    /// Like [`Llm::batch`] with an explicit concurrency limit (`0` is
+    /// treated as `1`).
+    async fn batch_with_concurrency(
+        &self,
+        inputs: &[Vec<Message>],
+        max_concurrency: usize,
+    ) -> Vec<Result<GenerateResult, LlmError>> {
+        // Index instead of `iter()` so the closure has no higher-ranked
+        // argument lifetime, which `async_trait`'s Send check rejects.
+        stream::iter((0..inputs.len()).map(|i| self.generate(&inputs[i])))
+            .buffered(max_concurrency.max(1))
+            .collect()
+            .await
     }
 }

@@ -311,7 +311,7 @@ rune-byte-magic = { path = "crates/common/rune-byte-magic", version = "0.3.1" }
 rune-caesar = { path = "crates/common/rune-caesar", version = "0.2.2" }
 rune-chain-agent = { path = "crates/chain/rune-chain-agent", version = "0.3.2" }
 rune-chain-anthropic = { path = "crates/chain/rune-chain-anthropic", version = "0.2.2" }
-rune-chain-core = { path = "crates/chain/rune-chain-core", version = "0.2.2" }
+rune-chain-core = { path = "crates/chain/rune-chain-core", version = "0.2.4" }
 rune-chain-embed = { path = "crates/chain/rune-chain-embed", version = "0.3.1" }
 rune-chain-llm = { path = "crates/chain/rune-chain-llm", version = "0.3.1" }
 rune-chain-memory = { path = "crates/chain/rune-chain-memory", version = "0.2.2" }

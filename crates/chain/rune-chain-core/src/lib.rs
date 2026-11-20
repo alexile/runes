@@ -24,8 +24,14 @@
 //!   schema checks ([`ToolCall::validate`]) for untrusted model output
 //! - [`ResponseFormat`] — structured output (JSON / JSON Schema) via
 //!   [`Llm::generate_structured`]
-//! - [`ChainExt`] / [`LlmExt`] — `.with_fallbacks(…)` and `.map_output(…)`
-//!   combinators; `Arc<T>` implements every core trait when `T` does
+//! - [`ChainExt`] / [`LlmExt`] — `.with_fallbacks(…)`, `.map_output(…)`,
+//!   `.pipe(…)`, `.bind_tools(…)`, `.with_cache(…)`, `.with_callbacks(…)` and,
+//!   with feature `tokio`, `.with_timeout(…)` / `.with_retry(…)`;
+//!   `Arc<T>` implements every core trait when `T` does
+//! - [`Chain::batch`] / [`Llm::batch`] — ordered, bounded-concurrency batches
+//! - [`CallbackHandler`] — start / end / error hooks for models, chains and
+//!   tools; event `Debug` output never contains prompt text
+//! - [`LlmCache`] / [`InMemoryLlmCache`] — response cache with a bounded LRU
 //! - [`ImageData::validate`] — size, MIME and URL-scheme checks for images
 //!   from untrusted sources
 //! - [`Pricing`] / [`Cost`] — per-model token prices and exact cost arithmetic
@@ -73,6 +79,8 @@
 //! # });
 //! ```
 
+mod cache;
+mod callbacks;
 mod chain;
 mod error;
 mod ext;
@@ -83,6 +91,8 @@ mod memory;
 mod message;
 mod pricing;
 mod prompt;
+#[cfg(feature = "tokio")]
+mod resilience;
 mod response_format;
 mod stream;
 #[cfg(feature = "testing")]
@@ -91,9 +101,16 @@ pub mod testing;
 mod tests;
 mod tool;
 
-pub use chain::Chain;
+pub use cache::{CacheKey, CachedLlm, DEFAULT_MAX_CACHE_ENTRY_BYTES, InMemoryLlmCache, LlmCache};
+pub use callbacks::{
+    CallbackHandler, ChainEnd, ChainFailure, ChainStart, LlmCall, LlmEnd, LlmFailure, LlmStart,
+    ToolEnd, ToolExt, ToolFailure, ToolStart, WithCallbacks,
+};
+pub use chain::{Chain, DEFAULT_BATCH_CONCURRENCY};
 pub use error::{ChainError, LlmError, LlmErrorKind, ToolError};
-pub use ext::{ChainExt, ChainWithFallbacks, LlmExt, LlmWithFallbacks, MapOutput};
+pub use ext::{
+    BoundTools, ChainExt, ChainWithFallbacks, LlmExt, LlmWithFallbacks, MapOutput, Pipe,
+};
 pub use function_call::{
     FunctionDefinition, MAX_TOOL_ARGUMENTS_BYTES, MAX_TOOL_NAME_LEN, ToolCall, ToolChoice,
 };
@@ -106,6 +123,8 @@ pub use message::{
 };
 pub use pricing::{Cost, Pricing};
 pub use prompt::PromptArgs;
+#[cfg(feature = "tokio")]
+pub use resilience::{MAX_RETRY_AFTER, WithRetry, WithTimeout};
 pub use response_format::{MAX_JSON_OUTPUT_BYTES, ResponseFormat};
 pub use stream::StreamData;
 pub use tool::Tool;

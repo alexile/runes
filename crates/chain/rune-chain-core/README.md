@@ -61,7 +61,10 @@ println!("{result}");
 | `ReasoningBlock` | Reasoning / thinking kept out of the message text, with opaque provider signatures for multi-turn round-trips |
 | `ToolCall` / `FunctionDefinition` | Native function calling; bounded `parse_arguments::<T>()` and schema `validate()` |
 | `ResponseFormat` | Structured output (JSON object / JSON Schema) via `Llm::generate_structured` |
-| `ChainExt` / `LlmExt` | `.with_fallbacks(…)`, `.map_output(…)` combinators |
+| `ChainExt` / `LlmExt` | `.with_fallbacks(…)`, `.map_output(…)`, `.pipe(…)`, `.bind_tools(…)`, `.with_cache(…)`, `.with_callbacks(…)`, `.with_timeout(…)`, `.with_retry(…)` |
+| `Chain::batch` / `Llm::batch` | Ordered batches with bounded concurrency |
+| `CallbackHandler` | Start / end / error hooks for models, chains and tools |
+| `LlmCache` / `InMemoryLlmCache` | Response cache trait and a bounded LRU |
 | `ImageData` | URL / base64 images with `validate()` (size, MIME, URL scheme) and redacted `Debug` |
 | `StreamData` | Incremental token chunk for streaming responses |
 | `PromptArgs` + `prompt_args!` | Ergonomic input map for prompt templates |
@@ -95,6 +98,50 @@ for call in &out.tool_calls {
 
 `Arc<T>` implements `Llm`, `Chain`, `Tool` and `Memory` whenever `T` does, so a
 single client can be shared across chains and agents.
+
+## Combinators
+
+Runnable-style helpers, all opt-in wrappers (nothing changes for code that
+doesn't use them):
+
+```rust
+use std::{sync::Arc, time::Duration};
+use rune_chain_core::{ChainExt, InMemoryLlmCache, LlmExt, Message, prompt_args};
+
+// Many requests at once, results in input order, at most 8 in flight
+// (or pick the limit with `batch_with_concurrency`).
+let answers = llm.batch(&[vec![Message::human("a")], vec![Message::human("b")]]).await;
+let outputs = chain.batch(vec![prompt_args! { "input" => "a" }]).await;
+
+// Feed one chain's answer into the next (under its primary output key,
+// or a key of your choice with `pipe_as`). Token usage is summed.
+let pipeline = summarize.pipe_as(translate, "text");
+
+// Always offer these tools; cache answers; report events; bound the time
+// and retry transient failures (the last two need feature `tokio`).
+let llm = provider
+    .with_retry(3)                        // backoff, honours retry-after
+    .with_timeout(Duration::from_secs(30))
+    .with_cache(Arc::new(InMemoryLlmCache::new(1_000)))
+    .with_callbacks(Arc::new(MyHandler))  // on_llm_start / end / error, …
+    .bind_tools(tools);
+```
+
+- `batch` never runs more than the given number of calls at once (`0` means
+  one) and borrows the conversations instead of cloning them.
+- Callback events carry the prompts and outputs by reference, but their
+  `Debug` output shows only sizes, names and token counts, so logging an
+  event never writes prompt text.
+- The cache key is the request's canonical JSON; `InMemoryLlmCache` compares
+  the full key, so different prompts never collide. Give each model setup a
+  `.namespace(…)` when several share one cache. `CacheKey::stable_hash()` is a
+  stable 64-bit digest for external stores.
+- `with_retry` is deliberately minimal (no jitter, no circuit breakers);
+  `rune-chain-retry` covers those.
+
+```toml
+rune-chain-core = { version = "0.2", features = ["tokio"] }
+```
 
 ## Security
 

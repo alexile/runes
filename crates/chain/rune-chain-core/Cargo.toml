@@ -1,6 +1,6 @@
 [package]
 name = "rune-chain-core"
-version = "0.2.3"
+version = "0.2.4"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -18,14 +18,17 @@ futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, optional = true, features = ["time"] }
 
 [features]
 # Reusable trait-contract checks and a scriptable `FakeLlm` (`rune_chain_core::testing`).
 testing = []
+# `.with_timeout(…)` and `.with_retry(…)`, which need Tokio's timer.
+tokio = ["dep:tokio"]
 
 [dev-dependencies]
 proptest.workspace = true
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-test.workspace = true
 
 [lints]
