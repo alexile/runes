@@ -24,6 +24,9 @@ prices for the current Gemini 2.x and 3.x models.
   Gemini cannot express (a recursive one, say) fails before any request.
   `ToolChoice` maps to `toolConfig.functionCallingConfig`; `functionCall` /
   `functionResponse` round trips keep call ids and thought signatures.
+- **Streaming with function calls**: `Llm::stream_events` yields text and
+  thought deltas, each function call as its part arrives and thought
+  signatures, so agents stream every turn and the signatures round-trip.
 - **Structured output**: `generate_structured` sends
   `responseMimeType: application/json` and a converted `responseSchema`.
 - **Generation settings**: temperature, `topP`, `topK`, `maxOutputTokens`, stop

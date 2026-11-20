@@ -1,6 +1,6 @@
 //! Sans-I/O assembly of a streamed `streamGenerateContent` response.
 
-use rune_chain_core::{LlmError, ToolCall};
+use rune_chain_core::{LlmError, MAX_TOOL_ARGUMENTS_BYTES, StreamEvent as CoreEvent, ToolCall};
 
 use crate::http::{Credential, api_error};
 use crate::response::{
@@ -72,6 +72,8 @@ pub struct ResponseAccumulator {
     max_bytes: usize,
     events: usize,
     credential: Option<Credential>,
+    /// Core events from the current `push`, when translating.
+    core: Option<Vec<CoreEvent>>,
 }
 
 impl Default for ResponseAccumulator {
@@ -98,6 +100,63 @@ impl ResponseAccumulator {
             max_bytes,
             events: 0,
             credential: None,
+            core: None,
+        }
+    }
+
+    /// Translate to core events with [`push_core`](Self::push_core).
+    #[must_use]
+    pub fn for_core_events(mut self) -> Self {
+        self.core = Some(Vec::new());
+        self
+    }
+
+    /// Like [`push`](Self::push), translated to core
+    /// [`StreamEvent`](rune_chain_core::StreamEvent)s: text and thought
+    /// deltas as they arrive, each function call (start, arguments, end) as
+    /// soon as its part does, and thought signatures as reasoning
+    /// signatures, so the folded result carries them where
+    /// [`GeminiResponse::to_generate_result`] puts them.
+    ///
+    /// # Errors
+    ///
+    /// As [`push`](Self::push).
+    pub fn push_core(&mut self, data: &str) -> Result<Vec<CoreEvent>, LlmError> {
+        if self.core.is_none() {
+            self.core = Some(Vec::new());
+        }
+        self.push(data)?;
+        Ok(self.core.as_mut().map(std::mem::take).unwrap_or_default())
+    }
+
+    /// Like [`finish`](Self::finish): usage and the finish reason as core
+    /// events.
+    ///
+    /// # Errors
+    ///
+    /// As [`finish`](Self::finish).
+    pub fn finish_core(self) -> Result<Vec<CoreEvent>, LlmError> {
+        let result = self.finish()?.to_generate_result();
+        Ok(result
+            .tokens
+            .map(CoreEvent::Usage)
+            .into_iter()
+            .chain(result.finish_reason.map(CoreEvent::Finish))
+            .collect())
+    }
+
+    fn emit(&mut self, event: CoreEvent) {
+        if let Some(out) = self.core.as_mut() {
+            out.push(event);
+        }
+    }
+
+    fn emit_signature(&mut self, signature: Option<&String>) {
+        if let Some(sig) = signature {
+            self.emit(CoreEvent::ReasoningDelta {
+                text: String::new(),
+                signature: Some(sig.clone()),
+            });
         }
     }
 
@@ -164,12 +223,19 @@ impl ResponseAccumulator {
             return Ok(events);
         };
         for part in candidate.content.map(|c| c.parts).unwrap_or_default() {
+            let args_len = part
+                .function_call
+                .as_ref()
+                .map_or(0, |c| c.args.to_string().len());
+            if args_len > MAX_TOOL_ARGUMENTS_BYTES {
+                return Err(LlmError::invalid_response(format!(
+                    "function call arguments exceed {MAX_TOOL_ARGUMENTS_BYTES} bytes"
+                )));
+            }
             let size = part.text.as_ref().map_or(0, String::len)
                 + part.thought_signature.as_ref().map_or(0, String::len)
-                + part
-                    .function_call
-                    .as_ref()
-                    .map_or(0, |c| c.name.len() + c.args.to_string().len());
+                + part.function_call.as_ref().map_or(0, |c| c.name.len())
+                + args_len;
             self.charge(size)?;
             let response_id = self.response.response_id.clone();
             if let Some(part) = convert_part(part, &response_id, &mut self.calls)?
@@ -207,7 +273,11 @@ impl ResponseAccumulator {
                 },
             ) if signature.is_none() => {
                 text.push_str(&more);
-                *signature = sig;
+                signature.clone_from(&sig);
+                if !more.is_empty() {
+                    self.emit(CoreEvent::text(more.as_str()));
+                }
+                self.emit_signature(sig.as_ref());
                 Ok((!more.is_empty()).then_some(StreamEvent::Text(more)))
             }
             (
@@ -218,7 +288,13 @@ impl ResponseAccumulator {
                 },
             ) if signature.is_none() => {
                 text.push_str(&more);
-                *signature = sig;
+                signature.clone_from(&sig);
+                if !more.is_empty() || sig.is_some() {
+                    self.emit(CoreEvent::ReasoningDelta {
+                        text: more.clone(),
+                        signature: sig,
+                    });
+                }
                 Ok((!more.is_empty()).then_some(StreamEvent::Thought(more)))
             }
             // A bare signature closes the previous part.
@@ -231,9 +307,11 @@ impl ResponseAccumulator {
                     | ResponsePart::FunctionCall { signature, .. } => signature,
                 };
                 if slot.is_none() {
-                    *slot = signature;
+                    slot.clone_from(&signature);
+                    self.emit_signature(signature.as_ref());
                     return Ok(None);
                 }
+                self.emit_signature(signature.as_ref());
                 self.push_part(ResponsePart::Text { text, signature })?;
                 Ok(None)
             }
@@ -254,8 +332,45 @@ impl ResponseAccumulator {
                     }
                     _ => None,
                 };
+                self.emit_part(&part);
                 self.push_part(part)?;
                 Ok(event)
+            }
+        }
+    }
+
+    /// Core events for a new, whole part.
+    fn emit_part(&mut self, part: &ResponsePart) {
+        if self.core.is_none() {
+            return;
+        }
+        match part {
+            ResponsePart::Text { text, signature } => {
+                if !text.is_empty() {
+                    self.emit(CoreEvent::text(text.as_str()));
+                }
+                self.emit_signature(signature.as_ref());
+            }
+            ResponsePart::Thought { text, signature } => self.emit(CoreEvent::ReasoningDelta {
+                text: text.clone(),
+                signature: signature.clone(),
+            }),
+            ResponsePart::FunctionCall {
+                id,
+                name,
+                args,
+                signature,
+            } => {
+                // Gemini sends each call whole: index by call order.
+                let index = self.calls.saturating_sub(1);
+                self.emit(CoreEvent::tool_call_start(
+                    index,
+                    id.as_str(),
+                    name.as_str(),
+                ));
+                self.emit(CoreEvent::tool_call_delta(index, args.to_string()));
+                self.emit(CoreEvent::ToolCallEnd { index });
+                self.emit_signature(signature.as_ref());
             }
         }
     }
@@ -354,6 +469,76 @@ mod tests {
         let done = done.unwrap();
         assert_eq!(done.finish_reason(), Some(FinishReason::ToolCalls));
         assert_eq!(done.tool_calls().len(), 2);
+    }
+
+    /// Fold the core events of `chunks` and compare with the plain result.
+    fn core_matches_plain(chunks: &[&str]) -> Vec<CoreEvent> {
+        let (_, plain) = run(chunks);
+        let expected = plain.unwrap().to_generate_result();
+        let mut acc = ResponseAccumulator::new().for_core_events();
+        let mut events = Vec::new();
+        for c in chunks {
+            events.extend(acc.push_core(c).unwrap());
+        }
+        events.extend(acc.finish_core().unwrap());
+        let mut fold = rune_chain_core::StreamAccumulator::new();
+        for e in &events {
+            fold.push(e).unwrap();
+        }
+        assert_eq!(fold.finish(), expected, "{events:?}");
+        events
+    }
+
+    #[test]
+    fn core_events_fold_to_the_same_result() {
+        let events = core_matches_plain(&[
+            r#"{"responseId":"abc","candidates":[{"content":{"parts":[{"text":"Plan: ","thought":true}]}}]}"#,
+            r#"{"candidates":[{"content":{"parts":[{"text":"look it up.","thought":true}]}}]}"#,
+            r#"{"candidates":[{"content":{"parts":[{"text":"It is "}]}}]}"#,
+            r#"{"candidates":[{"content":{"parts":[{"text":"sunny."}]}}]}"#,
+            r#"{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"U0lH"}]},"finishReason":"STOP"}],
+               "usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":4,"thoughtsTokenCount":5}}"#,
+        ]);
+        assert_eq!(events[0], CoreEvent::reasoning("Plan: "));
+        assert_eq!(events[2], CoreEvent::text("It is "));
+
+        // Signed thought, then calls with and without signatures across chunks.
+        core_matches_plain(&[
+            r#"{"responseId":"r1","candidates":[{"content":{"parts":[{"text":"think","thought":true,"thoughtSignature":"VA=="}]}}]}"#,
+            r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"a","args":{"x":1}},"thoughtSignature":"QQ=="}]}}]}"#,
+            r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"b"}},{"text":"Done."}]}}]}"#,
+            r#"{"candidates":[{"content":{"parts":[{"text":"","thoughtSignature":"Qg=="}]},"finishReason":"STOP"}]}"#,
+        ]);
+    }
+
+    #[test]
+    fn core_events_stream_parallel_calls_with_distinct_indexes() {
+        let events =
+            core_matches_plain(&[r#"{"responseId":"r9","candidates":[{"content":{"parts":[
+                {"functionCall":{"name":"a","args":{}},"thoughtSignature":"c2ln"},
+                {"functionCall":{"name":"b","args":{"k":"v"}}}]},"finishReason":"STOP"}]}"#]);
+        let starts: Vec<usize> = events
+            .iter()
+            .filter_map(|e| match e {
+                CoreEvent::ToolCallStart { index, .. } => Some(*index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts, [0, 1]);
+    }
+
+    #[test]
+    fn oversized_function_arguments_are_rejected() {
+        let big = "x".repeat(MAX_TOOL_ARGUMENTS_BYTES);
+        let chunk = serde_json::json!({"candidates":[{"content":{"parts":[
+            {"functionCall":{"name":"f","args":{"v":big}}}]}}]})
+        .to_string();
+        let err = ResponseAccumulator::new()
+            .for_core_events()
+            .push_core(&chunk)
+            .unwrap_err();
+        assert_eq!(err.kind(), LlmErrorKind::InvalidResponse);
+        assert!(!err.message().contains("xxx"));
     }
 
     #[test]

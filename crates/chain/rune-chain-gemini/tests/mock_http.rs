@@ -10,8 +10,8 @@ use futures::StreamExt;
 use rune_chain_core::testing::check_llm;
 use rune_chain_core::testing::http::{MockResponse, MockServer, RecordedRequest};
 use rune_chain_core::{
-    FinishReason, FunctionDefinition, Llm, LlmErrorKind, Message, ResponseFormat, StreamData,
-    ToolChoice,
+    FinishReason, FunctionDefinition, Llm, LlmErrorKind, Message, ResponseFormat,
+    StreamAccumulator, StreamData, StreamEvent as CoreEvent, ToolChoice,
 };
 use rune_chain_gemini::{Gemini, StreamEvent, Thinking, models};
 use serde_json::json;
@@ -247,6 +247,48 @@ fn stream_content_yields_thoughts_calls_and_the_full_response() {
         done.to_generate_result().finish_reason,
         Some(FinishReason::ToolCalls)
     );
+}
+
+#[test]
+fn llm_stream_events_fold_to_the_streamed_response() {
+    for fixture in [fixture!("stream.sse"), fixture!("stream_tool_calls.sse")] {
+        let server = MockServer::start([
+            MockResponse::event_stream(fixture).chunked(5),
+            MockResponse::event_stream(fixture).chunked(9),
+        ])
+        .unwrap();
+        let gemini = client(&server);
+        let llm: &dyn Llm = &gemini;
+        let tools = [weather_tool()];
+        let (events, plain) = tokio_test::block_on(async {
+            let events: Vec<CoreEvent> = llm
+                .stream_events(&[Message::human("Hi")], Some(&tools), None)
+                .await
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+                .await;
+            let plain: Vec<StreamEvent> = gemini
+                .stream_content(&[Message::human("Hi")], &tools, None)
+                .await
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+                .await;
+            (events, plain)
+        });
+        let Some(StreamEvent::Done(done)) = plain.last() else {
+            panic!("{plain:?}")
+        };
+        let mut acc = StreamAccumulator::new();
+        for e in &events {
+            acc.push(e).unwrap();
+        }
+        assert_eq!(acc.finish(), done.to_generate_result());
+        let requests = server.finish().unwrap();
+        assert!(requests[0].path.contains("streamGenerateContent"));
+        assert_eq!(requests[0].json().unwrap(), requests[1].json().unwrap());
+    }
 }
 
 #[test]

@@ -567,6 +567,34 @@ impl Gemini {
             acc,
         )))
     }
+
+    /// [`Llm::stream_events`](rune_chain_core::Llm::stream_events) on
+    /// `streamGenerateContent`.
+    async fn stream_core(
+        &self,
+        messages: &[Message],
+        tools: &[FunctionDefinition],
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<rune_chain_core::EventStream, LlmError> {
+        self.preflight(messages)?;
+        let body = self.request_body(messages, tools, tool_choice.as_ref())?;
+        let url = self
+            .transport
+            .model_url(self.model_id(), "streamGenerateContent")?;
+        let response = self
+            .transport
+            .send(&format!("{url}?alt=sse"), &body, true)
+            .await?;
+        let acc = ResponseAccumulator::with_limit(self.stream_limit())
+            .scrubbing(self.transport.credential.clone())
+            .for_core_events();
+        Ok(Box::pin(drive(
+            Box::pin(response.bytes_stream()),
+            acc,
+            ResponseAccumulator::push_core,
+            ResponseAccumulator::finish_core,
+        )))
+    }
 }
 
 /// Decode a successful `generateContent` body.
@@ -599,12 +627,31 @@ fn check_structured(response: &GeminiResponse) -> Result<(), LlmError> {
 /// [`LlmError::invalid_response`].
 fn assemble_events<S, B, E>(
     body: S,
-    mut acc: ResponseAccumulator,
+    acc: ResponseAccumulator,
 ) -> impl Stream<Item = Result<StreamEvent, LlmError>> + Send
 where
     S: Stream<Item = Result<B, E>> + Send + Unpin,
     B: AsRef<[u8]>,
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    drive(body, acc, ResponseAccumulator::push, |acc| {
+        acc.finish().map(|done| vec![StreamEvent::Done(done)])
+    })
+}
+
+/// Feed SSE payloads to `acc` until the body ends or the first error, then
+/// finish it.
+fn drive<S, B, E, T>(
+    body: S,
+    mut acc: ResponseAccumulator,
+    step: fn(&mut ResponseAccumulator, &str) -> Result<Vec<T>, LlmError>,
+    finish: fn(ResponseAccumulator) -> Result<Vec<T>, LlmError>,
+) -> impl Stream<Item = Result<T, LlmError>> + Send
+where
+    S: Stream<Item = Result<B, E>> + Send + Unpin,
+    B: AsRef<[u8]>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+    T: Send,
 {
     let options = rune_sse::Options::default()
         .with_max_event_len(MAX_SSE_EVENT_BYTES)
@@ -631,7 +678,7 @@ where
             if event.data.trim().is_empty() {
                 continue;
             }
-            match acc.push(&event.data) {
+            match step(&mut acc, &event.data) {
                 Ok(list) => {
                     for ev in list {
                         yield Ok(ev);
@@ -643,8 +690,12 @@ where
                 }
             }
         }
-        match acc.finish() {
-            Ok(done) => yield Ok(StreamEvent::Done(done)),
+        match finish(acc) {
+            Ok(list) => {
+                for ev in list {
+                    yield Ok(ev);
+                }
+            }
             Err(e) => yield Err(e),
         }
     }
@@ -704,6 +755,20 @@ impl rune_chain_core::Llm for Gemini {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamData, LlmError>> + Send>>, LlmError> {
         let events = self.stream_content(messages, &[], None).await?;
         Ok(Box::pin(text_chunks(events)))
+    }
+
+    /// Native streaming with function calls: text and thought deltas as
+    /// they arrive, each function call as soon as its part does (Gemini
+    /// sends calls whole), thought signatures, then usage and the finish
+    /// reason.
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<rune_chain_core::EventStream, LlmError> {
+        self.stream_core(messages, tools.unwrap_or_default(), tool_choice)
+            .await
     }
 
     /// Native JSON mode: `responseMimeType: application/json`, plus
