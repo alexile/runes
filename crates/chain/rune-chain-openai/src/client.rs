@@ -88,6 +88,8 @@ pub struct OpenAi {
     max_retries: u32,
     retry_delay: Duration,
     max_response_bytes: usize,
+    pub(crate) max_upload_bytes: usize,
+    pub(crate) max_media_response_bytes: usize,
     client: reqwest::Client,
 }
 
@@ -113,6 +115,8 @@ impl fmt::Debug for OpenAi {
             .field("max_retries", &self.max_retries)
             .field("retry_delay", &self.retry_delay)
             .field("max_response_bytes", &self.max_response_bytes)
+            .field("max_upload_bytes", &self.max_upload_bytes)
+            .field("max_media_response_bytes", &self.max_media_response_bytes)
             .field("client", &self.client)
             .finish()
     }
@@ -177,6 +181,8 @@ impl OpenAi {
             max_retries: DEFAULT_MAX_RETRIES,
             retry_delay: DEFAULT_RETRY_DELAY,
             max_response_bytes: DEFAULT_MAX_RESPONSE_BYTES,
+            max_upload_bytes: crate::media::DEFAULT_MAX_UPLOAD_BYTES,
+            max_media_response_bytes: crate::media::DEFAULT_MAX_MEDIA_RESPONSE_BYTES,
             client: default_http_client(),
         }
     }
@@ -466,6 +472,29 @@ impl OpenAi {
         self
     }
 
+    /// Largest audio file [`transcribe`](rune_chain_core::TranscriptionModel::transcribe)
+    /// uploads (default [`DEFAULT_MAX_UPLOAD_BYTES`](crate::DEFAULT_MAX_UPLOAD_BYTES),
+    /// `OpenAI`'s 25 MB limit). Bigger files fail locally.
+    #[must_use]
+    pub const fn max_upload_bytes(mut self, bytes: usize) -> Self {
+        self.max_upload_bytes = bytes;
+        self
+    }
+
+    /// Largest image-generation or speech response accepted (default
+    /// [`DEFAULT_MAX_MEDIA_RESPONSE_BYTES`](crate::DEFAULT_MAX_MEDIA_RESPONSE_BYTES)).
+    /// Base64 images count at their encoded size.
+    #[must_use]
+    pub const fn max_media_response_bytes(mut self, bytes: usize) -> Self {
+        self.max_media_response_bytes = bytes;
+        self
+    }
+
+    /// The response cap for chat and transcription bodies.
+    pub(crate) const fn response_limit(&self) -> usize {
+        self.max_response_bytes
+    }
+
     /// Use a preconfigured HTTP client (proxies, TLS settings). The default
     /// client has a connect timeout and does not follow redirects; consider
     /// doing the same.
@@ -482,6 +511,12 @@ impl OpenAi {
     /// [`LlmError::other`] for an unparsable URL, embedded credentials, or
     /// plain HTTP to a non-loopback host that was not allowed.
     pub fn chat_url(&self) -> Result<reqwest::Url, LlmError> {
+        self.endpoint_url(CHAT_PATH)
+    }
+
+    /// `path` (e.g. `/audio/speech`) under the base URL, with the query
+    /// parameters, after the transport policy check.
+    pub(crate) fn endpoint_url(&self, path: &str) -> Result<reqwest::Url, LlmError> {
         if self.base_url.is_empty() {
             return Err(LlmError::other(format!(
                 "no base URL configured for provider `{}`",
@@ -489,7 +524,7 @@ impl OpenAi {
             )));
         }
         let mut url = http::check_url(
-            &format!("{}{CHAT_PATH}", self.base_url),
+            &format!("{}{path}", self.base_url),
             &self.allowed_http_hosts,
         )?;
         if !self.query.is_empty() {
@@ -769,11 +804,14 @@ impl OpenAi {
         &self,
         url: reqwest::Url,
         payload: Vec<u8>,
+        content_type: &str,
     ) -> Result<reqwest::RequestBuilder, LlmError> {
+        let content_type = HeaderValue::from_str(content_type)
+            .map_err(|_| LlmError::other("invalid request content type"))?;
         let mut req = self
             .client
             .post(url)
-            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_TYPE, content_type)
             .body(payload);
         if let Some(t) = self.timeout {
             req = req.timeout(t);
@@ -810,10 +848,21 @@ impl OpenAi {
         let url = self.chat_url()?;
         let payload = serde_json::to_vec(body)
             .map_err(|e| LlmError::other(format!("encode request: {e}")))?;
+        self.send_payload(url, payload, "application/json").await
+    }
+
+    /// POST `payload` to `url` with retries on 429/5xx; returns the first
+    /// successful response. Errors are classified and scrubbed of the key.
+    pub(crate) async fn send_payload(
+        &self,
+        url: reqwest::Url,
+        payload: Vec<u8>,
+        content_type: &str,
+    ) -> Result<reqwest::Response, LlmError> {
         let mut attempt = 0;
         loop {
             let response = self
-                .build_request(url.clone(), payload.clone())?
+                .build_request(url.clone(), payload.clone(), content_type)?
                 .send()
                 .await
                 .map_err(|e| {
@@ -847,7 +896,7 @@ impl OpenAi {
         }
     }
 
-    fn scrub(&self, err: LlmError) -> LlmError {
+    pub(crate) fn scrub(&self, err: LlmError) -> LlmError {
         err.map_message(|m| self.api_key.scrub(m))
     }
 

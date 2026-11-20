@@ -3760,12 +3760,13 @@ dependencies = [
 
 [[package]]
 name = "rune-chain-openai"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-stream",
  "async-trait",
  "futures",
  "reqwest",
+ "rune-base64",
  "rune-chain-core",
  "rune-sse",
  "serde",

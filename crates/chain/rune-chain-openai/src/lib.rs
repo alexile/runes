@@ -24,6 +24,12 @@
 //!   loopback or explicitly allowed hosts; redirects are not followed;
 //!   request timeout, response-size cap, truncated error bodies, and retries
 //!   on 429/5xx only, honouring `Retry-After`
+//! - **Audio and images** — [`TranscriptionModel`](rune_chain_core::TranscriptionModel)
+//!   (`/audio/transcriptions`, multipart upload with a size cap),
+//!   [`ImageGenerationModel`](rune_chain_core::ImageGenerationModel)
+//!   (`/images/generations`, base64 decoded, `https`-only URLs) and
+//!   [`SpeechModel`](rune_chain_core::SpeechModel) (`/audio/speech`), with
+//!   capped response bodies
 //! - pre-flight checks — a temperature on a known reasoning model, a bad URL
 //!   or an invalid image fail locally before any network I/O
 //!
@@ -146,6 +152,7 @@
 
 mod client;
 mod http;
+mod media;
 pub mod models;
 pub mod provider;
 mod stream;
@@ -154,6 +161,10 @@ mod types;
 pub use client::{
     AZURE_DEFAULT_API_VERSION, DEFAULT_BASE_URL, DEFAULT_CONNECT_TIMEOUT,
     DEFAULT_MAX_RESPONSE_BYTES, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT, OpenAi,
+};
+pub use media::{
+    DEFAULT_MAX_MEDIA_RESPONSE_BYTES, DEFAULT_MAX_UPLOAD_BYTES, MAX_IMAGE_PROMPT_CHARS,
+    MAX_SPEECH_INPUT_CHARS,
 };
 pub use models::ModelInfo;
 pub use provider::{AuthStyle, MaxTokensField, Provider, Quirks};

@@ -22,6 +22,10 @@ server that speaks its dialect. Pass any slice of `Message`s and get back a
   mode or prompting elsewhere.
 - **Streaming events**: `stream_events` yields text, fully assembled tool calls,
   the finish reason and token usage (`stream_options.include_usage`).
+- **Audio and images**: `TranscriptionModel` (`/audio/transcriptions`, multipart
+  upload capped at 25 MiB), `ImageGenerationModel` (`/images/generations`, base64
+  decoded, `https`-only URLs) and `SpeechModel` (`/audio/speech`), with a 64 MiB
+  cap on media responses.
 - **Hardened transport**: the API key never appears in `Debug` output or errors and
   is sent as a sensitive header; HTTPS is required except to loopback or explicitly
   allowed hosts; redirects are not followed; 10-minute request timeout; 32 MiB
