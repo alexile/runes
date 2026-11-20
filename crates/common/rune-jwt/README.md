@@ -22,8 +22,8 @@ token contains.
   panicking, memory is linear in the token length, and JSON nesting is
   bounded.
 - Strict structure: exactly three sections (JWE is rejected), base64url
-  alphabet only (trailing `=` padding tolerated), header and claims must be
-  JSON objects.
+  alphabet only (correct trailing `=` padding tolerated, non-zero trailing
+  bits rejected), header and claims must be JSON objects.
 - `decode_raw` returns the raw bytes of all three sections, for a JWS whose
   payload is not JSON (e.g. the [RFC 8037] Ed25519 example).
 - Tested against the RFC 7515, RFC 7519 and RFC 8037 example tokens, with
@@ -37,7 +37,7 @@ token contains.
 
 ```toml
 [dependencies]
-rune-jwt = "0.1"
+rune-jwt = "0.2"
 ```
 
 The `rune-jwt` command-line tool is behind the opt-in `cli` feature:

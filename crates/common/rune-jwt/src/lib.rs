@@ -24,7 +24,9 @@
 //! - The token must have exactly three dot-separated sections. Five-section
 //!   JWE tokens ([RFC 7516]) are rejected.
 //! - Sections use the base64url alphabet (`A–Z a–z 0–9 - _`). Trailing `=`
-//!   padding is tolerated, any other `=` is not.
+//!   padding is tolerated only when it completes the last 4-character
+//!   group; any other `=` is rejected. Unused bits in the last character
+//!   must be zero, so each section has exactly one accepted spelling.
 //! - The header and the claims set must be JSON objects ([RFC 7515 §4],
 //!   [RFC 7519 §7.2]). For a JWS whose payload is not JSON, use
 //!   [`decode_raw`]. Duplicate member names keep the last value.
@@ -202,7 +204,7 @@ pub fn decode(token: &str) -> Result<DecodedJwt, JwtError> {
     let [header, payload, signature] = split(token)?;
     let header = decode_object(header, Section::Header)?;
     let payload = decode_object(payload, Section::Payload)?;
-    base64url_decode(signature).map_err(|reason| JwtError::Base64 {
+    base64url_check(signature).map_err(|reason| JwtError::Base64 {
         section: Section::Signature,
         reason,
     })?;
@@ -313,12 +315,12 @@ pub fn claims(token: &str) -> Result<Value, JwtError> {
 /// # Ok::<(), rune_jwt::JwtError>(())
 /// ```
 pub fn algorithm(token: &str) -> Result<String, JwtError> {
-    match header(token)?.get("alg") {
+    match take_member(header(token)?, "alg") {
         None => Err(JwtError::Missing {
             section: Section::Header,
             name: "alg",
         }),
-        Some(Value::String(alg)) => Ok(alg.clone()),
+        Some(Value::String(alg)) => Ok(alg),
         Some(_) => Err(JwtError::InvalidMember {
             section: Section::Header,
             name: "alg",
@@ -348,9 +350,9 @@ pub fn algorithm(token: &str) -> Result<String, JwtError> {
 /// # Ok::<(), rune_jwt::JwtError>(())
 /// ```
 pub fn subject(token: &str) -> Result<Option<String>, JwtError> {
-    match claims(token)?.get("sub") {
+    match take_member(claims(token)?, "sub") {
         None => Ok(None),
-        Some(Value::String(sub)) => Ok(Some(sub.clone())),
+        Some(Value::String(sub)) => Ok(Some(sub)),
         Some(_) => Err(JwtError::InvalidMember {
             section: Section::Payload,
             name: "sub",
@@ -399,6 +401,14 @@ pub fn expiry(token: &str) -> Result<Option<u64>, JwtError> {
     }
 }
 
+/// Moves one member out of a decoded object instead of cloning it.
+fn take_member(object: Value, name: &str) -> Option<Value> {
+    match object {
+        Value::Object(mut map) => map.remove(name),
+        _ => None,
+    }
+}
+
 /// Truncates a non-negative finite `NumericDate` to whole seconds.
 #[allow(
     clippy::cast_possible_truncation,
@@ -435,45 +445,107 @@ fn decode_object(text: &str, section: Section) -> Result<Value, JwtError> {
 }
 
 /// Decodes unpadded base64url (RFC 4648 §5), tolerating trailing `=`.
-#[allow(
-    clippy::cast_possible_truncation,
-    reason = "the value is masked to its low byte first"
-)]
 fn base64url_decode(input: &str) -> Result<Vec<u8>, String> {
+    let data = strip_padding(input)?;
+    let mut output = Vec::with_capacity(data.len() / 4 * 3 + 2);
+    decode_sections(input, data, |bytes| output.extend_from_slice(bytes))?;
+    Ok(output)
+}
+
+/// Checks that `input` is base64url without keeping the decoded bytes.
+fn base64url_check(input: &str) -> Result<(), String> {
+    let data = strip_padding(input)?;
+    decode_sections(input, data, |_| {})
+}
+
+/// Strips trailing `=` and checks that the padding, if any, completes the
+/// last 4-character group and that the data length is possible.
+fn strip_padding(input: &str) -> Result<&[u8], String> {
     let data = input.trim_end_matches('=');
     let padding = input.len() - data.len();
     if padding > 2 {
         return Err("too much '=' padding".into());
     }
+    if padding > 0 && !input.len().is_multiple_of(4) {
+        return Err("'=' padding does not match the length".into());
+    }
     if data.len() % 4 == 1 {
         return Err(format!("invalid length {}", data.len()));
     }
-    let mut output = Vec::with_capacity(data.len() / 4 * 3 + 2);
-    let mut buffer: u32 = 0;
-    let mut bits: u32 = 0;
-    for (index, ch) in data.char_indices() {
-        let value = sextet(ch).ok_or_else(|| format!("invalid character {ch:?} at {index}"))?;
-        buffer = (buffer << 6) | u32::from(value);
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            output.push(((buffer >> bits) & 0xff) as u8);
-            buffer &= (1 << bits) - 1;
-        }
-    }
-    Ok(output)
+    Ok(data.as_bytes())
 }
 
-fn sextet(ch: char) -> Option<u8> {
-    let byte = u8::try_from(ch).ok()?;
-    match byte {
-        b'A'..=b'Z' => Some(byte - b'A'),
-        b'a'..=b'z' => Some(byte - b'a' + 26),
-        b'0'..=b'9' => Some(byte - b'0' + 52),
-        b'-' => Some(62),
-        b'_' => Some(63),
-        _ => None,
+/// Marks a byte outside the base64url alphabet in [`SEXTETS`].
+const INVALID: u8 = 0xff;
+
+/// Byte to 6-bit value for the base64url alphabet; [`INVALID`] elsewhere.
+#[allow(clippy::cast_possible_truncation, reason = "index stays below 26")]
+const SEXTETS: [u8; 256] = {
+    let mut table = [INVALID; 256];
+    let mut index = 0;
+    while index < 26 {
+        table[b'A' as usize + index] = index as u8;
+        table[b'a' as usize + index] = index as u8 + 26;
+        if index < 10 {
+            table[b'0' as usize + index] = index as u8 + 52;
+        }
+        index += 1;
     }
+    table[b'-' as usize] = 62;
+    table[b'_' as usize] = 63;
+    table
+};
+
+/// Decodes `data` (unpadded, length not 1 mod 4) and hands the bytes to
+/// `sink` one group at a time. `input` is only used for error messages.
+fn decode_sections(input: &str, data: &[u8], mut sink: impl FnMut(&[u8])) -> Result<(), String> {
+    let invalid = |offset: usize| {
+        let index = offset
+            + data[offset..]
+                .iter()
+                .position(|&byte| SEXTETS[usize::from(byte)] == INVALID)
+                .unwrap_or(0);
+        let ch = input[index..].chars().next().unwrap_or('=');
+        format!("invalid character {ch:?} at {index}")
+    };
+    let (groups, rest) = data.as_chunks::<4>();
+    for (group, chars) in groups.iter().enumerate() {
+        let values = chars.map(|byte| SEXTETS[usize::from(byte)]);
+        if values.iter().fold(0, |acc, value| acc | value) & 0x80 != 0 {
+            return Err(invalid(group * 4));
+        }
+        let [_, first, second, third] = pack(values).to_be_bytes();
+        sink(&[first, second, third]);
+    }
+    if rest.is_empty() {
+        return Ok(());
+    }
+    // A tail of two characters carries one byte, three carry two.
+    let mut values = [0; 4];
+    for (value, &byte) in values.iter_mut().zip(rest) {
+        *value = SEXTETS[usize::from(byte)];
+    }
+    if values.iter().fold(0, |acc, value| acc | value) & 0x80 != 0 {
+        return Err(invalid(data.len() - rest.len()));
+    }
+    let [_, first, second, third] = pack(values).to_be_bytes();
+    let (bytes, unused) = if rest.len() == 2 {
+        (&[first][..], second)
+    } else {
+        (&[first, second][..], third)
+    };
+    // The leftover bits must be zero, or one byte string would have
+    // several accepted spellings.
+    if unused != 0 {
+        return Err("non-zero trailing bits".into());
+    }
+    sink(bytes);
+    Ok(())
+}
+
+/// Packs four sextets into the low 24 bits of a `u32`.
+fn pack([a, b, c, d]: [u8; 4]) -> u32 {
+    u32::from(a) << 18 | u32::from(b) << 12 | u32::from(c) << 6 | u32::from(d)
 }
 
 #[cfg(test)]
@@ -582,6 +654,29 @@ mod tests {
         // Trailing padding is tolerated.
         assert_eq!(base64url_decode("e30=").unwrap(), b"{}");
         assert_eq!(base64url_decode("ZQ==").unwrap(), b"e");
+    }
+
+    // Regression: padding was only stripped, never checked against the
+    // length, so "e30==", "ZQ=" and "AAAA=" all decoded.
+    #[test]
+    fn regression_padding_must_complete_the_quantum() {
+        for bad in ["e30==", "ZQ=", "AAAA=", "AAAA==", "=", "==", "ZQ=x="] {
+            assert!(base64url_decode(bad).is_err(), "{bad}");
+        }
+        assert_eq!(base64url_decode("ZQ==").unwrap(), b"e");
+        assert_eq!(base64url_decode("ZWE=").unwrap(), b"ea");
+    }
+
+    // Regression: unused low bits in the last character were ignored, so
+    // one section had several accepted spellings ("ZQ", "ZR", ... "ZZ").
+    #[test]
+    fn regression_non_canonical_trailing_bits_rejected() {
+        assert_eq!(base64url_decode("ZQ").unwrap(), b"e");
+        for bad in ["ZR", "ZZ", "ZWF", "e31", "ZR=="] {
+            assert!(base64url_decode(bad).is_err(), "{bad}");
+        }
+        assert!(decode(&format!("{NONE_HEADER}.e31.")).is_err());
+        assert!(decode(&format!("{NONE_HEADER}.e30.ZR")).is_err());
     }
 
     // Regression: '+' and '/' (the standard alphabet) were accepted
