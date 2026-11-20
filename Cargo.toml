@@ -115,6 +115,7 @@ members = [
     "crates/chain/rune-chain-usage",
     "crates/chain/rune-otel-genai",
     "crates/chain/rune-chain",
+    "crates/chain/rune-chain-gemini",
 
     # secops
     "crates/secops/rune-secops-warden",
@@ -317,6 +318,7 @@ rune-chain-agent = { path = "crates/chain/rune-chain-agent", version = "0.3.3" }
 rune-chain-anthropic = { path = "crates/chain/rune-chain-anthropic", version = "0.2.2" }
 rune-chain-core = { path = "crates/chain/rune-chain-core", version = "0.2.5" }
 rune-chain-embed = { path = "crates/chain/rune-chain-embed", version = "0.3.2" }
+rune-chain-gemini = { path = "crates/chain/rune-chain-gemini", version = "0.1.0" }
 rune-chain-macros = { path = "crates/chain/rune-chain-macros", version = "0.1.0" }
 rune-chain-llm = { path = "crates/chain/rune-chain-llm", version = "0.3.1" }
 rune-chain-ollama = { path = "crates/chain/rune-chain-ollama", version = "0.3.0" }

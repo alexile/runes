@@ -3390,6 +3390,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-chain-gemini"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "futures",
+ "reqwest",
+ "rune-chain-core",
+ "rune-chain-embed",
+ "rune-sse",
+ "rune-tool-schema",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-test",
+]
+
+[[package]]
 name = "rune-chain-knowledge-graph"
 version = "0.4.0"
 dependencies = [

@@ -1,0 +1,10 @@
+{
+  "candidates": [
+    {
+      "content": { "role": "model", "parts": [{ "text": "It is 21°C and sunny in Paris." }] },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": { "promptTokenCount": 80, "candidatesTokenCount": 12, "totalTokenCount": 92 },
+  "responseId": "resp-tool-2"
+}

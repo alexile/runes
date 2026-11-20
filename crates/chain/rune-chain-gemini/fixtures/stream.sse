@@ -1,0 +1,8 @@
+data: {"candidates": [{"content": {"parts": [{"text": "**Greeting** I should say hello.","thought": true}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 5,"totalTokenCount": 5},"modelVersion": "gemini-2.5-flash","responseId": "s1"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "Hello"}],"role": "model"},"index": 0}],"modelVersion": "gemini-2.5-flash","responseId": "s1"}
+
+data: {"candidates": [{"content": {"parts": [{"text": " there!"}],"role": "model"},"index": 0}],"modelVersion": "gemini-2.5-flash","responseId": "s1"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "","thoughtSignature": "U0lHTkFUVVJF"}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 5,"candidatesTokenCount": 3,"totalTokenCount": 20,"thoughtsTokenCount": 12},"modelVersion": "gemini-2.5-flash","responseId": "s1"}
+

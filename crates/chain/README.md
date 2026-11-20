@@ -1,6 +1,6 @@
 # Chain (LLM)
 
-LLM orchestration: core traits, OpenAI/Anthropic/Ollama providers, prompts, memory, agents, tools, RAG and MCP.
+LLM orchestration: core traits, OpenAI/Anthropic/Gemini/Ollama providers, prompts, memory, agents, tools, RAG and MCP.
 
 | Crate | Description |
 | --- | --- |
@@ -11,6 +11,7 @@ LLM orchestration: core traits, OpenAI/Anthropic/Ollama providers, prompts, memo
 | [`rune-chain-conversational`](rune-chain-conversational) | ConversationalChain for rune-chain: multi-turn dialogue with a pinned system prompt, bounded token-budget or summary memory, and streams recorded in memory |
 | [`rune-chain-core`](rune-chain-core) | Core traits and types for the rune-chain LLM orchestration framework |
 | [`rune-chain-embed`](rune-chain-embed) | Embedder trait, hardened OpenAI-compatible/Cohere/Voyage/Jina embedding providers, batching and caching for the rune-chain LLM framework |
+| [`rune-chain-gemini`](rune-chain-gemini) | Google Gemini LLM provider for rune-chain: Gemini API and Vertex AI, streaming, tools, structured output, thinking, safety settings and embeddings |
 | [`rune-chain-knowledge-graph`](rune-chain-knowledge-graph) | GraphRAG for the rune-chain LLM framework: schema-validated entity and relation extraction, entity resolution, provenance, and bounded k-hop retrieval with cited context |
 | [`rune-chain-llm`](rune-chain-llm) | LlmChain for rune-chain: prompt template + LLM + memory, with structured output, output parsers, streaming into memory, usage and finish reason |
 | [`rune-chain-loader`](rune-chain-loader) | Hardened document loaders for rune-chain RAG: text, HTML, JSON, JSON Lines, CSV and jailed directory walks with limits |
