@@ -6,7 +6,9 @@ pub use rune_chain_gemini::*;
 
 use rune_chain_core::LlmError;
 
-use crate::{CompletionClient, CompletionModel, EmbeddingsClient};
+use crate::{
+    CompletionClient, CompletionModel, EmbeddingsClient, ImageGenerationClient, SpeechClient,
+};
 
 /// Gemini client: hands out chat models ([`Gemini`]) and embedding models
 /// ([`GeminiEmbedder`]) that share one key and configuration.
@@ -103,5 +105,23 @@ impl EmbeddingsClient for Client {
 
     fn embedding_model(&self, name: &str) -> GeminiEmbedder {
         self.llm.embedder(name)
+    }
+}
+
+/// Imagen (`imagen-…`) or Gemini image-output models.
+impl ImageGenerationClient for Client {
+    type ImageGenerationModel = Gemini;
+
+    fn image_generation_model(&self, name: &str) -> Gemini {
+        self.llm.clone().model(name)
+    }
+}
+
+/// Gemini TTS models, e.g. `gemini-2.5-flash-preview-tts`.
+impl SpeechClient for Client {
+    type SpeechModel = Gemini;
+
+    fn speech_model(&self, name: &str) -> Gemini {
+        self.llm.clone().model(name)
     }
 }

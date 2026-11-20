@@ -58,6 +58,9 @@ re-exports the rest of the stack behind cargo features:
 - **Clients.** `openai::Client`, `anthropic::Client`, `gemini::Client` and `ollama::Client`, each with `from_env()`.
   `CompletionClient` gives you `.completion_model(name)`, `.agent(name)` and `.extractor::<T>(name)`.
   `EmbeddingsClient` gives you `.embedding_model(name)` (OpenAI, Gemini, Ollama).
+  `TranscriptionClient`, `ImageGenerationClient` and `SpeechClient` give you
+  `.transcription_model(name)`, `.image_generation_model(name)` and `.speech_model(name)`
+  (OpenAI for all three, Gemini for images and speech).
 - **Agents.** `AgentBuilder` takes a preamble, static documents, tools, per-prompt RAG, memory,
   sampling settings and limits. `Agent` has `.prompt()`, `.chat()` and `.stream_prompt()`.
 - **Tools that can't run away.** With tools, the agent runs the multi-turn loop from
@@ -97,6 +100,9 @@ re-exports the rest of the stack behind cargo features:
 | `agent.stream_prompt(q)` | `.stream(...)` | `agent.stream_prompt(q).await?` |
 | `InMemoryVectorStore` + `.index(embedder)` | `InMemoryVectorStore` | `EmbeddingIndex::new(embedder, store)` |
 | agent as a tool | agent as a tool | `.tool(other_agent)` |
+| `client.transcription_model(m)` | `OpenAIWhisperParser` | `client.transcription_model(m)` |
+| `client.image_generation_model(m)` | `DallEAPIWrapper` | `client.image_generation_model(m)` |
+| `client.audio_generation_model(m)` | `OpenAI TTS` | `client.speech_model(m)` |
 
 ## Usage
 
@@ -200,6 +206,35 @@ while let Some(chunk) = stream.next().await {
 Without tools, tokens arrive as the provider streams them. With tools, the tool rounds run first
 and the final answer arrives as one chunk.
 
+### Audio and images
+
+```rust,no_run
+use rune_chain::{openai, prelude::*};
+
+# async fn run() -> Result<(), Box<dyn std::error::Error>> {
+let client = openai::Client::from_env()?;
+let audio = std::fs::read("memo.m4a")?;
+let text = client
+    .transcription_model("gpt-4o-transcribe")
+    .transcribe(&TranscriptionRequest::new(audio, "memo.m4a").language("en"))
+    .await?
+    .text;
+let picture = client
+    .image_generation_model("gpt-image-1")
+    .generate_image(&ImageGenerationRequest::new(&text).size("1024x1024"))
+    .await?;
+let speech = client
+    .speech_model("gpt-4o-mini-tts")
+    .synthesize(&SpeechRequest::new(text, "coral"))
+    .await?;
+# let _ = (picture, speech);
+# Ok(())
+# }
+```
+
+Uploads, base64 images and audio bodies are size-capped, image URLs must be `https`, and the key
+never shows up in errors.
+
 ### Without `serde` and `schemars` in your Cargo.toml
 
 `rune-chain` re-exports both. Point the derives at them:
@@ -214,7 +249,7 @@ use rune_chain::serde::{self, Deserialize};
 struct Person { name: String }
 ```
 
-More in [`examples/`](examples): `agent_with_tools`, `tool_macro`, `rag`, `extractor` and `streaming`.
+More in [`examples/`](examples): `agent_with_tools`, `tool_macro`, `rag`, `extractor`, `streaming` and `multimodal`.
 
 ## Builder API
 

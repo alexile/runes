@@ -1,6 +1,6 @@
 [package]
 name = "rune-chain"
-version = "0.1.4"
+version = "0.1.5"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -99,6 +99,10 @@ required-features = ["openai"]
 [[example]]
 name = "rag"
 required-features = ["openai", "retrieval"]
+
+[[example]]
+name = "multimodal"
+required-features = ["openai"]
 
 [[example]]
 name = "streaming"

@@ -2,11 +2,12 @@
 
 pub use crate::{
     Agent, AgentBuilder, AgentResponse, CompletionClient, CompletionModel, Extractor,
-    ExtractorBuilder, Typed, TypedTool,
+    ExtractorBuilder, ImageGenerationClient, SpeechClient, TranscriptionClient, Typed, TypedTool,
 };
 pub use rune_chain_core::{
-    Chain, ChainError, ChainExt, GenerateResult, Llm, LlmError, LlmExt, Memory, Message,
-    PromptArgs, Role, StreamData, Tool, ToolError, ToolExt, prompt_args,
+    Chain, ChainError, ChainExt, GenerateResult, ImageGenerationModel, ImageGenerationRequest, Llm,
+    LlmError, LlmExt, Memory, Message, PromptArgs, Role, SpeechModel, SpeechRequest, StreamData,
+    Tool, ToolError, ToolExt, TranscriptionModel, TranscriptionRequest, prompt_args,
 };
 pub use schemars::JsonSchema;
 

@@ -157,7 +157,9 @@ pub mod prelude;
 pub use builder::{Agent, AgentBuilder, AgentResponse, ContextDocument, TextStream};
 #[cfg(feature = "embed")]
 pub use client::EmbeddingsClient;
-pub use client::{CompletionClient, CompletionModel};
+pub use client::{
+    CompletionClient, CompletionModel, ImageGenerationClient, SpeechClient, TranscriptionClient,
+};
 pub use context::{DEFAULT_MAX_CONTEXT_CHARS, DOCUMENTS_NOTICE};
 pub use extractor::{Extractor, ExtractorBuilder};
 #[cfg(feature = "retrieval")]

@@ -71,3 +71,39 @@ pub trait EmbeddingsClient {
     /// `"text-embedding-3-small"`.
     fn embedding_model(&self, name: &str) -> Self::Embedder;
 }
+
+/// A provider client that hands out speech-to-text models by name.
+///
+/// ```rust
+/// use rune_chain::openai;
+/// use rune_chain::prelude::*;
+///
+/// let client = openai::Client::new("sk-example");
+/// let whisper = client.transcription_model("whisper-1");
+/// assert_eq!(whisper.model_id(), "whisper-1");
+/// ```
+pub trait TranscriptionClient {
+    /// The model type this client creates.
+    type TranscriptionModel: rune_chain_core::TranscriptionModel + 'static;
+
+    /// A transcription model by provider model id, e.g. `"whisper-1"`.
+    fn transcription_model(&self, name: &str) -> Self::TranscriptionModel;
+}
+
+/// A provider client that hands out image generation models by name.
+pub trait ImageGenerationClient {
+    /// The model type this client creates.
+    type ImageGenerationModel: rune_chain_core::ImageGenerationModel + 'static;
+
+    /// An image model by provider model id, e.g. `"gpt-image-1"`.
+    fn image_generation_model(&self, name: &str) -> Self::ImageGenerationModel;
+}
+
+/// A provider client that hands out text-to-speech models by name.
+pub trait SpeechClient {
+    /// The model type this client creates.
+    type SpeechModel: rune_chain_core::SpeechModel + 'static;
+
+    /// A speech model by provider model id, e.g. `"gpt-4o-mini-tts"`.
+    fn speech_model(&self, name: &str) -> Self::SpeechModel;
+}

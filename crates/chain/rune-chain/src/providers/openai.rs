@@ -8,7 +8,10 @@ pub use rune_chain_openai::*;
 use rune_chain_core::LlmError;
 use rune_chain_embed::OpenAiEmbedder;
 
-use crate::{CompletionClient, CompletionModel, EmbeddingsClient};
+use crate::{
+    CompletionClient, CompletionModel, EmbeddingsClient, ImageGenerationClient, SpeechClient,
+    TranscriptionClient,
+};
 
 /// Environment variable read by [`Client::from_env`] for the API key.
 pub const API_KEY_ENV: &str = "OPENAI_API_KEY";
@@ -112,5 +115,29 @@ impl EmbeddingsClient for Client {
         OpenAiEmbedder::new(self.api_key.clone())
             .base_url(self.llm.base_url_str())
             .model(name)
+    }
+}
+
+impl TranscriptionClient for Client {
+    type TranscriptionModel = OpenAi;
+
+    fn transcription_model(&self, name: &str) -> OpenAi {
+        self.llm.clone().model(name)
+    }
+}
+
+impl ImageGenerationClient for Client {
+    type ImageGenerationModel = OpenAi;
+
+    fn image_generation_model(&self, name: &str) -> OpenAi {
+        self.llm.clone().model(name)
+    }
+}
+
+impl SpeechClient for Client {
+    type SpeechModel = OpenAi;
+
+    fn speech_model(&self, name: &str) -> OpenAi {
+        self.llm.clone().model(name)
     }
 }
