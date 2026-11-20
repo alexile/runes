@@ -3095,6 +3095,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-attn"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "rayon",
+ "rune-gemm",
+ "thiserror",
+]
+
+[[package]]
 name = "rune-audit-log"
 version = "0.1.0"
 dependencies = [

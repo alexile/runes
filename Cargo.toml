@@ -279,6 +279,7 @@ members = [
     # train
     "crates/train/rune-gemm",
     "crates/train/rune-lowp",
+    "crates/train/rune-attn",
 ]
 
 [workspace.package]
@@ -310,6 +311,7 @@ rune-axum-requestid = { path = "crates/axum/rune-axum-requestid", version = "0.1
 rune-axum-size = { path = "crates/axum/rune-axum-size", version = "0.2.0" }
 rune-axum-timeout = { path = "crates/axum/rune-axum-timeout", version = "0.1.0" }
 rune-gemm = { path = "crates/train/rune-gemm", version = "0.1.0" }
+rune-attn = { path = "crates/train/rune-attn", version = "0.1.0" }
 rune-epss = { path = "crates/secops/rune-epss", version = "0.1.0" }
 rune-subdomain-permute = { path = "crates/net/rune-subdomain-permute", version = "0.1.0" }
 rune-port-scan = { path = "crates/net/rune-port-scan", version = "0.1.0" }

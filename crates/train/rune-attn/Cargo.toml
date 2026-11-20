@@ -1,0 +1,24 @@
+[package]
+name = "rune-attn"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Tiled online-softmax attention forward and backward in O(N) memory: causal, sliding window, GQA/MQA, softcap, ALiBi/bias, varlen packing, LSE merging"
+license.workspace = true
+keywords = ["attention", "transformer", "softmax", "training", "llm"]
+categories = ["science", "mathematics", "algorithms"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rayon.workspace = true
+rune-gemm.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
