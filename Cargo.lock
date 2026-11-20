@@ -3272,7 +3272,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3292,6 +3292,7 @@ dependencies = [
  "rune-otel-genai",
  "rune-tool-schema",
  "rune-vectorstore",
+ "rune-vectorstore-qdrant",
  "schemars",
  "serde",
  "serde_json",
@@ -5355,6 +5356,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror",
+ "tokio",
+ "tokio-test",
+]
+
+[[package]]
+name = "rune-vectorstore-qdrant"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "reqwest",
+ "rune-chain-core",
+ "rune-vectorstore",
+ "serde",
+ "serde_json",
+ "sha1",
  "tokio",
  "tokio-test",
 ]

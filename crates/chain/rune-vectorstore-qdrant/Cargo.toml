@@ -1,0 +1,32 @@
+[package]
+name = "rune-vectorstore-qdrant"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+description = "Qdrant backend for rune-vectorstore over the REST API: collections, batched upserts, filtered search, delete by id or filter, bounded responses"
+license.workspace = true
+keywords = ["qdrant", "vector", "rag", "embeddings", "llm"]
+categories = ["database", "asynchronous", "web-programming::http-client"]
+repository.workspace = true
+readme = "README.md"
+publish = true
+
+[dependencies]
+rune-vectorstore.workspace = true
+async-trait.workspace = true
+bytes.workspace = true
+futures.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+tokio = { workspace = true, features = ["time"] }
+
+[dev-dependencies]
+rune-chain-core = { workspace = true, features = ["testing"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tokio-test.workspace = true
+
+[lints]
+workspace = true
