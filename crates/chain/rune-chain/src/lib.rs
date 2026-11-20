@@ -23,9 +23,10 @@
 //!
 //! # What you get
 //!
-//! - **Clients**: `openai::Client`, `anthropic::Client`, `ollama::Client`,
-//!   each with `from_env()`. [`CompletionClient`] hands out models, agents
-//!   and extractors by name; [`EmbeddingsClient`] hands out embedders.
+//! - **Clients**: `openai::Client`, `anthropic::Client`, `gemini::Client`,
+//!   `ollama::Client`, each with `from_env()`. [`CompletionClient`] hands
+//!   out models, agents and extractors by name; [`EmbeddingsClient`] hands
+//!   out embedders.
 //! - **Agents**: [`AgentBuilder`] takes a preamble, static documents
 //!   (`.context`), tools (`.tool`, `.typed_tool`), per-prompt RAG
 //!   (`.dynamic_context`), memory, sampling settings and limits. With tools
@@ -64,8 +65,9 @@
 //! |---|---|---|
 //! | `openai` | yes | [`openai`]: `OpenAI` and compatible APIs (Groq, Mistral, `DeepSeek`, `OpenRouter`, vLLM, …), embeddings |
 //! | `anthropic` | | [`anthropic`]: Claude |
+//! | `gemini` | | [`gemini`]: Gemini API and Vertex AI, embeddings |
 //! | `ollama` | | [`ollama`]: local models and embeddings |
-//! | `embed` | via `openai`/`ollama` | [`embed`]: `Embedder`, Cohere/Voyage/Jina embedders, batching and caching |
+//! | `embed` | via `openai`/`gemini`/`ollama` | [`embed`]: `Embedder`, Cohere/Voyage/Jina embedders, batching and caching |
 //! | `vectorstore` | | [`vectorstore`]: exact and HNSW in-memory stores, filters, snapshots |
 //! | `retrieval` | | [`retrieval`], `dynamic_context`, [`EmbeddingIndex`]: BM25, hybrid, MMR, reranking |
 //! | `mcp` | | [`mcp`]: MCP client and server, remote tools as agent tools |
@@ -133,6 +135,8 @@ pub use tool::{Typed, TypedTool};
 
 #[cfg(feature = "anthropic")]
 pub use providers::anthropic;
+#[cfg(feature = "gemini")]
+pub use providers::gemini;
 #[cfg(feature = "ollama")]
 pub use providers::ollama;
 #[cfg(feature = "openai")]

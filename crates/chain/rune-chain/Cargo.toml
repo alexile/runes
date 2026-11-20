@@ -1,10 +1,10 @@
 [package]
 name = "rune-chain"
-version = "0.1.0"
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "One-dependency LLM toolkit: OpenAI/Anthropic/Ollama clients, agents with tools, RAG and memory, typed extraction, streaming. Re-exports the rune-chain stack behind features"
+description = "One-dependency LLM toolkit: OpenAI/Anthropic/Gemini/Ollama clients, agents with tools, RAG and memory, typed extraction, streaming. Re-exports the rune-chain stack behind features"
 license.workspace = true
 keywords = ["llm", "agent", "rag", "openai", "anthropic"]
 categories = ["asynchronous", "science", "web-programming::http-client"]
@@ -18,6 +18,8 @@ default = ["openai"]
 openai = ["dep:rune-chain-openai", "embed"]
 ## Anthropic Claude.
 anthropic = ["dep:rune-chain-anthropic"]
+## Google Gemini (Gemini API and Vertex AI), chat and embeddings.
+gemini = ["dep:rune-chain-gemini", "rune-chain-gemini/embed", "embed"]
 ## Ollama local models, chat and embeddings.
 ollama = ["dep:rune-chain-ollama", "embed"]
 ## `Embedder`, `EmbeddingsClient` and the OpenAI/Cohere/Voyage/Jina embedders.
@@ -35,7 +37,7 @@ tokio = ["rune-chain-core/tokio"]
 ## `testing::FakeLlm`, a scriptable offline model, plus trait-contract checks.
 testing = ["rune-chain-core/testing"]
 ## Everything above.
-full = ["openai", "anthropic", "ollama", "embed", "vectorstore", "retrieval", "mcp", "otel", "tokio"]
+full = ["openai", "anthropic", "gemini", "ollama", "embed", "vectorstore", "retrieval", "mcp", "otel", "tokio"]
 
 [dependencies]
 rune-chain-core.workspace = true
@@ -46,6 +48,7 @@ rune-chain-prompt.workspace = true
 rune-tool-schema = { workspace = true, features = ["schemars"] }
 rune-chain-openai = { workspace = true, optional = true }
 rune-chain-anthropic = { workspace = true, optional = true }
+rune-chain-gemini = { workspace = true, optional = true }
 rune-chain-ollama = { workspace = true, optional = true }
 rune-chain-embed = { workspace = true, optional = true }
 rune-vectorstore = { workspace = true, optional = true }

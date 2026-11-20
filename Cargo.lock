@@ -3272,7 +3272,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3281,6 +3281,7 @@ dependencies = [
  "rune-chain-anthropic",
  "rune-chain-core",
  "rune-chain-embed",
+ "rune-chain-gemini",
  "rune-chain-memory",
  "rune-chain-ollama",
  "rune-chain-openai",

@@ -1,6 +1,6 @@
 # rune-chain
 
-> One dependency for LLM apps in Rust: OpenAI/Anthropic/Ollama clients, agents with tools, RAG and memory, typed extraction and streaming.
+> One dependency for LLM apps in Rust: OpenAI/Anthropic/Gemini/Ollama clients, agents with tools, RAG and memory, typed extraction and streaming.
 
 [![crates.io](https://img.shields.io/crates/v/rune-chain)](https://crates.io/crates/rune-chain)
 [![docs.rs](https://img.shields.io/docsrs/rune-chain)](https://docs.rs/rune-chain)
@@ -32,9 +32,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `rune-chain` is the front door to the `rune-chain-*` crates. It adds a small ergonomic layer and
 re-exports the rest of the stack behind cargo features:
 
-- **Clients.** `openai::Client`, `anthropic::Client` and `ollama::Client`, each with `from_env()`.
+- **Clients.** `openai::Client`, `anthropic::Client`, `gemini::Client` and `ollama::Client`, each with `from_env()`.
   `CompletionClient` gives you `.completion_model(name)`, `.agent(name)` and `.extractor::<T>(name)`.
-  `EmbeddingsClient` gives you `.embedding_model(name)` (OpenAI, Ollama).
+  `EmbeddingsClient` gives you `.embedding_model(name)` (OpenAI, Gemini, Ollama).
 - **Agents.** `AgentBuilder` takes a preamble, static documents, tools, per-prompt RAG, memory,
   sampling settings and limits. `Agent` has `.prompt()`, `.chat()` and `.stream_prompt()`.
 - **Tools that can't run away.** With tools, the agent runs the multi-turn loop from
@@ -214,8 +214,9 @@ More in [`examples/`](examples): `agent_with_tools`, `rag`, `extractor` and `str
 |---|---|---|
 | `openai` | yes | `openai`: OpenAI and compatible APIs (Groq, Mistral, DeepSeek, OpenRouter, vLLM, LM Studio), embeddings |
 | `anthropic` | | `anthropic`: Claude |
+| `gemini` | | `gemini`: Gemini API and Vertex AI, embeddings |
 | `ollama` | | `ollama`: local models and embeddings |
-| `embed` | via `openai`/`ollama` | `embed`: `Embedder`, Cohere/Voyage/Jina embedders, batching, caching |
+| `embed` | via `openai`/`gemini`/`ollama` | `embed`: `Embedder`, Cohere/Voyage/Jina embedders, batching, caching |
 | `vectorstore` | | `vectorstore`: exact and HNSW in-memory stores, filters, snapshots |
 | `retrieval` | | `retrieval`, `dynamic_context`, `EmbeddingIndex`: BM25, hybrid, MMR, reranking |
 | `mcp` | | `mcp`: MCP client and server; remote tools as agent tools |
