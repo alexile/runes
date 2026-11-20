@@ -27,6 +27,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+Tools are plain functions with `#[tool]`:
+
+```rust,no_run
+use rune_chain::{openai, prelude::*};
+
+/// Add two integers.
+#[tool]
+fn add(
+    /// The first number.
+    a: i64,
+    /// The second number.
+    b: i64,
+) -> i64 {
+    a + b
+}
+
+# async fn run() -> Result<(), Box<dyn std::error::Error>> {
+let agent = openai::Client::from_env()?.agent("gpt-4o-mini").tool(Add).build();
+println!("{}", agent.prompt("What is 2 + 40?").await?);
+# Ok(())
+# }
+```
+
 ## What it does
 
 `rune-chain` is the front door to the `rune-chain-*` crates. It adds a small ergonomic layer and
@@ -41,6 +64,9 @@ re-exports the rest of the stack behind cargo features:
   `rune-chain-agent`. Every call is checked against the tool's JSON Schema before it runs. Calls run
   under limits on rounds, calls per round, concurrency, time and output size. Tool output is fenced
   as untrusted data, and sensitive tools can require approval.
+- **`#[tool]` functions.** Put `#[tool]` on a plain or `async fn` and pass the generated struct
+  to `.tool(..)`. The JSON Schema comes from the argument types and the doc comments. Use
+  `#[derive(Embed)]` (`rune_chain::embed::Embed`) to mark the fields of a struct to embed.
 - **Typed tools.** Implement `TypedTool` with an `Args` struct. The schema is derived with
   `schemars`, and nested fields are validated too.
 - **RAG.** `.dynamic_context(n, index)` retrieves the top `n` documents for each prompt from any
@@ -64,7 +90,8 @@ re-exports the rest of the stack behind cargo features:
 | `agent.chat(q, history)` | `RunnableWithMessageHistory` | `agent.chat(q, history)` or `.memory(m)` |
 | `.context(doc)` | system prompt with docs | `.context(doc)` |
 | `.dynamic_context(n, index)` | retriever + `create_retrieval_chain` | `.dynamic_context(n, index)` |
-| `.tool(T)` (`rig::tool::Tool`) | `@tool` | `.typed_tool(T)` (`TypedTool`) or `.tool(T)` (`Tool`) |
+| `#[rig_tool]` fn | `@tool` | `#[tool]` fn, then `.tool(Add)` |
+| `.tool(T)` (`rig::tool::Tool`) | `BaseTool` | `.typed_tool(T)` (`TypedTool`) or `.tool(T)` (`Tool`) |
 | `.multi_turn(n)` | `recursion_limit` | `.max_turns(n)` |
 | `client.extractor::<T>(m).build()` | `with_structured_output(T)` | `client.extractor::<T>(m).build()?` |
 | `agent.stream_prompt(q)` | `.stream(...)` | `agent.stream_prompt(q).await?` |
@@ -187,7 +214,7 @@ use rune_chain::serde::{self, Deserialize};
 struct Person { name: String }
 ```
 
-More in [`examples/`](examples): `agent_with_tools`, `rag`, `extractor` and `streaming`.
+More in [`examples/`](examples): `agent_with_tools`, `tool_macro`, `rag`, `extractor` and `streaming`.
 
 ## Builder API
 
@@ -222,6 +249,7 @@ More in [`examples/`](examples): `agent_with_tools`, `rag`, `extractor` and `str
 | `retrieval` | | `retrieval`, `dynamic_context`, `EmbeddingIndex`: BM25, hybrid, MMR, reranking |
 | `mcp` | | `mcp`: MCP client and server; remote tools as agent tools |
 | `otel` | | `otel`: OpenTelemetry GenAI spans |
+| `macros` | yes | `#[tool]` (`rune_chain::tool`) and, with `embed`, `#[derive(Embed)]` (`rune_chain::embed::Embed`) |
 | `tokio` | | `.with_timeout(..)` / `.with_retry(..)` on any `Llm` or `Chain` |
 | `testing` | | `testing::FakeLlm` and trait-contract checks |
 | `full` | | Everything except `testing` |

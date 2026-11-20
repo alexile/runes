@@ -13,7 +13,7 @@ readme = "README.md"
 publish = true
 
 [features]
-default = ["openai"]
+default = ["openai", "macros"]
 ## OpenAI and OpenAI-compatible providers (also turns on `embed` for OpenAI embeddings).
 openai = ["dep:rune-chain-openai", "embed"]
 ## Anthropic Claude.
@@ -24,6 +24,8 @@ gemini = ["dep:rune-chain-gemini", "rune-chain-gemini/embed", "embed"]
 ollama = ["dep:rune-chain-ollama", "embed"]
 ## `Embedder`, `EmbeddingsClient` and the OpenAI/Cohere/Voyage/Jina embedders.
 embed = ["dep:rune-chain-embed"]
+## `#[tool]` (as `rune_chain::tool`) and, with `embed`, `#[derive(Embed)]`.
+macros = ["rune-chain-core/macros", "rune-chain-embed?/derive"]
 ## Vector stores: the `VectorStore` trait, exact and HNSW in-memory indexes.
 vectorstore = ["dep:rune-vectorstore"]
 ## Qdrant vector store (`QdrantStore`) over the REST API.
@@ -39,7 +41,7 @@ tokio = ["rune-chain-core/tokio"]
 ## `testing::FakeLlm`, a scriptable offline model, plus trait-contract checks.
 testing = ["rune-chain-core/testing"]
 ## Everything above.
-full = ["openai", "anthropic", "gemini", "ollama", "embed", "vectorstore", "qdrant", "retrieval", "mcp", "otel", "tokio"]
+full = ["openai", "anthropic", "gemini", "ollama", "embed", "macros", "vectorstore", "qdrant", "retrieval", "mcp", "otel", "tokio"]
 
 [dependencies]
 rune-chain-core.workspace = true
@@ -72,6 +74,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 [[example]]
 name = "agent_with_tools"
 required-features = ["openai"]
+
+[[example]]
+name = "tool_macro"
+required-features = ["openai", "macros"]
 
 [[example]]
 name = "extractor"

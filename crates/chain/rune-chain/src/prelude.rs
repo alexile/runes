@@ -10,6 +10,9 @@ pub use rune_chain_core::{
 };
 pub use schemars::JsonSchema;
 
+#[cfg(feature = "macros")]
+pub use rune_chain_core::tool;
+
 #[cfg(feature = "embed")]
 pub use crate::EmbeddingsClient;
 #[cfg(feature = "embed")]
