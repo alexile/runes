@@ -594,6 +594,11 @@ pub struct Message {
     /// of [`text`](Self::text).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning: Vec<ReasoningBlock>,
+    /// Optional stable id, set by the application. Providers ignore it;
+    /// history reducers use it to replace a message instead of adding a
+    /// second copy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 impl Message {
@@ -615,6 +620,7 @@ impl Message {
             tool_calls: Vec::new(),
             tool_call_id: None,
             reasoning: Vec::new(),
+            id: None,
         }
     }
 
@@ -659,6 +665,7 @@ impl Message {
             tool_calls,
             tool_call_id: None,
             reasoning: Vec::new(),
+            id: None,
         }
     }
 
@@ -678,6 +685,7 @@ impl Message {
             tool_calls: Vec::new(),
             tool_call_id: Some(call_id.into()),
             reasoning: Vec::new(),
+            id: None,
         }
     }
 
@@ -760,6 +768,20 @@ impl Message {
     #[must_use]
     pub fn with_tool_call_id(mut self, call_id: impl Into<String>) -> Self {
         self.tool_call_id = Some(call_id.into());
+        self
+    }
+
+    /// Set the message id (builder style).
+    ///
+    /// ```rust
+    /// use rune_chain_core::Message;
+    ///
+    /// let msg = Message::human("hi").with_id("m1");
+    /// assert_eq!(msg.id.as_deref(), Some("m1"));
+    /// ```
+    #[must_use]
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
         self
     }
 
