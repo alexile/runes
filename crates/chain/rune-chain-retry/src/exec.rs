@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use futures::{Stream, StreamExt, future, stream};
 use rune_chain_core::{
-    FunctionDefinition, GenerateResult, Llm, LlmError, Message, ResponseFormat, StreamData,
-    ToolChoice,
+    EventStream, FunctionDefinition, GenerateResult, Llm, LlmError, Message, ResponseFormat,
+    StreamData, ToolChoice,
 };
 use tokio::time::Instant;
 
@@ -33,12 +33,21 @@ pub enum Request<'a> {
     ),
     Structured(&'a [Message], &'a ResponseFormat),
     Stream(&'a [Message]),
+    Events(
+        &'a [Message],
+        Option<&'a [FunctionDefinition]>,
+        &'a Option<ToolChoice>,
+    ),
 }
 
 impl<'a> Request<'a> {
     pub const fn messages(&self) -> &'a [Message] {
         match *self {
-            Self::Generate(m) | Self::Tools(m, ..) | Self::Structured(m, _) | Self::Stream(m) => m,
+            Self::Generate(m)
+            | Self::Tools(m, ..)
+            | Self::Structured(m, _)
+            | Self::Stream(m)
+            | Self::Events(m, ..) => m,
         }
     }
 }
@@ -46,21 +55,47 @@ impl<'a> Request<'a> {
 pub enum Output {
     Result(GenerateResult),
     Stream(LlmStream),
+    Events(EventStream),
 }
 
 impl Output {
     pub fn into_result(self) -> Result<GenerateResult, LlmError> {
         match self {
             Self::Result(r) => Ok(r),
-            Self::Stream(_) => Err(LlmError::other("internal: expected a result")),
+            Self::Stream(_) | Self::Events(_) => {
+                Err(LlmError::other("internal: expected a result"))
+            }
         }
     }
 
     pub fn into_stream(self) -> Result<LlmStream, LlmError> {
         match self {
             Self::Stream(s) => Ok(s),
-            Self::Result(_) => Err(LlmError::other("internal: expected a stream")),
+            Self::Result(_) | Self::Events(_) => {
+                Err(LlmError::other("internal: expected a stream"))
+            }
         }
+    }
+
+    pub fn into_events(self) -> Result<EventStream, LlmError> {
+        match self {
+            Self::Events(s) => Ok(s),
+            Self::Result(_) | Self::Stream(_) => {
+                Err(LlmError::other("internal: expected an event stream"))
+            }
+        }
+    }
+}
+
+/// Await the first item of `s`. An error there fails the attempt; otherwise
+/// the item is put back in front of the rest.
+async fn peek<T: Send + 'static>(
+    mut s: Pin<Box<dyn Stream<Item = Result<T, LlmError>> + Send>>,
+) -> Result<Pin<Box<dyn Stream<Item = Result<T, LlmError>> + Send>>, LlmError> {
+    match s.next().await {
+        Some(Err(e)) => Err(e),
+        Some(Ok(first)) => Ok(Box::pin(stream::once(future::ready(Ok(first))).chain(s))),
+        None => Ok(Box::pin(stream::empty())),
     }
 }
 
@@ -77,16 +112,10 @@ async fn call_once(llm: &dyn Llm, req: Request<'_>) -> Result<Output, LlmError> 
         Request::Structured(m, format) => {
             llm.generate_structured(m, format).await.map(Output::Result)
         }
-        Request::Stream(m) => {
-            let mut s = llm.stream(m).await?;
-            match s.next().await {
-                Some(Err(e)) => Err(e),
-                Some(Ok(first)) => Ok(Output::Stream(Box::pin(
-                    stream::once(future::ready(Ok(first))).chain(s),
-                ))),
-                None => Ok(Output::Stream(Box::pin(stream::empty()))),
-            }
-        }
+        Request::Stream(m) => Ok(Output::Stream(peek(llm.stream(m).await?).await?)),
+        Request::Events(m, tools, choice) => Ok(Output::Events(
+            peek(llm.stream_events(m, tools, choice.clone()).await?).await?,
+        )),
     }
 }
 

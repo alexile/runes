@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rune_chain_core::{
-    FunctionDefinition, GenerateResult, Llm, LlmError, LlmErrorKind, Message, Pricing,
+    EventStream, FunctionDefinition, GenerateResult, Llm, LlmError, LlmErrorKind, Message, Pricing,
     ResponseFormat, ToolChoice,
 };
 use tokio::time::Instant;
@@ -261,8 +261,10 @@ type Estimator = Arc<dyn Fn(&[Message]) -> usize + Send + Sync>;
 /// worth sending elsewhere ([`ErrorClass::InvalidRequest`]) are returned
 /// immediately; otherwise the last provider's error is returned.
 ///
-/// **Streaming** falls back only before the first chunk: a provider whose
-/// stream fails to open, or yields an error as its first item, is replaced
+/// **Streaming** ([`stream`](Llm::stream) and
+/// [`stream_events`](Llm::stream_events)) falls back only before the first
+/// chunk: a provider whose stream fails to open, or yields an error as its
+/// first item, is replaced
 /// by the next one; once a chunk has been delivered, later errors are passed
 /// through and the outputs of two providers are never spliced together.
 ///
@@ -748,6 +750,17 @@ impl Llm for Router {
 
     async fn stream(&self, messages: &[Message]) -> Result<LlmStream, LlmError> {
         self.route(Request::Stream(messages)).await?.into_stream()
+    }
+
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        self.route(Request::Events(messages, tools, &tool_choice))
+            .await?
+            .into_events()
     }
 
     async fn generate_structured(

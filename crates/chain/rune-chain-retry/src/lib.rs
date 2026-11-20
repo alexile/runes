@@ -72,7 +72,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use rune_chain_core::{
-    FunctionDefinition, GenerateResult, Llm, LlmError, Message, ResponseFormat, ToolChoice,
+    EventStream, FunctionDefinition, GenerateResult, Llm, LlmError, Message, ResponseFormat,
+    ToolChoice,
 };
 
 pub use classify::{ErrorClass, MAX_RETRY_AFTER_HINT, classify, retry_after};
@@ -102,7 +103,9 @@ use policy::Rng;
 ///
 /// [`stream`](Llm::stream) is retried until the first chunk arrives (the
 /// stream is opened and its first item awaited before it is returned);
-/// errors after that are passed through untouched.
+/// errors after that are passed through untouched. The same goes for
+/// [`stream_events`](Llm::stream_events): it is retried until the first
+/// event, never once events have been yielded.
 pub struct RetryLlm<L> {
     inner: L,
     policy: RetryPolicy,
@@ -272,6 +275,17 @@ impl<L: Llm + Send + Sync> Llm for RetryLlm<L> {
 
     async fn stream(&self, messages: &[Message]) -> Result<LlmStream, LlmError> {
         self.run(Request::Stream(messages)).await?.into_stream()
+    }
+
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        self.run(Request::Events(messages, tools, &tool_choice))
+            .await?
+            .into_events()
     }
 
     async fn generate_structured(

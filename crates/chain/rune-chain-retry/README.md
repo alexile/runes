@@ -100,9 +100,10 @@ different:
 - **Retry-after hints are honoured.** A message such as `try again in 20s`
   makes the next wait at least 20 s. Turn this off with
   `RetryPolicy::with_honor_retry_after(false)`.
-- **`stream()` waits for the first chunk** before it returns, so that a
-  stream that fails before producing any output is retried. Errors after
-  the first chunk are passed through as before.
+- **`stream()` and `stream_events()` wait for the first chunk** before
+  they return, so that a stream that fails before producing any output is
+  retried (or, in a `Router`, sent to the next provider). Errors after the
+  first chunk are passed through as before.
 - **`generate_structured` is forwarded** to the inner model, with retries,
   so its native JSON mode is used. Before 0.2 the trait default ran on top
   of the retried `generate`.
