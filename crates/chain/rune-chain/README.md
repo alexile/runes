@@ -1,6 +1,6 @@
 # rune-chain
 
-> One dependency for LLM apps in Rust: OpenAI/Anthropic/Gemini/Ollama clients, agents with tools, RAG and memory, typed extraction and streaming.
+> One dependency for LLM apps in Rust: OpenAI, Anthropic, Gemini, Ollama, Azure, Groq, Mistral, xAI, DeepSeek, OpenRouter and a dozen more provider clients, agents with tools, RAG and memory, typed extraction and streaming.
 
 [![crates.io](https://img.shields.io/crates/v/rune-chain)](https://crates.io/crates/rune-chain)
 [![docs.rs](https://img.shields.io/docsrs/rune-chain)](https://docs.rs/rune-chain)
@@ -55,9 +55,11 @@ println!("{}", agent.prompt("What is 2 + 40?").await?);
 `rune-chain` is the front door to the `rune-chain-*` crates. It adds a small ergonomic layer and
 re-exports the rest of the stack behind cargo features:
 
-- **Clients.** `openai::Client`, `anthropic::Client`, `gemini::Client` and `ollama::Client`, each with `from_env()`.
+- **Clients.** `openai::Client`, `anthropic::Client`, `gemini::Client`, `ollama::Client`, `azure::Client` and one
+  module per OpenAI-compatible provider (see [Providers](#providers)), each with `new(key)` and `from_env()`.
   `CompletionClient` gives you `.completion_model(name)`, `.agent(name)` and `.extractor::<T>(name)`.
-  `EmbeddingsClient` gives you `.embedding_model(name)` (OpenAI, Gemini, Ollama).
+  `EmbeddingsClient` gives you `.embedding_model(name)` (OpenAI, Gemini, Ollama, Mistral, Fireworks, Cohere,
+  vLLM, LM Studio).
   `TranscriptionClient`, `ImageGenerationClient` and `SpeechClient` give you
   `.transcription_model(name)`, `.image_generation_model(name)` and `.speech_model(name)`
   (OpenAI for all three, Gemini for images and speech).
@@ -306,6 +308,47 @@ More in [`examples/`](examples): `agent_with_tools`, `tool_macro`, `rag`, `extra
 `stream_events`, `stream_chat_events`.
 `*_with_details` returns usage, tool calls, rounds, the stop reason and the retrieved documents.
 
+## Providers
+
+One feature and one module per provider, like `rune_chain::groq` or `rune_chain::xai`; `all-providers` turns
+them all on. The OpenAI-compatible clients share one implementation (`rune_chain::compat::Client`) and send
+each server's documented wire quirks: which token-limit field it takes, whether it accepts `stream_options`,
+`response_format` and `tool_choice`. Every chat model supports tools and streaming.
+
+| Provider | Feature / module | Key env var | Chat | Embeddings | Tools | Streaming |
+|---|---|---|---|---|---|---|
+| OpenAI | `openai` | `OPENAI_API_KEY` | yes | yes | yes | yes |
+| Anthropic | `anthropic` | `ANTHROPIC_API_KEY` | yes | | yes | yes |
+| Google Gemini | `gemini` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | yes | yes | yes | yes |
+| Ollama | `ollama` | optional `OLLAMA_API_KEY`, `OLLAMA_HOST` | yes | yes | yes | yes |
+| Azure OpenAI | `azure` | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, optional `AZURE_OPENAI_API_VERSION` / `OPENAI_API_VERSION` | yes | | yes | yes |
+| Groq | `groq` | `GROQ_API_KEY` | yes | | yes | yes |
+| Mistral | `mistral` | `MISTRAL_API_KEY` | yes | yes | yes | yes |
+| DeepSeek | `deepseek` | `DEEPSEEK_API_KEY` | yes | | yes | yes |
+| xAI (Grok) | `xai` | `XAI_API_KEY` | yes | | yes | yes |
+| OpenRouter | `openrouter` | `OPENROUTER_API_KEY` | yes | | yes | yes |
+| Together AI | `together` | `TOGETHER_API_KEY` | yes | | yes | yes |
+| Fireworks AI | `fireworks` | `FIREWORKS_API_KEY` | yes | yes | yes | yes |
+| Cerebras | `cerebras` | `CEREBRAS_API_KEY` | yes | | yes | yes |
+| Moonshot (Kimi) | `moonshot` | `MOONSHOT_API_KEY` | yes | | yes | yes |
+| Hyperbolic | `hyperbolic` | `HYPERBOLIC_API_KEY` | yes | | yes | yes |
+| Hugging Face router | `huggingface` | `HF_TOKEN` | yes | | yes | yes |
+| NVIDIA NIM | `nvidia` | `NVIDIA_API_KEY` | yes | | yes (no `tool_choice`) | yes |
+| SambaNova | `sambanova` | `SAMBANOVA_API_KEY` | yes | | yes | yes |
+| Cohere (compatibility API) | `cohere` | `COHERE_API_KEY` / `CO_API_KEY` | yes | yes | yes (no `tool_choice`) | yes |
+| vLLM | `vllm` | optional `VLLM_API_KEY` | yes | yes | yes | yes |
+| LM Studio | `lmstudio` | none | yes | yes | yes | yes |
+
+```rust,ignore
+use rune_chain::{groq, mistral, prelude::*};
+
+let agent = groq::Client::from_env()?.agent("llama-3.3-70b-versatile").build();
+let embedder = mistral::Client::from_env()?.embedding_model("mistral-embed");
+let local = rune_chain::vllm::Client::new("").with_base_url("http://localhost:8001/v1");
+```
+
+Tool and model support still depends on the model you pick on a given provider.
+
 ## Features
 
 | Feature | Default | What it adds |
@@ -314,6 +357,8 @@ More in [`examples/`](examples): `agent_with_tools`, `tool_macro`, `rag`, `extra
 | `anthropic` | | `anthropic`: Claude |
 | `gemini` | | `gemini`: Gemini API and Vertex AI, embeddings |
 | `ollama` | | `ollama`: local models and embeddings |
+| `azure`, `groq`, `mistral`, `deepseek`, `xai`, `openrouter`, `together`, `fireworks`, `cerebras`, `moonshot`, `hyperbolic`, `huggingface`, `nvidia`, `sambanova`, `cohere`, `vllm`, `lmstudio` | | One client module each, see [Providers](#providers) |
+| `all-providers` | | Every provider client |
 | `embed` | via `openai`/`gemini`/`ollama` | `embed`: `Embedder`, Cohere/Voyage/Jina embedders, batching, caching |
 | `vectorstore` | | `vectorstore`: exact and HNSW in-memory stores, filters, snapshots |
 | `qdrant` | | `qdrant`: `QdrantStore`, a Qdrant-backed `VectorStore` |

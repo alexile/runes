@@ -3492,11 +3492,12 @@ dependencies = [
 
 [[package]]
 name = "rune-chain"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "async-stream",
  "async-trait",
  "futures",
+ "reqwest",
  "rune-chain-agent",
  "rune-chain-anthropic",
  "rune-chain-core",

@@ -1,10 +1,10 @@
 [package]
 name = "rune-chain"
-version = "0.1.6"
+version = "0.1.7"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
-description = "One-dependency LLM toolkit: OpenAI/Anthropic/Gemini/Ollama clients, agents with tools, RAG and memory, typed extraction, streaming. Re-exports the rune-chain stack behind features"
+description = "One-dependency LLM toolkit: OpenAI, Anthropic, Gemini, Ollama, Groq, Mistral, xAI, DeepSeek, OpenRouter, Azure and more clients, agents with tools, RAG and memory, typed extraction, streaming. Re-exports the rune-chain stack behind features"
 license.workspace = true
 keywords = ["llm", "agent", "rag", "openai", "anthropic"]
 categories = ["asynchronous", "science", "web-programming::http-client"]
@@ -22,6 +22,42 @@ anthropic = ["dep:rune-chain-anthropic"]
 gemini = ["dep:rune-chain-gemini", "rune-chain-gemini/embed", "embed"]
 ## Ollama local models, chat and embeddings.
 ollama = ["dep:rune-chain-ollama", "embed"]
+## Azure OpenAI (`rune_chain::azure`), chat by deployment name.
+azure = ["openai"]
+## Groq (`rune_chain::groq`).
+groq = ["openai"]
+## Mistral (`rune_chain::mistral`), chat and embeddings.
+mistral = ["openai"]
+## DeepSeek (`rune_chain::deepseek`).
+deepseek = ["openai"]
+## xAI Grok (`rune_chain::xai`).
+xai = ["openai"]
+## OpenRouter (`rune_chain::openrouter`).
+openrouter = ["openai"]
+## Together AI (`rune_chain::together`).
+together = ["openai"]
+## Fireworks AI (`rune_chain::fireworks`), chat and embeddings.
+fireworks = ["openai"]
+## Cerebras (`rune_chain::cerebras`).
+cerebras = ["openai"]
+## Moonshot AI Kimi (`rune_chain::moonshot`).
+moonshot = ["openai"]
+## Hyperbolic (`rune_chain::hyperbolic`).
+hyperbolic = ["openai"]
+## Hugging Face Inference Providers router (`rune_chain::huggingface`).
+huggingface = ["openai"]
+## NVIDIA NIM (`rune_chain::nvidia`).
+nvidia = ["openai"]
+## SambaNova Cloud (`rune_chain::sambanova`).
+sambanova = ["openai"]
+## Cohere's OpenAI compatibility API (`rune_chain::cohere`), chat and embeddings.
+cohere = ["openai"]
+## Self-hosted vLLM (`rune_chain::vllm`), chat and embeddings.
+vllm = ["openai"]
+## LM Studio local server (`rune_chain::lmstudio`), chat and embeddings.
+lmstudio = ["openai"]
+## Every provider client above plus OpenAI, Anthropic, Gemini and Ollama.
+all-providers = ["openai", "anthropic", "gemini", "ollama", "azure", "groq", "mistral", "deepseek", "xai", "openrouter", "together", "fireworks", "cerebras", "moonshot", "hyperbolic", "huggingface", "nvidia", "sambanova", "cohere", "vllm", "lmstudio"]
 ## `Embedder`, `EmbeddingsClient` and the OpenAI/Cohere/Voyage/Jina embedders.
 embed = ["dep:rune-chain-embed"]
 ## `#[tool]` (as `rune_chain::tool`) and, with `embed`, `#[derive(Embed)]`.
@@ -50,7 +86,7 @@ tokio = ["rune-chain-core/tokio"]
 ## `testing::FakeLlm`, a scriptable offline model, plus trait-contract checks.
 testing = ["rune-chain-core/testing"]
 ## Everything above.
-full = ["openai", "anthropic", "gemini", "ollama", "embed", "macros", "vectorstore", "qdrant", "pgvector", "sqlite", "retrieval", "eval", "graph", "mcp", "otel", "tokio"]
+full = ["all-providers", "embed", "macros", "vectorstore", "qdrant", "pgvector", "sqlite", "retrieval", "eval", "graph", "mcp", "otel", "tokio"]
 
 [dependencies]
 rune-chain-core.workspace = true
@@ -82,7 +118,12 @@ serde_json.workspace = true
 
 [dev-dependencies]
 rune-chain-core = { workspace = true, features = ["testing"] }
+reqwest.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+
+[[test]]
+name = "providers"
+required-features = ["all-providers"]
 
 [[example]]
 name = "agent_with_tools"

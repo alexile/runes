@@ -48,9 +48,11 @@
 //! # What you get
 //!
 //! - **Clients**: `openai::Client`, `anthropic::Client`, `gemini::Client`,
-//!   `ollama::Client`, each with `from_env()`. [`CompletionClient`] hands
-//!   out models, agents and extractors by name; [`EmbeddingsClient`] hands
-//!   out embedders.
+//!   `ollama::Client`, `azure::Client` and one module per OpenAI-compatible
+//!   provider (`groq`, `mistral`, `xai`, `deepseek`, `openrouter`, …; see
+//!   [Providers](#providers)), each with `from_env()`. [`CompletionClient`]
+//!   hands out models, agents and extractors by name; [`EmbeddingsClient`]
+//!   hands out embedders.
 //! - **Agents**: [`AgentBuilder`] takes a preamble, static documents
 //!   (`.context`), tools (`.tool`, `.typed_tool`), per-prompt RAG
 //!   (`.dynamic_context`), memory, sampling settings and limits. With tools
@@ -84,6 +86,50 @@
 //! | `InMemoryVectorStore` + `.index(embedder)` | `InMemoryVectorStore` | `EmbeddingIndex::new(embedder, store)` |
 //! | agent as tool | agent as tool | `.tool(other_agent)` |
 //!
+//! # Providers
+//!
+//! Each provider has its own feature and module; `all-providers` turns on
+//! all of them. Every client has `new(key)` and `from_env()`. The
+//! OpenAI-compatible ones share [`compat::Client`] and send each server's
+//! wire quirks (token-limit field, `stream_options`, `response_format`,
+//! `tool_choice`) from the `rune-chain-openai` presets. All chat models
+//! support tools and streaming.
+//!
+//! | Module | Feature | Key env var | Chat | Embeddings |
+//! |---|---|---|---|---|
+//! | [`openai`] | `openai` | `OPENAI_API_KEY` | yes | yes |
+//! | `anthropic` | `anthropic` | `ANTHROPIC_API_KEY` | yes | |
+//! | `gemini` | `gemini` | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | yes | yes |
+//! | `ollama` | `ollama` | optional `OLLAMA_API_KEY` | yes | yes |
+//! | `azure` | `azure` | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, optional `AZURE_OPENAI_API_VERSION` | yes | |
+//! | `groq` | `groq` | `GROQ_API_KEY` | yes | |
+//! | `mistral` | `mistral` | `MISTRAL_API_KEY` | yes | yes |
+//! | `deepseek` | `deepseek` | `DEEPSEEK_API_KEY` | yes | |
+//! | `xai` | `xai` | `XAI_API_KEY` | yes | |
+//! | `openrouter` | `openrouter` | `OPENROUTER_API_KEY` | yes | |
+//! | `together` | `together` | `TOGETHER_API_KEY` | yes | |
+//! | `fireworks` | `fireworks` | `FIREWORKS_API_KEY` | yes | yes |
+//! | `cerebras` | `cerebras` | `CEREBRAS_API_KEY` | yes | |
+//! | `moonshot` | `moonshot` | `MOONSHOT_API_KEY` | yes | |
+//! | `hyperbolic` | `hyperbolic` | `HYPERBOLIC_API_KEY` | yes | |
+//! | `huggingface` | `huggingface` | `HF_TOKEN` | yes | |
+//! | `nvidia` | `nvidia` | `NVIDIA_API_KEY` | yes | |
+//! | `sambanova` | `sambanova` | `SAMBANOVA_API_KEY` | yes | |
+//! | `cohere` | `cohere` | `COHERE_API_KEY` / `CO_API_KEY` | yes | yes |
+//! | `vllm` | `vllm` | optional `VLLM_API_KEY` | yes | yes |
+//! | `lmstudio` | `lmstudio` | none | yes | yes |
+//!
+//! ```rust
+//! # #[cfg(all(feature = "groq", feature = "mistral"))] {
+//! use rune_chain::prelude::*;
+//! use rune_chain::{groq, mistral};
+//!
+//! let fast = groq::Client::new("gsk-example").agent("llama-3.3-70b-versatile").build();
+//! let embedder = mistral::Client::new("key").embedding_model("mistral-embed");
+//! # let _ = (fast, embedder);
+//! # }
+//! ```
+//!
 //! # Features
 //!
 //! | Feature | Default | What it adds |
@@ -92,6 +138,8 @@
 //! | `anthropic` | | [`anthropic`]: Claude |
 //! | `gemini` | | [`gemini`]: Gemini API and Vertex AI, embeddings |
 //! | `ollama` | | [`ollama`]: local models and embeddings |
+//! | `azure`, `groq`, `mistral`, `deepseek`, `xai`, `openrouter`, `together`, `fireworks`, `cerebras`, `moonshot`, `hyperbolic`, `huggingface`, `nvidia`, `sambanova`, `cohere`, `vllm`, `lmstudio` | | one client module each; see [Providers](#providers) |
+//! | `all-providers` | | every provider above |
 //! | `embed` | via `openai`/`gemini`/`ollama` | [`embed`]: `Embedder`, Cohere/Voyage/Jina embedders, batching and caching |
 //! | `vectorstore` | | [`vectorstore`]: exact and HNSW in-memory stores, filters, snapshots |
 //! | `qdrant` | | [`qdrant`]: `QdrantStore`, a Qdrant-backed `VectorStore` |
@@ -171,12 +219,20 @@ pub use tool::{Typed, TypedTool};
 
 #[cfg(feature = "anthropic")]
 pub use providers::anthropic;
+#[cfg(feature = "azure")]
+pub use providers::azure;
+/// The shared client behind the OpenAI-compatible provider modules.
+#[cfg(feature = "openai")]
+pub use providers::compat;
 #[cfg(feature = "gemini")]
 pub use providers::gemini;
 #[cfg(feature = "ollama")]
 pub use providers::ollama;
 #[cfg(feature = "openai")]
 pub use providers::openai;
+#[cfg(feature = "openai")]
+#[allow(unused_imports, reason = "empty when no provider feature is on")]
+pub use providers::presets::*;
 
 /// Core traits and types (`Llm`, `Chain`, `Tool`, `Memory`, `Message`, …)
 /// and their combinators.
