@@ -95,6 +95,8 @@
 //! | `embed` | via `openai`/`gemini`/`ollama` | [`embed`]: `Embedder`, Cohere/Voyage/Jina embedders, batching and caching |
 //! | `vectorstore` | | [`vectorstore`]: exact and HNSW in-memory stores, filters, snapshots |
 //! | `qdrant` | | [`qdrant`]: `QdrantStore`, a Qdrant-backed `VectorStore` |
+//! | `pgvector` | | [`pgvector`]: Postgres + pgvector store, HNSW or `IVFFlat` |
+//! | `sqlite` | | [`sqlite`]: embedded single-file SQLite store, exact search |
 //! | `retrieval` | | [`retrieval`], `dynamic_context`, [`EmbeddingIndex`]: BM25, hybrid, MMR, reranking |
 //! | `mcp` | | [`mcp`]: MCP client and server, remote tools as agent tools |
 //! | `otel` | | [`otel`]: OpenTelemetry `GenAI` spans |
@@ -200,6 +202,12 @@ pub use rune_vectorstore as vectorstore;
 /// Qdrant vector store: `QdrantStore` and `QdrantConfig`.
 #[cfg(feature = "qdrant")]
 pub use rune_vectorstore_qdrant as qdrant;
+/// Postgres + pgvector vector store: `PgVectorStore`, `PgVectorConfig`, `PgIndex`.
+#[cfg(feature = "pgvector")]
+pub use rune_vectorstore_pgvector as pgvector;
+/// Embedded single-file SQLite vector store: `SqliteVectorStore`, `SqliteConfig`.
+#[cfg(feature = "sqlite")]
+pub use rune_vectorstore_sqlite as sqlite;
 
 /// MCP client and server; remote MCP tools work as agent tools.
 #[cfg(feature = "mcp")]

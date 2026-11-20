@@ -32,8 +32,8 @@ LLM orchestration: core traits, OpenAI/Anthropic/Gemini/Ollama providers, prompt
 | [`rune-otel-genai`](rune-otel-genai) | OpenTelemetry GenAI semantic-convention spans for rune-chain LLM calls, tool executions and agents — model, tokens, cost and errors |
 | [`rune-tool-schema`](rune-tool-schema) | Tool definitions for LLM function calling: MCP descriptor, OpenAI/Anthropic/Gemini export with schema lint, argument validation and text hygiene |
 | [`rune-vectorstore`](rune-vectorstore) | Vector stores for RAG: async trait, exact and HNSW in-memory indexes, JSON metadata filters, MMR and checksummed snapshots |
-| [`rune-vectorstore-qdrant`](rune-vectorstore-qdrant) | Qdrant backend for rune-vectorstore over the REST API: collections, batched upserts, filtered search, delete by id or filter, bounded responses |
 | [`rune-vectorstore-pgvector`](rune-vectorstore-pgvector) | PostgreSQL + pgvector backend for rune-vectorstore: HNSW or IVFFlat indexes, batched upserts, metadata filters as bound jsonb conditions |
+| [`rune-vectorstore-qdrant`](rune-vectorstore-qdrant) | Qdrant backend for rune-vectorstore over the REST API: collections, batched upserts, filtered search, delete by id or filter, bounded responses |
 | [`rune-vectorstore-sqlite`](rune-vectorstore-sqlite) | Embedded single-file SQLite vector store for rune-vectorstore: exact search with a bounded top-k scan, WAL, bound JSON metadata filters |
 
 [All groups](../../README.md)

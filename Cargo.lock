@@ -3492,7 +3492,7 @@ dependencies = [
 
 [[package]]
 name = "rune-chain"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -3512,7 +3512,9 @@ dependencies = [
  "rune-otel-genai",
  "rune-tool-schema",
  "rune-vectorstore",
+ "rune-vectorstore-pgvector",
  "rune-vectorstore-qdrant",
+ "rune-vectorstore-sqlite",
  "schemars",
  "serde",
  "serde_json",
