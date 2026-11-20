@@ -112,6 +112,7 @@ members = [
     "crates/chain/rune-tool-schema",
     "crates/chain/rune-vectorstore",
     "crates/chain/rune-vectorstore-qdrant",
+    "crates/chain/rune-vectorstore-sqlite",
     "crates/chain/rune-mcp",
     "crates/chain/rune-chain-usage",
     "crates/chain/rune-otel-genai",
@@ -442,6 +443,7 @@ rune-url-encode = { path = "crates/common/rune-url-encode", version = "0.3.1" }
 rune-url = { path = "crates/net/rune-url", version = "0.1.0" }
 rune-vectorstore = { path = "crates/chain/rune-vectorstore", version = "0.2.1" }
 rune-vectorstore-qdrant = { path = "crates/chain/rune-vectorstore-qdrant", version = "0.1.0" }
+rune-vectorstore-sqlite = { path = "crates/chain/rune-vectorstore-sqlite", version = "0.1.0" }
 rune-wellknown = { path = "crates/web/rune-wellknown", version = "0.1.0" }
 rune-robots = { path = "crates/web/rune-robots", version = "0.1.0" }
 rune-wildcard-dns = { path = "crates/net/rune-wildcard-dns", version = "0.1.0" }
