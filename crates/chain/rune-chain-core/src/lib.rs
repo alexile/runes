@@ -39,6 +39,10 @@
 //!   speech-to-text, image generation and text-to-speech behind small
 //!   provider-agnostic traits with request builders
 //! - [`StreamData`] — incremental token chunks for streaming responses
+//! - [`StreamEvent`] / [`StreamAccumulator`] — typed streaming with tool
+//!   calls ([`Llm::stream_events`]): text, reasoning and tool-call argument
+//!   deltas, usage and the finish reason, folded back into a
+//!   [`GenerateResult`] with bounded argument buffers
 //! - [`PromptArgs`] + [`prompt_args!`] — ergonomic key-value input for templates
 //! - [`ChainError`] / [`LlmError`] / [`ToolError`] — structured error types;
 //!   [`LlmError`] carries an [`LlmErrorKind`], the HTTP status and the
@@ -136,6 +140,7 @@ mod prompt;
 mod resilience;
 mod response_format;
 mod stream;
+mod stream_event;
 #[cfg(feature = "testing")]
 pub mod testing;
 #[cfg(test)]
@@ -174,6 +179,7 @@ pub use prompt::PromptArgs;
 pub use resilience::{MAX_RETRY_AFTER, WithRetry, WithTimeout};
 pub use response_format::{MAX_JSON_OUTPUT_BYTES, ResponseFormat};
 pub use stream::StreamData;
+pub use stream_event::{EventStream, StreamAccumulator, StreamEvent};
 pub use tool::Tool;
 
 /// Turn a function into a [`Tool`]. See the [crate docs](crate#tool).

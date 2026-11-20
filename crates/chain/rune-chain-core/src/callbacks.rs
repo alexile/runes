@@ -23,8 +23,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::{
-    Chain, ChainError, FunctionDefinition, GenerateResult, Llm, LlmError, Message, PromptArgs,
-    ResponseFormat, Tool, ToolChoice, ToolError,
+    Chain, ChainError, EventStream, FunctionDefinition, GenerateResult, Llm, LlmError, Message,
+    PromptArgs, ResponseFormat, Tool, ToolChoice, ToolError,
     ext::{ChainStream, LlmStream},
 };
 
@@ -46,6 +46,8 @@ pub enum LlmCall {
     Structured,
     /// [`Llm::stream`] (only start and error events: see [`WithCallbacks`]).
     Stream,
+    /// [`Llm::stream_events`] (only start and error events, like `Stream`).
+    StreamEvents,
 }
 
 /// Fired before a model call.
@@ -440,6 +442,37 @@ impl<T> WithCallbacks<T> {
         out
     }
 
+    /// Start and error events for opening a stream.
+    async fn observe_open<R>(
+        &self,
+        call: LlmCall,
+        messages: &[Message],
+        tools: &[FunctionDefinition],
+        open: impl Future<Output = Result<R, LlmError>> + Send,
+    ) -> Result<R, LlmError>
+    where
+        T: Sync,
+    {
+        let run_id = next_run_id();
+        self.handler.on_llm_start(&LlmStart {
+            run_id,
+            call,
+            messages,
+            tools,
+        });
+        let started = Instant::now();
+        let out = open.await;
+        if let Err(error) = &out {
+            self.handler.on_llm_error(&LlmFailure {
+                run_id,
+                call,
+                error,
+                elapsed: started.elapsed(),
+            });
+        }
+        out
+    }
+
     async fn observe_chain<R, F>(
         &self,
         inputs: PromptArgs,
@@ -503,25 +536,23 @@ impl<L: Llm> Llm for WithCallbacks<L> {
     }
 
     async fn stream(&self, messages: &[Message]) -> Result<LlmStream, LlmError> {
-        let run_id = next_run_id();
-        let call = LlmCall::Stream;
-        self.handler.on_llm_start(&LlmStart {
-            run_id,
-            call,
+        self.observe_open(LlmCall::Stream, messages, &[], self.inner.stream(messages))
+            .await
+    }
+
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        self.observe_open(
+            LlmCall::StreamEvents,
             messages,
-            tools: &[],
-        });
-        let started = Instant::now();
-        let out = self.inner.stream(messages).await;
-        if let Err(error) = &out {
-            self.handler.on_llm_error(&LlmFailure {
-                run_id,
-                call,
-                error,
-                elapsed: started.elapsed(),
-            });
-        }
-        out
+            tools.unwrap_or_default(),
+            self.inner.stream_events(messages, tools, tool_choice),
+        )
+        .await
     }
 
     async fn generate_structured(

@@ -10,8 +10,8 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::{
-    Chain, ChainError, FunctionDefinition, GenerateResult, Llm, LlmError, Message, PromptArgs,
-    ResponseFormat, ToolChoice,
+    Chain, ChainError, EventStream, FunctionDefinition, GenerateResult, Llm, LlmError, Message,
+    PromptArgs, ResponseFormat, ToolChoice,
     ext::{ChainStream, LlmStream},
 };
 
@@ -75,6 +75,16 @@ impl<L: Llm> Llm for WithTimeout<L> {
 
     async fn stream(&self, messages: &[Message]) -> Result<LlmStream, LlmError> {
         self.run(self.inner.stream(messages)).await
+    }
+
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        self.run(self.inner.stream_events(messages, tools, tool_choice))
+            .await
     }
 
     async fn generate_structured(
@@ -254,6 +264,22 @@ impl<L: Llm> Llm for WithRetry<L> {
 
     async fn stream(&self, messages: &[Message]) -> Result<LlmStream, LlmError> {
         self.run(|| self.inner.stream(messages), llm_error).await
+    }
+
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        self.run(
+            || {
+                self.inner
+                    .stream_events(messages, tools, tool_choice.clone())
+            },
+            llm_error,
+        )
+        .await
     }
 
     async fn generate_structured(

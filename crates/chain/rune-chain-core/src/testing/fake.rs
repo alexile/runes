@@ -68,8 +68,9 @@ use futures::Stream;
 use serde_json::Value;
 
 use crate::{
-    FinishReason, FunctionDefinition, GenerateResult, Llm, LlmError, Message, ResponseFormat, Role,
-    StreamData, TokenUsage, ToolCall, ToolChoice,
+    EventStream, FinishReason, FunctionDefinition, GenerateResult, Llm, LlmError, Message,
+    ResponseFormat, Role, StreamAccumulator, StreamData, StreamEvent, TokenUsage, ToolCall,
+    ToolChoice,
 };
 
 /// Default number of characters per streamed chunk.
@@ -102,6 +103,7 @@ const DEFAULT_CHUNK_CHARS: usize = 8;
 pub struct FakeReply {
     outcome: Result<GenerateResult, LlmError>,
     stream_error: Option<LlmError>,
+    events: Option<Vec<StreamEvent>>,
 }
 
 impl FakeReply {
@@ -111,6 +113,7 @@ impl FakeReply {
         Self {
             outcome: Ok(result),
             stream_error: None,
+            events: None,
         }
     }
 
@@ -137,6 +140,43 @@ impl FakeReply {
         )
     }
 
+    /// A reply scripted as exact [`StreamEvent`]s, for testing how code
+    /// handles fragmented or interleaved tool calls.
+    ///
+    /// [`stream_events`](Llm::stream_events) yields `events` as given; the
+    /// other methods answer with what a [`StreamAccumulator`] folds them
+    /// into (or its error).
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use rune_chain_core::testing::{FakeLlm, FakeReply};
+    /// use rune_chain_core::{Llm, Message, StreamEvent};
+    ///
+    /// # tokio_test::block_on(async {
+    /// let llm = FakeLlm::with_replies([FakeReply::events([
+    ///     StreamEvent::tool_call_start(0, "c1", "search"),
+    ///     StreamEvent::tool_call_delta(0, r#"{"q":"#),
+    ///     StreamEvent::tool_call_delta(0, r#""rust"}"#),
+    /// ])]);
+    /// let r = llm.generate(&[Message::human("go")]).await.unwrap();
+    /// assert_eq!(r.tool_calls[0].arguments, r#"{"q":"rust"}"#);
+    /// # });
+    /// ```
+    pub fn events(events: impl IntoIterator<Item = StreamEvent>) -> Self {
+        let events: Vec<StreamEvent> = events.into_iter().collect();
+        let mut acc = StreamAccumulator::new();
+        let outcome = events
+            .iter()
+            .try_for_each(|e| acc.push(e))
+            .map(|()| acc.finish());
+        Self {
+            outcome,
+            stream_error: None,
+            events: Some(events),
+        }
+    }
+
     /// A refusal: `text` with [`FinishReason::Refusal`].
     pub fn refusal(text: impl Into<String>) -> Self {
         Self::text(text).with_finish_reason(FinishReason::Refusal)
@@ -154,6 +194,7 @@ impl FakeReply {
         Self {
             outcome: Err(error),
             stream_error: None,
+            events: None,
         }
     }
 
@@ -236,6 +277,8 @@ pub enum FakeMethod {
     GenerateStructured,
     /// [`Llm::stream`].
     Stream,
+    /// [`Llm::stream_events`].
+    StreamEvents,
 }
 
 /// A request [`FakeLlm`] received, recorded for assertions.
@@ -247,9 +290,11 @@ pub struct FakeRequest {
     /// The conversation as passed in (for structured output, without the
     /// format instructions the default implementation would add).
     pub messages: Vec<Message>,
-    /// Tools offered to [`Llm::generate_with_tools`]; empty otherwise.
+    /// Tools offered to [`Llm::generate_with_tools`] or
+    /// [`Llm::stream_events`]; empty otherwise.
     pub tools: Vec<FunctionDefinition>,
-    /// Tool choice passed to [`Llm::generate_with_tools`].
+    /// Tool choice passed to [`Llm::generate_with_tools`] or
+    /// [`Llm::stream_events`].
     pub tool_choice: Option<ToolChoice>,
     /// Format passed to [`Llm::generate_structured`].
     pub format: Option<ResponseFormat>,
@@ -326,6 +371,9 @@ struct Shared {
 /// [`chunk_chars`](Self::chunk_chars) characters followed by the final chunk.
 /// [`StreamData`] has no room for tool calls, usage or a finish reason, so a
 /// stream carries the text only.
+/// [`stream_events`](Llm::stream_events) carries everything: the text and
+/// each tool call's arguments in chunks of `chunk_chars`, then usage and the
+/// finish reason (or the events of a [`FakeReply::events`] reply as given).
 ///
 /// See the [module docs](self) for examples.
 #[derive(Clone)]
@@ -583,6 +631,54 @@ impl Llm for FakeLlm {
         );
         Ok(Box::pin(futures::stream::iter(items)))
     }
+
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        let mut request = FakeRequest::new(FakeMethod::StreamEvents, messages);
+        request.tools = tools.unwrap_or_default().to_vec();
+        request.tool_choice = tool_choice;
+        let reply = self.answer(request).await;
+        let events = match reply.events {
+            Some(events) => events,
+            None => chunked_events(reply.outcome?, self.chunk_chars),
+        };
+        let mut items: Vec<Result<StreamEvent, LlmError>> = events.into_iter().map(Ok).collect();
+        items.extend(reply.stream_error.map(Err));
+        Ok(Box::pin(futures::stream::iter(items)))
+    }
+}
+
+/// Replay `result` as events, splitting text and arguments into chunks.
+fn chunked_events(result: GenerateResult, chunk_chars: usize) -> Vec<StreamEvent> {
+    let split = |s: &str| -> Vec<String> {
+        let chars: Vec<char> = s.chars().collect();
+        chars
+            .chunks(chunk_chars)
+            .map(|c| c.iter().collect())
+            .collect()
+    };
+    let mut out = Vec::new();
+    for event in result.into_events() {
+        match event {
+            StreamEvent::TextDelta(text) => {
+                out.extend(split(&text).into_iter().map(StreamEvent::TextDelta));
+            }
+            StreamEvent::ToolCallDelta {
+                index,
+                arguments_fragment,
+            } => out.extend(
+                split(&arguments_fragment)
+                    .into_iter()
+                    .map(|f| StreamEvent::tool_call_delta(index, f)),
+            ),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Counts a call as in flight until dropped, so cancelled calls are released
@@ -762,6 +858,71 @@ mod tests {
         assert_eq!(text, "partial");
         assert_eq!(err.unwrap().kind(), LlmErrorKind::Network);
         assert!(llm.stream(&msgs()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn stream_events_chunk_text_and_arguments() {
+        let llm = FakeLlm::with_replies([FakeReply::result(
+            GenerateResult::from_text("abcdef")
+                .with_tool_calls(vec![ToolCall::new("c1", "t", r#"{"a":1}"#)])
+                .with_tokens(TokenUsage::new(3, 2))
+                .with_finish_reason(FinishReason::ToolCalls),
+        )])
+        .with_chunk_chars(4);
+        let tools = [FunctionDefinition::single_input("t", "T.")];
+        let stream = llm
+            .stream_events(&msgs(), Some(&tools), Some(ToolChoice::Auto))
+            .await
+            .unwrap();
+        let events: Vec<StreamEvent> = stream.map(Result::unwrap).collect().await;
+        assert_eq!(
+            events,
+            [
+                StreamEvent::text("abcd"),
+                StreamEvent::text("ef"),
+                StreamEvent::tool_call_start(0, "c1", "t"),
+                StreamEvent::tool_call_delta(0, "{\"a\""),
+                StreamEvent::tool_call_delta(0, ":1}"),
+                StreamEvent::ToolCallEnd { index: 0 },
+                StreamEvent::Usage(TokenUsage::new(3, 2)),
+                StreamEvent::Finish(FinishReason::ToolCalls),
+            ]
+        );
+        let req = llm.last_request().unwrap();
+        assert_eq!(req.method, FakeMethod::StreamEvents);
+        assert_eq!(req.tool_names(), ["t"]);
+        assert_eq!(req.tool_choice, Some(ToolChoice::Auto));
+    }
+
+    #[tokio::test]
+    async fn scripted_events_play_back_and_fold() {
+        let events = [
+            StreamEvent::tool_call_start(1, "b", "y"),
+            StreamEvent::tool_call_start(0, "a", "x"),
+            StreamEvent::tool_call_delta(0, "{}"),
+            StreamEvent::tool_call_delta(1, "{}"),
+        ];
+        let llm = FakeLlm::with_replies([
+            FakeReply::events(events.clone()),
+            FakeReply::events(events.clone()),
+            FakeReply::events([StreamEvent::text("par")])
+                .with_stream_error(LlmError::request_failed("reset")),
+        ]);
+        let played: Vec<StreamEvent> = llm
+            .stream_events(&msgs(), None, None)
+            .await
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+            .await;
+        assert_eq!(played, events);
+        let r = llm.generate(&msgs()).await.unwrap();
+        assert_eq!(r.tool_calls[0].id, "b");
+        assert_eq!(r.tool_calls[1].id, "a");
+        let mut s = llm.stream_events(&msgs(), None, None).await.unwrap();
+        assert_eq!(s.next().await.unwrap().unwrap(), StreamEvent::text("par"));
+        assert!(s.next().await.unwrap().is_err());
+        assert!(s.next().await.is_none());
     }
 
     #[tokio::test]

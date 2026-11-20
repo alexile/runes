@@ -873,3 +873,168 @@ fn finish_reason_and_reasoning_round_trip() {
     assert_eq!(back.text(), "4");
     assert!(back.reasoning[1].is_redacted());
 }
+
+// ── stream_events ─────────────────────────────────────────────────────────────
+
+mod stream_events {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::testing::{FakeLlm, FakeMethod, FakeReply};
+    use crate::{
+        CallbackHandler, FinishReason, InMemoryLlmCache, LlmCall, LlmExt, LlmStart,
+        StreamAccumulator,
+    };
+
+    fn tools() -> [FunctionDefinition; 1] {
+        [FunctionDefinition::single_input("search", "Searches.")]
+    }
+
+    async fn fold(llm: &dyn Llm, tools: Option<&[FunctionDefinition]>) -> GenerateResult {
+        let stream = llm
+            .stream_events(&[Message::human("q")], tools, None)
+            .await
+            .unwrap();
+        StreamAccumulator::new().collect(stream).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn default_without_streaming_replays_generate() {
+        let r = fold(&FixedLlm, None).await;
+        assert_eq!(r.generation, "1 turns");
+        // With tools it goes through generate_with_tools, unsupported here.
+        let err = FixedLlm
+            .stream_events(&[Message::human("q")], Some(&tools()), None)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err.kind(), LlmErrorKind::Unsupported);
+    }
+
+    struct ToolModel;
+
+    #[async_trait]
+    impl Llm for ToolModel {
+        async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
+            Ok(GenerateResult::from_text("plain"))
+        }
+        async fn generate_with_tools(
+            &self,
+            _: &[Message],
+            tools: &[FunctionDefinition],
+            _: Option<ToolChoice>,
+        ) -> Result<GenerateResult, LlmError> {
+            Ok(GenerateResult::from_text("ok")
+                .with_tool_calls(vec![ToolCall::new("c1", &tools[0].name, "{}")])
+                .with_tokens(TokenUsage::new(4, 2))
+                .with_finish_reason(FinishReason::ToolCalls))
+        }
+        async fn stream(&self, _: &[Message]) -> Result<crate::ext::LlmStream, LlmError> {
+            Ok(Box::pin(futures::stream::iter([
+                Ok(StreamData::chunk("str")),
+                Ok(StreamData::chunk("")),
+                Ok(StreamData::chunk("eamed")),
+                Ok(StreamData::done()),
+            ])))
+        }
+    }
+
+    #[tokio::test]
+    async fn default_matches_the_non_streaming_result() {
+        let expected = ToolModel
+            .generate_with_tools(&[], &tools(), None)
+            .await
+            .unwrap();
+        assert_eq!(fold(&ToolModel, Some(&tools())).await, expected);
+        // Empty tools count as no tools: the text stream is adapted.
+        assert_eq!(fold(&ToolModel, Some(&[])).await.generation, "streamed");
+        assert_eq!(fold(&ToolModel, None).await.generation, "streamed");
+    }
+
+    #[tokio::test]
+    async fn wrappers_forward_stream_events() {
+        let fake =
+            FakeLlm::from_fn(|req| Ok(GenerateResult::from_text(req.tool_names().join(","))));
+        let shared: Arc<dyn Llm> = Arc::new(fake.clone());
+        assert_eq!(fold(&shared, Some(&tools())).await.generation, "search");
+
+        let bound = fake.clone().bind_tools(tools());
+        assert_eq!(fold(&bound, None).await.generation, "search");
+        let other = [FunctionDefinition::single_input("other", "O.")];
+        assert_eq!(fold(&bound, Some(&other)).await.generation, "other");
+
+        let failing = FakeLlm::with_replies([FakeReply::timeout()]);
+        let fallbacks = failing.with_fallbacks(vec![Arc::new(fake.clone()) as Arc<dyn Llm>]);
+        assert_eq!(fold(&fallbacks, Some(&tools())).await.generation, "search");
+
+        assert!(
+            fake.requests()
+                .iter()
+                .all(|r| r.method == FakeMethod::StreamEvents)
+        );
+    }
+
+    #[tokio::test]
+    async fn callbacks_see_the_stream_start() {
+        struct Starts(Mutex<Vec<(LlmCall, usize)>>);
+        impl CallbackHandler for Starts {
+            fn on_llm_start(&self, e: &LlmStart<'_>) {
+                self.0.lock().unwrap().push((e.call, e.tools.len()));
+            }
+        }
+        let starts = Arc::new(Starts(Mutex::new(Vec::new())));
+        let llm = FakeLlm::with_replies(["hi"]).with_callbacks(starts.clone());
+        assert_eq!(fold(&llm, Some(&tools())).await.generation, "hi");
+        assert_eq!(*starts.0.lock().unwrap(), [(LlmCall::StreamEvents, 1)]);
+    }
+
+    #[tokio::test]
+    async fn cache_stores_clean_streams_and_replays_hits() {
+        let fake = FakeLlm::with_replies([
+            FakeReply::text("first").with_stream_error(LlmError::request_failed("reset")),
+            FakeReply::text("second"),
+            FakeReply::text("third"),
+        ]);
+        let cache = Arc::new(InMemoryLlmCache::new(8));
+        let llm = fake.clone().with_cache(cache.clone());
+        let msgs = [Message::human("q")];
+        let failed = llm
+            .stream_events(&msgs, Some(&tools()), None)
+            .await
+            .unwrap();
+        assert!(StreamAccumulator::new().collect(failed).await.is_err());
+        assert_eq!(cache.len(), 0, "a failed stream is not cached");
+
+        assert_eq!(fold(&llm, Some(&tools())).await.generation, "second");
+        assert_eq!(cache.len(), 1);
+        assert_eq!(fold(&llm, Some(&tools())).await.generation, "second");
+        let via_generate = llm
+            .generate_with_tools(&msgs, &tools(), None)
+            .await
+            .unwrap();
+        assert_eq!(via_generate.generation, "second", "shares the entry");
+        assert_eq!(fake.call_count(), 2);
+        assert_eq!(fake.remaining(), 1);
+    }
+
+    #[cfg(feature = "tokio")]
+    #[tokio::test]
+    async fn retry_reopens_and_timeout_bounds_the_open() {
+        use std::time::Duration;
+        let fake = FakeLlm::with_replies([FakeReply::rate_limited(), FakeReply::text("ok")]);
+        let llm = fake.clone().with_retry(2);
+        tokio::time::pause();
+        assert_eq!(fold(&llm, Some(&tools())).await.generation, "ok");
+        assert_eq!(fake.call_count(), 2);
+
+        let slow = FakeLlm::with_replies(["late"]).with_latency(Duration::from_secs(5));
+        let llm = slow.with_timeout(Duration::from_millis(10));
+        tokio::time::resume();
+        let err = llm
+            .stream_events(&[Message::human("q")], None, None)
+            .await
+            .err()
+            .unwrap();
+        assert_eq!(err.kind(), LlmErrorKind::Timeout);
+    }
+}

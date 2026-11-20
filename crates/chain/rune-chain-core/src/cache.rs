@@ -17,8 +17,8 @@ use std::{
 use async_trait::async_trait;
 
 use crate::{
-    FunctionDefinition, GenerateResult, Llm, LlmError, Message, ResponseFormat, ToolChoice,
-    ext::LlmStream,
+    EventStream, FunctionDefinition, GenerateResult, Llm, LlmError, Message, ResponseFormat,
+    StreamAccumulator, ToolChoice, ext::LlmStream, stream_event::result_stream,
 };
 
 /// Identifies one model request: the method, an optional namespace, the
@@ -289,7 +289,10 @@ impl LlmCache for InMemoryLlmCache {
 ///
 /// [`generate`](Llm::generate), [`generate_with_tools`](Llm::generate_with_tools)
 /// and [`generate_structured`](Llm::generate_structured) are cached; errors
-/// are not. Streams always go to the model.
+/// are not. [`stream`](Llm::stream) always goes to the model.
+/// [`stream_events`](Llm::stream_events) with tools shares the
+/// `generate_with_tools` entry: a hit is replayed as events, and a stream
+/// that ends cleanly is stored.
 ///
 /// The key covers only the request, not the model's settings, so give each
 /// model configuration that shares a cache its own
@@ -364,6 +367,47 @@ impl<L: Llm> Llm for CachedLlm<L> {
 
     async fn stream(&self, messages: &[Message]) -> Result<LlmStream, LlmError> {
         self.inner.stream(messages).await
+    }
+
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        let Some(tools) = tools.filter(|t| !t.is_empty()) else {
+            return self.inner.stream_events(messages, tools, tool_choice).await;
+        };
+        let choice = tool_choice.clone().unwrap_or(ToolChoice::Auto);
+        let key = CacheKey::new(&self.namespace, messages, tools, Some(&choice), None);
+        if let Some(hit) = self.cache.get(&key) {
+            return Ok(result_stream(hit));
+        }
+        let mut inner = self
+            .inner
+            .stream_events(messages, Some(tools), tool_choice)
+            .await?;
+        let cache = Arc::clone(&self.cache);
+        let mut acc = Some(StreamAccumulator::new());
+        Ok(Box::pin(futures::stream::poll_fn(move |cx| {
+            let item = futures::ready!(futures::StreamExt::poll_next_unpin(&mut inner, cx));
+            match &item {
+                Some(Ok(event)) => {
+                    if let Some(a) = acc.as_mut()
+                        && a.push(event).is_err()
+                    {
+                        acc = None;
+                    }
+                }
+                Some(Err(_)) => acc = None,
+                None => {
+                    if let Some(a) = acc.take() {
+                        cache.put(key.clone(), a.finish());
+                    }
+                }
+            }
+            std::task::Poll::Ready(item)
+        })))
     }
 
     async fn generate_structured(

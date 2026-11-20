@@ -7,9 +7,9 @@ use futures::Stream;
 use serde_json::Value;
 
 use crate::{
-    CachedLlm, CallbackHandler, Chain, ChainError, FunctionDefinition, GenerateResult, Llm,
-    LlmCache, LlmError, Memory, Message, PromptArgs, ResponseFormat, StreamData, TokenUsage, Tool,
-    ToolChoice, ToolError, WithCallbacks,
+    CachedLlm, CallbackHandler, Chain, ChainError, EventStream, FunctionDefinition, GenerateResult,
+    Llm, LlmCache, LlmError, Memory, Message, PromptArgs, ResponseFormat, StreamData, TokenUsage,
+    Tool, ToolChoice, ToolError, WithCallbacks,
 };
 
 /// Key under which [`Chain::execute`] stores the serialised [`GenerateResult`].
@@ -43,6 +43,15 @@ impl<T: Llm + ?Sized> Llm for Arc<T> {
 
     async fn stream(&self, messages: &[Message]) -> Result<LlmStream, LlmError> {
         (**self).stream(messages).await
+    }
+
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        (**self).stream_events(messages, tools, tool_choice).await
     }
 
     async fn generate_structured(
@@ -785,6 +794,28 @@ impl<L: Llm> Llm for BoundTools<L> {
         self.inner.stream(messages).await
     }
 
+    /// Uses the bound tools unless `tools` is a non-empty list.
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        match tools {
+            Some(tools) if !tools.is_empty() => {
+                self.inner
+                    .stream_events(messages, Some(tools), tool_choice)
+                    .await
+            }
+            _ => {
+                let choice = tool_choice.or_else(|| self.tool_choice.clone());
+                self.inner
+                    .stream_events(messages, Some(&self.tools), choice)
+                    .await
+            }
+        }
+    }
+
     /// Prompts for JSON (see [`ResponseFormat::apply_to`]) and calls the
     /// model with the bound tools.
     async fn generate_structured(
@@ -857,6 +888,21 @@ impl<L: Llm> Llm for LlmWithFallbacks<L> {
 
     async fn stream(&self, messages: &[Message]) -> Result<LlmStream, LlmError> {
         try_in_order!(self, |llm| llm.stream(messages))
+    }
+
+    /// Falls back only when opening the stream fails; an error part-way
+    /// through is passed on.
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        try_in_order!(self, |llm| llm.stream_events(
+            messages,
+            tools,
+            tool_choice.clone()
+        ))
     }
 
     async fn generate_structured(

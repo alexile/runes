@@ -4,8 +4,9 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt, stream};
 
 use crate::{
-    DEFAULT_BATCH_CONCURRENCY, FunctionDefinition, GenerateResult, LlmError, Message,
-    ResponseFormat, StreamData, ToolChoice,
+    DEFAULT_BATCH_CONCURRENCY, EventStream, FunctionDefinition, GenerateResult, LlmError,
+    LlmErrorKind, Message, ResponseFormat, StreamData, ToolChoice,
+    stream_event::{result_stream, text_stream},
 };
 
 /// An async interface to a large language model.
@@ -81,6 +82,90 @@ pub trait Llm: Sync + Send {
         Err(LlmError::unsupported(
             "streaming is not supported by this LLM provider",
         ))
+    }
+
+    /// Stream the reply as typed [`StreamEvent`](crate::StreamEvent)s:
+    /// text and reasoning deltas, tool calls in fragments, usage and the
+    /// finish reason. Pass `tools` to let the model call them.
+    ///
+    /// Fold the events with a [`StreamAccumulator`](crate::StreamAccumulator)
+    /// to get the [`GenerateResult`] that
+    /// [`generate_with_tools`](Llm::generate_with_tools) would have returned.
+    ///
+    /// Providers with native streaming tool calls override this. The default
+    /// works with any provider:
+    ///
+    /// - without tools (`None` or empty) it adapts [`stream`](Llm::stream),
+    ///   or replays [`generate`](Llm::generate) when streaming is
+    ///   unsupported;
+    /// - with tools it calls [`generate_with_tools`](Llm::generate_with_tools)
+    ///   and replays the result as events, so nothing streams but callers
+    ///   need only one code path.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use async_trait::async_trait;
+    /// use futures::StreamExt;
+    /// use rune_chain_core::{
+    ///     FunctionDefinition, GenerateResult, Llm, LlmError, Message, StreamAccumulator,
+    ///     StreamEvent, ToolCall, ToolChoice,
+    /// };
+    ///
+    /// struct Model;
+    ///
+    /// #[async_trait]
+    /// impl Llm for Model {
+    ///     async fn generate(&self, _: &[Message]) -> Result<GenerateResult, LlmError> {
+    ///         Ok(GenerateResult::from_text("hi"))
+    ///     }
+    ///     async fn generate_with_tools(
+    ///         &self,
+    ///         _: &[Message],
+    ///         _: &[FunctionDefinition],
+    ///         _: Option<ToolChoice>,
+    ///     ) -> Result<GenerateResult, LlmError> {
+    ///         Ok(GenerateResult::default()
+    ///             .with_tool_calls(vec![ToolCall::new("c1", "clock", "{}")]))
+    ///     }
+    /// }
+    ///
+    /// # tokio_test::block_on(async {
+    /// let tools = [FunctionDefinition::single_input("clock", "Current time.")];
+    /// let mut stream = Model
+    ///     .stream_events(&[Message::human("time?")], Some(&tools), None)
+    ///     .await
+    ///     .unwrap();
+    /// let mut acc = StreamAccumulator::new();
+    /// while let Some(event) = stream.next().await {
+    ///     let event = event.unwrap();
+    ///     if let StreamEvent::ToolCallStart { name, .. } = &event {
+    ///         assert_eq!(name, "clock");
+    ///     }
+    ///     acc.push(&event).unwrap();
+    /// }
+    /// assert_eq!(acc.finish().tool_calls[0].id, "c1");
+    /// # });
+    /// ```
+    async fn stream_events(
+        &self,
+        messages: &[Message],
+        tools: Option<&[FunctionDefinition]>,
+        tool_choice: Option<ToolChoice>,
+    ) -> Result<EventStream, LlmError> {
+        if let Some(tools) = tools.filter(|t| !t.is_empty()) {
+            let result = self
+                .generate_with_tools(messages, tools, tool_choice)
+                .await?;
+            return Ok(result_stream(result));
+        }
+        match self.stream(messages).await {
+            Ok(stream) => Ok(text_stream(stream)),
+            Err(e) if e.kind() == LlmErrorKind::Unsupported => {
+                Ok(result_stream(self.generate(messages).await?))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Generate a response in the requested [`ResponseFormat`] (structured

@@ -67,6 +67,7 @@ println!("{result}");
 | `LlmCache` / `InMemoryLlmCache` | Response cache trait and a bounded LRU |
 | `ImageData` | URL / base64 images with `validate()` (size, MIME, URL scheme) and redacted `Debug` |
 | `StreamData` | Incremental token chunk for streaming responses |
+| `StreamEvent` / `StreamAccumulator` | Typed streaming via `Llm::stream_events`: text, reasoning and tool-call argument deltas, usage and finish reason; the accumulator folds them into a `GenerateResult` with argument buffers capped at `MAX_TOOL_ARGUMENTS_BYTES` |
 | `PromptArgs` + `prompt_args!` | Ergonomic input map for prompt templates |
 | `ChainError` / `LlmError` | Structured errors with `From` conversion between them; `LlmError` has a `kind()` (`LlmErrorKind`), HTTP `status()`, `retry_after()` and `is_retryable()` |
 | `testing::check_*` | Trait-contract checks for implementors (feature `testing`) |
